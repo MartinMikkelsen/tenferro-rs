@@ -49,6 +49,29 @@ fn recycled_drop_during_another_checkout_does_not_reenter_the_execution_lock() {
 }
 
 #[test]
+fn output_and_scratch_checkouts_coexist_without_borrowing_the_pool() {
+    let mut pool = BufferPool::new();
+    let mut output = PooledUninitOutput::<f64>::new(&pool, vec![2]).unwrap();
+    let mut scratch = PooledUninitOutput::<f64>::new(&pool, vec![2]).unwrap();
+    output.as_uninit_slice_mut()[0].write(2.0);
+    output.as_uninit_slice_mut()[1].write(3.0);
+    scratch.as_uninit_slice_mut()[0].write(5.0);
+    scratch.as_uninit_slice_mut()[1].write(7.0);
+    // An active lease must not prevent using the pool for other resources.
+    let zeroed = pool.acquire_zeroed::<f64>(1);
+    assert_eq!(zeroed, vec![0.0]);
+    // SAFETY: both elements of each lease were initialized above.
+    let result = unsafe { output.assume_init_recycled() }.unwrap();
+    let temporary = unsafe { scratch.assume_init_recycled() }.unwrap();
+    assert_eq!(result.as_slice().unwrap(), &[2.0, 3.0]);
+    assert_eq!(temporary.as_slice().unwrap(), &[5.0, 7.0]);
+    drop(result);
+    drop(temporary);
+    assert_eq!(pool.len(), 2);
+    assert!(pool.in_flight_is_empty());
+}
+
+#[test]
 fn recycled_output_extraction_disarms_return_and_pool_may_drop_first() {
     let mut pool = BufferPool::new();
     let tensor = recycled(&mut pool);

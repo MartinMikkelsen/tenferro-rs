@@ -28,9 +28,10 @@ fn checked_compact_strides(shape: &[usize]) -> Result<Vec<isize>> {
 /// This type is public because `tenferro-cpu` is a sibling crate and must use
 /// the same canonical owner; `pub(crate)` would prevent that cross-crate
 /// ownership. Before the unsafe completion handoff, callers receive only
-/// `MaybeUninit` storage.
-pub struct PooledUninitOutput<'pool, T: PoolScalar> {
-    pool: &'pool mut BufferPool,
+/// `MaybeUninit` storage. Each checkout owns a shared pool handle, so output
+/// and scratch leases can coexist without holding a mutable pool borrow.
+pub struct PooledUninitOutput<T: PoolScalar> {
+    pool: BufferPool,
     shape: Vec<usize>,
     strides: Vec<isize>,
     data: Vec<std::mem::MaybeUninit<T>>,
@@ -38,7 +39,7 @@ pub struct PooledUninitOutput<'pool, T: PoolScalar> {
     byte_len: usize,
 }
 
-impl<'pool, T: PoolScalar> PooledUninitOutput<'pool, T> {
+impl<T: PoolScalar> PooledUninitOutput<T> {
     /// Creates a compact, pooled full-overwrite destination.
     ///
     /// # Examples
@@ -53,7 +54,7 @@ impl<'pool, T: PoolScalar> PooledUninitOutput<'pool, T> {
     /// Returns `Error::Validation` for shape-product, layout, or stride
     /// validation failures, or `Error::BackendSource` if allocation
     /// reservation fails. No pool accounting is changed before validation.
-    pub fn new(pool: &'pool mut BufferPool, shape: Vec<usize>) -> Result<Self> {
+    pub fn new(pool: &BufferPool, shape: Vec<usize>) -> Result<Self> {
         let len = checked_shape_product("pooled_uninit_output", "shape", &shape)?;
         let layout = Layout::array::<T>(len).map_err(|_| {
             Error::invalid_argument(
@@ -64,8 +65,11 @@ impl<'pool, T: PoolScalar> PooledUninitOutput<'pool, T> {
         })?;
         let byte_len = layout.size();
         let strides = checked_compact_strides(&shape)?;
+        let mut pool = pool.checkout_handle();
         let (data, checkout) =
-            <T as crate::buffer_pool::private::Sealed>::pool_acquire_uninit_tracked(pool, len)?;
+            <T as crate::buffer_pool::private::Sealed>::pool_acquire_uninit_tracked(
+                &mut pool, len,
+            )?;
         debug_assert!(match checkout {
             UninitCheckoutToken::Fresh { actual_capacity }
             | UninitCheckoutToken::Reused { actual_capacity } => {
@@ -160,8 +164,8 @@ impl<'pool, T: PoolScalar> PooledUninitOutput<'pool, T> {
     /// Every logical element must have been initialized by the completed kernel.
     /// The kernel must have completed all validation before writing, and must
     /// not retain any destination view after returning.
-    /// Successful completion transfers success accounting to the owning
-    /// `BufferPoolLoan` context; direct internal callers must keep that context alive.
+    /// Successful completion transfers the checkout's return target to the
+    /// initialized tensor; the pool lock is held only for brief bookkeeping.
     /// Completes the handoff as a dynamic-rank typed tensor.
     ///
     /// # Examples
@@ -268,7 +272,8 @@ impl<'pool, T: PoolScalar> PooledUninitOutput<'pool, T> {
                 unreachable!("a live pooled output owns its checkout");
             };
             let recycler = <T as crate::buffer_pool::private::Sealed>::pool_finish_recycled(
-                self.pool, checkout,
+                &mut self.pool,
+                checkout,
             );
             TypedTensor::from_vec_col_major_with_recycler(shape, data, recycler)
         } else {
@@ -279,14 +284,14 @@ impl<'pool, T: PoolScalar> PooledUninitOutput<'pool, T> {
     }
 }
 
-impl<T: PoolScalar> Drop for PooledUninitOutput<'_, T> {
+impl<T: PoolScalar> Drop for PooledUninitOutput<T> {
     fn drop(&mut self) {
         let Some(checkout) = self.checkout.take() else {
             return;
         };
         let data = std::mem::take(&mut self.data);
         <T as crate::buffer_pool::private::Sealed>::pool_discard_uninit(
-            &mut *self.pool,
+            &mut self.pool,
             data,
             checkout,
         );

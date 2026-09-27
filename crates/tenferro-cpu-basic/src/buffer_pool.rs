@@ -428,6 +428,12 @@ impl_pool_scalar!(Complex64, c64_pool, c64_in_flight, Complex64::new(0.0, 0.0));
 impl_pool_scalar!(Complex32, c32_pool, c32_in_flight, Complex32::new(0.0, 0.0));
 
 impl BufferPool {
+    pub(crate) fn checkout_handle(&self) -> Self {
+        Self {
+            state: Arc::clone(&self.state),
+        }
+    }
+
     #[cfg(test)]
     pub(crate) fn in_flight_is_empty(&self) -> bool {
         // A capacity keeps its bookkeeping entry after its last checkout is

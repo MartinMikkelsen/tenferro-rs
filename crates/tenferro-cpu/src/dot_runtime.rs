@@ -1101,19 +1101,15 @@ fn materialize_canonical_operand_zeroed(
 /// The destination travels only as `MaybeUninit` bytes until an unsafe
 /// `assume_init` completes the handoff; no `TensorWrite` is ever fabricated
 /// over uninitialized storage.
-pub(crate) enum UninitTensor<'pool> {
-    F32(PooledUninitOutput<'pool, f32>),
-    F64(PooledUninitOutput<'pool, f64>),
-    C32(PooledUninitOutput<'pool, Complex32>),
-    C64(PooledUninitOutput<'pool, Complex64>),
+pub(crate) enum UninitTensor {
+    F32(PooledUninitOutput<f32>),
+    F64(PooledUninitOutput<f64>),
+    C32(PooledUninitOutput<Complex32>),
+    C64(PooledUninitOutput<Complex64>),
 }
 
-impl<'pool> UninitTensor<'pool> {
-    pub(crate) fn acquire(
-        buffers: &'pool mut BufferPool,
-        dtype: DType,
-        shape: Vec<usize>,
-    ) -> Result<Self> {
+impl UninitTensor {
+    pub(crate) fn acquire(buffers: &BufferPool, dtype: DType, shape: Vec<usize>) -> Result<Self> {
         match dtype {
             DType::F32 => Ok(Self::F32(PooledUninitOutput::new(buffers, shape)?)),
             DType::F64 => Ok(Self::F64(PooledUninitOutput::new(buffers, shape)?)),
