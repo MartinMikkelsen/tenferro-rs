@@ -264,9 +264,11 @@ fn nary_eager_einsum_expanded_standard_ops_preserve_backward() {
     )
     .unwrap();
 
-    let loss = einsum(&[&a, &b, &c], "ij,jk,kl->il")
+    let out = einsum(&[&a, &b, &c], "ij,jk,kl->il").unwrap();
+    let loss = out
+        .runtime()
+        .with_eager_session(|s| s.reduce_sum(&out, Some(&[0, 1])))
         .unwrap()
-        .reduce_sum(Some(&[0, 1]))
         .unwrap();
     let _ = loss.backward().unwrap();
 
@@ -298,7 +300,11 @@ fn tracked_nary_einsum_gradients_match_expected_values() {
     let out = einsum(&[&a, &b, &c], "ij,jk,kl->il").unwrap();
     assert_eq!(out.shape(), &[2, 5]);
 
-    let loss = out.reduce_sum(Some(&[0, 1])).unwrap();
+    let loss = out
+        .runtime()
+        .with_eager_session(|s| s.reduce_sum(&out, Some(&[0, 1])))
+        .unwrap()
+        .unwrap();
     let _ = loss.backward().unwrap();
 
     assert_eq!(

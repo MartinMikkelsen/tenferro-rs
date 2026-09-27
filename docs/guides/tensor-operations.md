@@ -250,7 +250,10 @@ use tenferro_ad::{EagerRuntime, Tensor};
 fn main() -> Result<(), Box<dyn std::error::Error>> {
 let ctx = EagerRuntime::new()?;
 let x = ctx.variable_from(Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]).unwrap()).unwrap();
-let y = (&x * &x)?.reduce_sum(Some(&[0])).unwrap();
+let y = ctx.with_eager_session(|s| {
+    let squared = s.mul(&x, &x)?;
+    s.reduce_sum(&squared, Some(&[0]))
+})??;
 
 y.backward().unwrap();
 assert_eq!(x.grad().unwrap().unwrap().as_slice::<f64>().unwrap(), &[2.0, 4.0, 6.0]);
@@ -327,7 +330,7 @@ use tenferro_ad::{EagerRuntime, Tensor};
 fn main() -> Result<(), Box<dyn std::error::Error>> {
 let ctx = EagerRuntime::new()?;
 let x = ctx.variable_from(Tensor::from_vec_col_major(vec![3], vec![0.0_f64, 1.0, 2.0]).unwrap()).unwrap();
-let y = x.exp().unwrap();
+let y = ctx.with_eager_session(|session| session.exp(&x))??;
 
 let y_tensor = y.to_tensor().unwrap();
 let data = y_tensor.as_slice::<f64>().unwrap();
@@ -375,7 +378,7 @@ use tenferro_ad::{EagerRuntime, Tensor};
 fn main() -> Result<(), Box<dyn std::error::Error>> {
 let ctx = EagerRuntime::new()?;
 let v = ctx.variable_from(Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]).unwrap()).unwrap();
-let repeated = v.broadcast_in_dim(&[3, 2], &[0]).unwrap();
+let repeated = ctx.with_eager_session(|s| s.broadcast_in_dim(&v, &[3, 2], &[0]))??;
 
 assert_eq!(repeated.shape(), &[3, 2]);
 assert_eq!(repeated.to_tensor().unwrap().as_slice::<f64>().unwrap(), &[1.0, 2.0, 3.0, 1.0, 2.0, 3.0]);

@@ -78,7 +78,10 @@ fn solve_saved_lu_preserves_real_complex_batched_higher_derivatives() {
             let direction = input(dv.clone()).detach();
             let axes: Vec<_> = (0..shape.len()).collect();
             let solution = a.solve(&b).unwrap();
-            let loss = solution.reduce_sum(Some(&axes)).unwrap();
+            let loss = ctx
+                .with_eager_session(|s| s.reduce_sum(&solution, Some(&axes)))
+                .unwrap()
+                .unwrap();
             drop(solution); // LU/pivots and X must survive without user handles.
             let ga = ctx.grad(&loss, &a).unwrap();
             let gb = ctx.grad(&loss, &b).unwrap();
@@ -92,7 +95,11 @@ fn solve_saved_lu_preserves_real_complex_batched_higher_derivatives() {
                         .collect(),
                 );
                 let b = input(bv.clone());
-                let loss = a.solve(&b).unwrap().reduce_sum(Some(&axes)).unwrap();
+                let solution = a.solve(&b).unwrap();
+                let loss = ctx
+                    .with_eager_session(|s| s.reduce_sum(&solution, Some(&axes)))
+                    .unwrap()
+                    .unwrap();
                 (
                     values(&ctx.grad(&loss, &a).unwrap(), complex),
                     values(&ctx.grad(&loss, &b).unwrap(), complex),
@@ -110,10 +117,13 @@ fn solve_saved_lu_preserves_real_complex_batched_higher_derivatives() {
             close(&values(&hba, complex), &fd(&plus.1, &minus.1), 2e-7);
             // Real Hessian symmetry: reverse-over-reverse must match the JVP,
             // including conjugation for a real loss on complex inputs.
-            let directional = ga
-                .mul(&direction.conj().unwrap())
+            let directional = ctx
+                .with_eager_session(|s| {
+                    let conjugated = s.conj(&direction)?;
+                    let product = s.mul(&ga, &conjugated)?;
+                    s.reduce_sum(&product, Some(&axes))
+                })
                 .unwrap()
-                .reduce_sum(Some(&axes))
                 .unwrap();
             close(
                 &values(&ctx.grad(&directional, &a).unwrap(), complex),
@@ -146,7 +156,10 @@ fn solve_handles_single_and_multiple_tracked_inputs_and_no_grad() {
         let solution = a.solve(&b).unwrap();
         close(&values(&solution, false), &[2.0.into(), 3.0.into()], 1e-12);
         if track_a || track_b {
-            let loss = solution.reduce_sum(Some(&[0, 1])).unwrap();
+            let loss = ctx
+                .with_eager_session(|s| s.reduce_sum(&solution, Some(&[0, 1])))
+                .unwrap()
+                .unwrap();
             drop(solution);
             let gradients = loss.backward().unwrap();
             assert_eq!(gradients.len(), usize::from(track_a) + usize::from(track_b));

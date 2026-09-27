@@ -26,6 +26,7 @@ fn assert_close_slice(actual: &[f64], expected: &[f64], tol: f64) {
 
 #[test]
 fn take_axis_rows_cols_and_block_select_static_indices() {
+    let ctx = test_ctx();
     let x = EagerTensor::from_tensor_in(
         Tensor::from_vec_col_major(
             vec![3, 4],
@@ -37,11 +38,14 @@ fn take_axis_rows_cols_and_block_select_static_indices() {
             ],
         )
         .unwrap(),
-        test_ctx(),
+        ctx.clone(),
     )
     .unwrap();
 
-    let rows = x.take_rows(&[2, 0]).unwrap();
+    let rows = ctx
+        .with_eager_session(|session| session.take_rows(&x, &[2, 0]))
+        .unwrap()
+        .unwrap();
     assert_eq!(rows.shape(), &[2, 4]);
     assert_close_slice(
         f64_data(&rows.to_tensor().unwrap()),
@@ -49,7 +53,10 @@ fn take_axis_rows_cols_and_block_select_static_indices() {
         TOL,
     );
 
-    let cols = x.take_cols(&[3, 1]).unwrap();
+    let cols = ctx
+        .with_eager_session(|session| session.take_cols(&x, &[3, 1]))
+        .unwrap()
+        .unwrap();
     assert_eq!(cols.shape(), &[3, 2]);
     assert_close_slice(
         f64_data(&cols.to_tensor().unwrap()),
@@ -57,7 +64,10 @@ fn take_axis_rows_cols_and_block_select_static_indices() {
         TOL,
     );
 
-    let block = x.take_block(&[2, 0], &[3, 1]).unwrap();
+    let block = ctx
+        .with_eager_session(|session| session.take_block(&x, &[2, 0], &[3, 1]))
+        .unwrap()
+        .unwrap();
     assert_eq!(block.shape(), &[2, 2]);
     assert_close_slice(
         f64_data(&block.to_tensor().unwrap()),
@@ -65,7 +75,10 @@ fn take_axis_rows_cols_and_block_select_static_indices() {
         TOL,
     );
 
-    let axis = x.take_axis(1, &[0, 2]).unwrap();
+    let axis = ctx
+        .with_eager_session(|session| session.take_axis(&x, 1, &[0, 2]))
+        .unwrap()
+        .unwrap();
     assert_eq!(axis.shape(), &[3, 2]);
     assert_close_slice(
         f64_data(&axis.to_tensor().unwrap()),
@@ -93,15 +106,20 @@ fn take_block_backward_accumulates_to_source() {
     .unwrap();
     let weights = EagerTensor::from_tensor_in(
         Tensor::from_vec_col_major(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap(),
-        ctx,
+        ctx.clone(),
     )
     .unwrap();
 
-    let block = x.take_block(&[2, 0, 2], &[3, 1]).unwrap();
-    let loss = block
-        .mul(&weights)
+    let block = ctx
+        .with_eager_session(|session| session.take_block(&x, &[2, 0, 2], &[3, 1]))
         .unwrap()
-        .reduce_sum(Some(&[0, 1]))
+        .unwrap();
+    let loss = ctx
+        .with_eager_session(|s| {
+            let weighted = s.mul(&block, &weights)?;
+            s.reduce_sum(&weighted, Some(&[0, 1]))
+        })
+        .unwrap()
         .unwrap();
     let _ = loss.backward().unwrap();
 

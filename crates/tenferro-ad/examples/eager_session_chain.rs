@@ -116,7 +116,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let mut out = black_box(if case == "eager" { &a } else { &active_a }).clone();
                     for _ in 0..10 {
                         out = out
-                            .dot_general(black_box(&b), black_box(config.clone()))
+                            .runtime()
+                            .with_eager_session(|session| {
+                                session.dot_general(&out, black_box(&b), black_box(config.clone()))
+                            })
+                            .unwrap()
                             .unwrap();
                     }
                     Some(out.to_tensor().unwrap())

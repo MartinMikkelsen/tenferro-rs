@@ -320,7 +320,12 @@ fn try_direct_binary_dot_general(
         if !exact_dot_shapes(lhs.shape(), rhs.shape(), &plan.config) {
             return None;
         }
-        return Some(lhs.dot_general(rhs, plan.config).map_err(Error::Runtime));
+        return Some(
+            lhs.runtime()
+                .with_eager_session(|s| s.dot_general(lhs, rhs, plan.config))
+                .and_then(|result| result)
+                .map_err(Error::Runtime),
+        );
     }
     None
 }
@@ -1069,7 +1074,10 @@ pub fn tensordot(
 ) -> Result<EagerTensor> {
     let config = crate::tensordot::dot_general_config(axes, lhs.shape().len(), rhs.shape().len())?;
     crate::tensordot::validate_concrete_contract_dims(lhs.shape(), rhs.shape(), &config)?;
-    lhs.dot_general(rhs, config).map_err(Error::Runtime)
+    lhs.runtime()
+        .with_eager_session(|s| s.dot_general(lhs, rhs, config))
+        .and_then(|result| result)
+        .map_err(Error::Runtime)
 }
 
 #[cfg(test)]

@@ -13,6 +13,7 @@ use std::sync::{Arc, Mutex, MutexGuard, OnceLock, Weak};
 use std::time::{Duration, Instant};
 
 use lru::LruCache;
+use num_complex::{Complex32, Complex64};
 
 use crate::extension::{
     validate_eager_extension_target, EagerExtensionBackendKind, EagerExtensionTarget,
@@ -41,10 +42,13 @@ use tenferro_runtime::{
     Runtime, RuntimeConfigError, RuntimeConfigSnapshot, RuntimeEpoch, TracedTensor,
 };
 #[cfg(test)]
+use tenferro_tensor::TensorBackend;
+#[cfg(test)]
 use tenferro_tensor::TypedTensor;
 use tenferro_tensor::{
-    AllocationGroup, CacheStats, DType, DescriptorSlot, GroupError, IntoShapeVec, Tensor,
-    TensorBackend, TensorRead, TensorScalar, TensorValue, TensorView,
+    AllocationGroup, CacheStats, CompareDir, DType, DescriptorSlot, DotGeneralConfig, GatherConfig,
+    GroupError, IntoShapeVec, PadConfig, ScatterConfig, SliceConfig, Tensor, TensorRead,
+    TensorScalar, TensorValue, TensorView,
 };
 use tenferro_tensor::{BackendSession, BackendSessionHost};
 
@@ -142,10 +146,10 @@ fn eager_semantic_vjp_enabled() -> bool {
 ///     Tensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap(),
 ///     ctx.clone(),
 /// )?;
-/// let y = {
+/// let y = ctx.with_eager_session(|s| {
 ///     let _guard = ctx.no_grad();
-///     x.mul(&x)?
-/// };
+///     s.mul(&x, &x)
+/// })??;
 /// assert!(!y.tracks_grad());
 /// # Ok::<(), tenferro_ad::Error>(())
 /// ```
@@ -189,11 +193,10 @@ impl Drop for EagerNoGradGuard {
 ///     Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap(),
 ///     ctx.clone(),
 /// )?;
-/// let (y, x) = {
+/// let y = ctx.with_eager_session(|s| {
 ///     let _capture = ctx.capture_trace();
-///     let y = x.mul(&x)?;
-///     (y, x)
-/// };
+///     s.mul(&x, &x)
+/// })??;
 /// let seed = EagerTensor::from_tensor_in(
 ///     Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 1.0]).unwrap(),
 ///     ctx.clone(),
@@ -531,7 +534,10 @@ impl<'a> ValueGuard<'a> {
 ///     Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0])?,
 ///     ctx,
 /// )?;
-/// let loss = x.mul(&x)?.reduce_sum(Some(&[0]))?;
+/// let loss = x.runtime().with_eager_session(|s| {
+///     let squared = s.mul(&x, &x)?;
+///     s.reduce_sum(&squared, Some(&[0]))
+/// })??;
 /// let _gradients = loss.backward()?;
 /// let gradient = x.grad()?.expect("tracked leaf has a gradient");
 /// assert_eq!(gradient.shape(), &[2]);
@@ -634,7 +640,10 @@ impl GradientValue {
 ///     Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0])?,
 ///     ctx,
 /// )?;
-/// let loss = x.mul(&x)?.reduce_sum(Some(&[0]))?;
+/// let loss = x.runtime().with_eager_session(|s| {
+///     let squared = s.mul(&x, &x)?;
+///     s.reduce_sum(&squared, Some(&[0]))
+/// })??;
 /// let gradients = loss.backward()?;
 /// assert!(!gradients.is_empty());
 /// # Ok::<(), tenferro_ad::Error>(())
@@ -988,7 +997,7 @@ impl CpuPlacementBoundEager {
     /// # Panics
     ///
     /// The existing CPU backend re-entry guard panics if the callback enters a
-    /// public `CpuBackend` or calls an ordinary `EagerTensor` operation on this
+    /// public `CpuBackend` or reopens another eager execution boundary on this
     /// same runtime. Use only the borrowed `session` for work inside the scope.
     pub fn with_eager_session<R: Send>(
         &mut self,
@@ -1012,8 +1021,8 @@ impl CpuPlacementBoundEager {
 ///
 /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
 /// let x = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![1], vec![1.0_f64]).unwrap(), ctx.clone()).unwrap();
-/// let y = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap(), ctx).unwrap();
-/// let z = x.add(&y).unwrap();
+/// let y = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap(), ctx.clone()).unwrap();
+/// let z = ctx.with_eager_session(|session| session.add(&x, &y)).unwrap().unwrap();
 ///
 /// assert_eq!(z.value().unwrap().as_slice::<f64>().unwrap(), &[3.0]);
 /// # Ok::<(), tenferro_ad::Error>(())
@@ -1025,6 +1034,9 @@ pub struct EagerRuntime {
     // together during construction and remain paired for this runtime's
     // lifetime. The mutex only serializes mutable backend operations.
     backend: Mutex<EagerBackend>,
+    // Fixed at construction with the backend/engine pair; extension dispatch
+    // can inspect it while holding the borrowed backend session.
+    extension_backend_kind: Option<EagerExtensionBackendKind>,
     extension_install_lock: Mutex<()>,
     pub(crate) extension_caches: Mutex<ExtensionCacheStore>,
     semantic_extension_rules: SemanticExtensionRuleSet,
@@ -1035,6 +1047,1585 @@ pub struct EagerRuntime {
     /// and concrete bound input metadata. Avoids re-running freeze+AD
     /// transform+compile_frozen on warm structure hits.
     prepared_derivative_cache: Mutex<PreparedDerivativeCache>,
+}
+
+/// An eager runtime and its borrowed backend session for one execution boundary.
+///
+/// Obtain this only through [`EagerRuntime::with_eager_session`]. It rejects
+/// tensors from another eager runtime even if both runtimes use the same backend
+/// type, and it cannot escape the boundary closure.
+///
+/// # Examples
+///
+/// ```rust
+/// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
+/// use tenferro_cpu::CpuBackend;
+///
+/// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
+/// let x = EagerTensor::from_tensor_in(
+///     Tensor::from_vec_col_major(vec![1], vec![3.0_f64])?, ctx.clone(),
+/// )?;
+/// let y = ctx.with_eager_session(|session| session.neg(&x))??;
+/// assert_eq!(y.value()?.as_slice::<f64>()?, &[-3.0]);
+/// # Ok::<(), tenferro_ad::Error>(())
+/// ```
+///
+/// The borrowed session cannot escape its execution boundary:
+///
+/// ```compile_fail
+/// use tenferro_ad::EagerRuntime;
+/// use tenferro_cpu::CpuBackend;
+/// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
+/// let escaped = ctx.with_eager_session(|session| session).unwrap();
+/// let _ = escaped;
+/// ```
+pub struct EagerSession<'a> {
+    runtime: &'a Arc<EagerRuntime>,
+    backend: &'a mut dyn BackendSession,
+}
+
+impl fmt::Debug for EagerSession<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("EagerSession")
+            .field("runtime_id", &self.runtime.id())
+            .finish_non_exhaustive()
+    }
+}
+
+impl EagerSession<'_> {
+    /// Negate an eager tensor inside the caller's execution boundary.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
+    /// use tenferro_cpu::CpuBackend;
+    ///
+    /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
+    /// let x = EagerTensor::from_tensor_in(
+    ///     Tensor::from_vec_col_major(vec![1], vec![4.0_f64])?, ctx.clone(),
+    /// )?;
+    /// let y = ctx.with_eager_session(|session| session.neg(&x))??;
+    /// assert_eq!(y.value()?.as_slice::<f64>()?, &[-4.0]);
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::ContextMismatch`] for a tensor from another runtime,
+    /// or a typed eager/backend error from the selected operation.
+    pub fn neg(&mut self, input: &EagerTensor) -> Result<EagerTensor> {
+        self.run_unary(input, StdTensorOp::Neg)
+    }
+
+    /// Compute the elementwise exponential inside this eager session.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
+    /// use tenferro_cpu::CpuBackend;
+    /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
+    /// let x = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![1], vec![0.0_f64])?, ctx.clone())?;
+    /// let y = ctx.with_eager_session(|session| session.exp(&x))??;
+    /// assert_eq!(y.value()?.as_slice::<f64>()?, &[1.0]);
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::ContextMismatch`] for a foreign runtime, or a typed
+    /// unsupported/backend error for the input dtype.
+    pub fn exp(&mut self, input: &EagerTensor) -> Result<EagerTensor> {
+        self.run_unary(input, StdTensorOp::Exp)
+    }
+
+    /// Compute the elementwise absolute value inside this eager session.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
+    /// use tenferro_cpu::CpuBackend;
+    /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
+    /// let x = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![1], vec![-2.0_f64])?, ctx.clone())?;
+    /// let y = ctx.with_eager_session(|session| session.abs(&x))??;
+    /// assert_eq!(y.value()?.as_slice::<f64>()?, &[2.0]);
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::ContextMismatch`] for a foreign runtime, or a typed
+    /// unsupported/backend error for the input dtype.
+    pub fn abs(&mut self, input: &EagerTensor) -> Result<EagerTensor> {
+        self.run_unary(input, StdTensorOp::Abs)
+    }
+
+    /// Compute the elementwise conjugate inside this eager session.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
+    /// use tenferro_cpu::CpuBackend;
+    /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
+    /// let x = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![1], vec![2.0_f64])?, ctx.clone())?;
+    /// let y = ctx.with_eager_session(|session| session.conj(&x))??;
+    /// assert_eq!(y.value()?.as_slice::<f64>()?, &[2.0]);
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::ContextMismatch`] for a foreign runtime, or a typed
+    /// unsupported/backend error for the input dtype.
+    pub fn conj(&mut self, input: &EagerTensor) -> Result<EagerTensor> {
+        self.run_unary(input, StdTensorOp::Conj)
+    }
+
+    /// Compute the elementwise sign on this borrowed session.
+    ///
+    /// # Examples
+    /// ```rust
+    /// use tenferro_ad::{EagerRuntime, Tensor};
+    /// let ctx = EagerRuntime::new()?;
+    /// let y = ctx.with_eager_session(|s| {
+    ///     let x = s.constant_from(Tensor::from_vec_col_major(vec![1], vec![-2.0_f64])?)?;
+    ///     s.sign(&x)
+    /// })??;
+    /// assert_eq!(y.value()?.as_slice::<f64>()?, &[-1.0]);
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
+    /// # Errors
+    /// Returns a typed foreign-runtime, unsupported-dtype, or backend error.
+    pub fn sign(&mut self, input: &EagerTensor) -> Result<EagerTensor> {
+        self.run_unary(input, StdTensorOp::Sign)
+    }
+
+    /// Compute the elementwise natural logarithm on this borrowed session.
+    ///
+    /// # Examples
+    /// ```rust
+    /// use tenferro_ad::{EagerRuntime, Tensor};
+    /// let ctx = EagerRuntime::new()?;
+    /// let y = ctx.with_eager_session(|s| {
+    ///     let x = s.constant_from(Tensor::from_vec_col_major(vec![1], vec![1.0_f64])?)?;
+    ///     s.log(&x)
+    /// })??;
+    /// assert_eq!(y.value()?.as_slice::<f64>()?, &[0.0]);
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
+    /// # Errors
+    /// Returns a typed foreign-runtime, unsupported-dtype, or backend error.
+    pub fn log(&mut self, input: &EagerTensor) -> Result<EagerTensor> {
+        self.run_unary(input, StdTensorOp::Log)
+    }
+
+    /// Compute the elementwise square root on this borrowed session.
+    ///
+    /// # Examples
+    /// ```rust
+    /// use tenferro_ad::{EagerRuntime, Tensor};
+    /// let ctx = EagerRuntime::new()?;
+    /// let y = ctx.with_eager_session(|s| {
+    ///     let x = s.constant_from(Tensor::from_vec_col_major(vec![1], vec![4.0_f64])?)?;
+    ///     s.sqrt(&x)
+    /// })??;
+    /// assert_eq!(y.value()?.as_slice::<f64>()?, &[2.0]);
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
+    /// # Errors
+    /// Returns a typed foreign-runtime, unsupported-dtype, or backend error.
+    pub fn sqrt(&mut self, input: &EagerTensor) -> Result<EagerTensor> {
+        self.run_unary(input, StdTensorOp::Sqrt)
+    }
+
+    /// Compute the elementwise reciprocal square root on this borrowed session.
+    ///
+    /// # Examples
+    /// ```rust
+    /// use tenferro_ad::{EagerRuntime, Tensor};
+    /// let ctx = EagerRuntime::new()?;
+    /// let y = ctx.with_eager_session(|s| {
+    ///     let x = s.constant_from(Tensor::from_vec_col_major(vec![1], vec![4.0_f64])?)?;
+    ///     s.rsqrt(&x)
+    /// })??;
+    /// assert_eq!(y.value()?.as_slice::<f64>()?, &[0.5]);
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
+    /// # Errors
+    /// Returns a typed foreign-runtime, unsupported-dtype, or backend error.
+    pub fn rsqrt(&mut self, input: &EagerTensor) -> Result<EagerTensor> {
+        self.run_unary(input, StdTensorOp::Rsqrt)
+    }
+
+    /// Compute the elementwise sine on this borrowed session.
+    ///
+    /// # Examples
+    /// ```rust
+    /// use tenferro_ad::{EagerRuntime, Tensor};
+    /// let ctx = EagerRuntime::new()?;
+    /// let y = ctx.with_eager_session(|s| {
+    ///     let x = s.constant_from(Tensor::from_vec_col_major(vec![1], vec![0.0_f64])?)?;
+    ///     s.sin(&x)
+    /// })??;
+    /// assert_eq!(y.value()?.as_slice::<f64>()?, &[0.0]);
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
+    /// # Errors
+    /// Returns a typed foreign-runtime, unsupported-dtype, or backend error.
+    pub fn sin(&mut self, input: &EagerTensor) -> Result<EagerTensor> {
+        self.run_unary(input, StdTensorOp::Sin)
+    }
+
+    /// Compute the elementwise cosine on this borrowed session.
+    ///
+    /// # Examples
+    /// ```rust
+    /// use tenferro_ad::{EagerRuntime, Tensor};
+    /// let ctx = EagerRuntime::new()?;
+    /// let y = ctx.with_eager_session(|s| {
+    ///     let x = s.constant_from(Tensor::from_vec_col_major(vec![1], vec![0.0_f64])?)?;
+    ///     s.cos(&x)
+    /// })??;
+    /// assert_eq!(y.value()?.as_slice::<f64>()?, &[1.0]);
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
+    /// # Errors
+    /// Returns a typed foreign-runtime, unsupported-dtype, or backend error.
+    pub fn cos(&mut self, input: &EagerTensor) -> Result<EagerTensor> {
+        self.run_unary(input, StdTensorOp::Cos)
+    }
+
+    /// Compute the elementwise hyperbolic tangent on this borrowed session.
+    ///
+    /// # Examples
+    /// ```rust
+    /// use tenferro_ad::{EagerRuntime, Tensor};
+    /// let ctx = EagerRuntime::new()?;
+    /// let y = ctx.with_eager_session(|s| {
+    ///     let x = s.constant_from(Tensor::from_vec_col_major(vec![1], vec![0.0_f64])?)?;
+    ///     s.tanh(&x)
+    /// })??;
+    /// assert_eq!(y.value()?.as_slice::<f64>()?, &[0.0]);
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
+    /// # Errors
+    /// Returns a typed foreign-runtime, unsupported-dtype, or backend error.
+    pub fn tanh(&mut self, input: &EagerTensor) -> Result<EagerTensor> {
+        self.run_unary(input, StdTensorOp::Tanh)
+    }
+
+    /// Compute `exp(x) - 1` elementwise on this borrowed session.
+    ///
+    /// # Examples
+    /// ```rust
+    /// use tenferro_ad::{EagerRuntime, Tensor};
+    /// let ctx = EagerRuntime::new()?;
+    /// let y = ctx.with_eager_session(|s| {
+    ///     let x = s.constant_from(Tensor::from_vec_col_major(vec![1], vec![0.0_f64])?)?;
+    ///     s.expm1(&x)
+    /// })??;
+    /// assert_eq!(y.value()?.as_slice::<f64>()?, &[0.0]);
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
+    /// # Errors
+    /// Returns a typed foreign-runtime, unsupported-dtype, or backend error.
+    pub fn expm1(&mut self, input: &EagerTensor) -> Result<EagerTensor> {
+        self.run_unary(input, StdTensorOp::Expm1)
+    }
+
+    /// Compute `log(1 + x)` elementwise on this borrowed session.
+    ///
+    /// # Examples
+    /// ```rust
+    /// use tenferro_ad::{EagerRuntime, Tensor};
+    /// let ctx = EagerRuntime::new()?;
+    /// let y = ctx.with_eager_session(|s| {
+    ///     let x = s.constant_from(Tensor::from_vec_col_major(vec![1], vec![0.0_f64])?)?;
+    ///     s.log1p(&x)
+    /// })??;
+    /// assert_eq!(y.value()?.as_slice::<f64>()?, &[0.0]);
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
+    /// # Errors
+    /// Returns a typed foreign-runtime, unsupported-dtype, or backend error.
+    pub fn log1p(&mut self, input: &EagerTensor) -> Result<EagerTensor> {
+        self.run_unary(input, StdTensorOp::Log1p)
+    }
+
+    /// Convert a tensor under the checked dtype-promotion lattice.
+    /// Use [`Self::cast`] for intentional lossy projection.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_ad::{DType, EagerRuntime, Tensor};
+    /// use tenferro_cpu::CpuBackend;
+    /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
+    /// let converted = ctx.with_eager_session(|session| {
+    ///     let x = session.constant_from(Tensor::from_vec_col_major(vec![1], vec![2.0_f64])?)?;
+    ///     session.convert(&x, DType::C64)
+    /// })??;
+    /// assert_eq!(converted.dtype(), DType::C64);
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::ContextMismatch`] for a foreign runtime or a typed
+    /// unsupported dtype conversion/backend error.
+    pub fn convert(&mut self, input: &EagerTensor, to: DType) -> Result<EagerTensor> {
+        self.ensure_runtime(input)?;
+        tenferro_tensor::validate::validate_convert_dtype(
+            "EagerTensor::convert",
+            input.dtype(),
+            to,
+        )
+        .map_err(Error::TensorRuntime)?;
+        self.cast(input, to)
+    }
+
+    /// Cast a tensor to a dtype, permitting explicitly lossy projections.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_ad::{DType, EagerRuntime, Tensor};
+    /// use tenferro_cpu::CpuBackend;
+    /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
+    /// let casted = ctx.with_eager_session(|session| {
+    ///     let x = session.constant_from(Tensor::from_vec_col_major(vec![1], vec![2.8_f64])?)?;
+    ///     session.cast(&x, DType::I32)
+    /// })??;
+    /// assert_eq!(casted.value()?.as_slice::<i32>()?, &[2]);
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::ContextMismatch`] for a foreign runtime, or a typed
+    /// unsupported projection/backend error.
+    pub fn cast(&mut self, input: &EagerTensor, to: DType) -> Result<EagerTensor> {
+        self.run_unary(
+            input,
+            StdTensorOp::Convert {
+                from: input.dtype(),
+                to,
+            },
+        )
+    }
+
+    /// Permute the axes of an eager tensor while preserving independent ownership.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_ad::{EagerRuntime, Tensor};
+    /// use tenferro_cpu::CpuBackend;
+    /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
+    /// let copied = ctx.with_eager_session(|session| {
+    ///     let x = session.constant_from(Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0])?)?;
+    ///     let y = session.transpose(&x, &[1, 0])?;
+    ///     session.duplicate_value(&y)
+    /// })??;
+    /// assert_eq!(copied.as_slice::<f64>()?, &[1.0, 3.0, 2.0, 4.0]);
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::ContextMismatch`] for a foreign runtime, or a typed
+    /// axis/backend error for an invalid permutation or copy.
+    pub fn transpose(&mut self, input: &EagerTensor, perm: &[usize]) -> Result<EagerTensor> {
+        self.ensure_runtime(input)?;
+        input.transpose_in_session(perm, self.backend)
+    }
+
+    /// Reshape an eager tensor while retaining a separate result owner.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
+    /// use tenferro_cpu::CpuBackend;
+    /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
+    /// let x = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?, ctx.clone())?;
+    /// let y = ctx.with_eager_session(|session| session.reshape(&x, [1, 2]))??;
+    /// assert_eq!(y.shape(), &[1, 2]);
+    /// assert_eq!(y.value()?.as_slice::<f64>()?, &[1.0, 2.0]);
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::ContextMismatch`] for a foreign runtime, or a typed
+    /// validation/backend error when the target shape is incompatible.
+    pub fn reshape(
+        &mut self,
+        input: &EagerTensor,
+        shape: impl IntoShapeVec,
+    ) -> Result<EagerTensor> {
+        self.ensure_runtime(input)?;
+        input.reshape_in_session(&shape.into_shape_vec(), self.backend)
+    }
+
+    /// Slice an eager tensor with explicit start, limit, and stride per axis.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_ad::{EagerRuntime, SliceConfig, Tensor};
+    /// use tenferro_cpu::CpuBackend;
+    /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
+    /// let y = ctx.with_eager_session(|session| {
+    ///     let x = session.constant_from(Tensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0])?)?;
+    ///     session.slice(&x, SliceConfig { starts: vec![1], limits: vec![3], strides: vec![1] })
+    /// })??;
+    /// assert_eq!(y.value()?.as_slice::<f64>()?, &[2.0, 3.0]);
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::ContextMismatch`] for a foreign runtime, or a typed
+    /// axis/stride/backend error for an invalid slice or copy.
+    pub fn slice(&mut self, input: &EagerTensor, config: SliceConfig) -> Result<EagerTensor> {
+        self.ensure_runtime(input)?;
+        input.slice_in_session(config, self.backend)
+    }
+
+    /// Broadcast an eager tensor into a larger shape on this session.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
+    /// use tenferro_cpu::CpuBackend;
+    /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
+    /// let x = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?, ctx.clone())?;
+    /// let copy = ctx.with_eager_session(|session| {
+    ///     let y = session.broadcast_in_dim(&x, &[2, 2], &[0])?;
+    ///     session.duplicate_value(&y)
+    /// })??;
+    /// assert_eq!(copy.as_slice::<f64>()?, &[1.0, 2.0, 1.0, 2.0]);
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::ContextMismatch`] for a foreign runtime, or a typed
+    /// validation/backend error for an invalid broadcast mapping.
+    pub fn broadcast_in_dim(
+        &mut self,
+        input: &EagerTensor,
+        shape: &[usize],
+        dims: &[usize],
+    ) -> Result<EagerTensor> {
+        self.ensure_runtime(input)?;
+        input.broadcast_in_dim_in_session(shape, dims, self.backend)
+    }
+
+    /// Keep the lower triangle of a matrix on this borrowed session.
+    ///
+    /// # Examples
+    /// ```rust
+    /// use tenferro_ad::{EagerRuntime, Tensor};
+    /// let ctx = EagerRuntime::new()?;
+    /// let lower = ctx.with_eager_session(|s| {
+    ///     let matrix = s.constant_from(Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0])?)?;
+    ///     s.tril(&matrix, 0)
+    /// })??;
+    /// assert_eq!(lower.value()?.as_slice::<f64>()?, &[1.0, 2.0, 0.0, 4.0]);
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
+    /// # Errors
+    /// Returns a typed foreign-runtime, rank, unsupported-dtype, or backend error.
+    pub fn tril(&mut self, input: &EagerTensor, k: i64) -> Result<EagerTensor> {
+        self.run_unary(input, StdTensorOp::Tril { k })
+    }
+
+    /// Keep the upper triangle of a matrix on this borrowed session.
+    ///
+    /// # Examples
+    /// ```rust
+    /// use tenferro_ad::{EagerRuntime, Tensor};
+    /// let ctx = EagerRuntime::new()?;
+    /// let upper = ctx.with_eager_session(|s| {
+    ///     let matrix = s.constant_from(Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0])?)?;
+    ///     s.triu(&matrix, 0)
+    /// })??;
+    /// assert_eq!(upper.value()?.as_slice::<f64>()?, &[1.0, 0.0, 3.0, 4.0]);
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
+    /// # Errors
+    /// Returns a typed foreign-runtime, rank, unsupported-dtype, or backend error.
+    pub fn triu(&mut self, input: &EagerTensor, k: i64) -> Result<EagerTensor> {
+        self.run_unary(input, StdTensorOp::Triu { k })
+    }
+
+    /// Pad an eager tensor with zeros on this borrowed session.
+    ///
+    /// # Examples
+    /// ```rust
+    /// use tenferro_ad::{EagerRuntime, PadConfig, Tensor};
+    /// let ctx = EagerRuntime::new()?;
+    /// let padded = ctx.with_eager_session(|s| {
+    ///     let x = s.constant_from(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?)?;
+    ///     s.pad(&x, PadConfig {
+    ///         edge_padding_low: vec![1],
+    ///         edge_padding_high: vec![1],
+    ///         interior_padding: vec![1],
+    ///     })
+    /// })??;
+    /// assert_eq!(padded.value()?.as_slice::<f64>()?, &[0.0, 1.0, 0.0, 2.0, 0.0]);
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
+    /// # Errors
+    /// Returns a typed foreign-runtime, padding-validation, or backend error.
+    pub fn pad(&mut self, input: &EagerTensor, config: PadConfig) -> Result<EagerTensor> {
+        self.run_unary(input, StdTensorOp::Pad(config))
+    }
+
+    /// Reverse the elements along selected axes on this borrowed session.
+    ///
+    /// # Examples
+    /// ```rust
+    /// use tenferro_ad::{EagerRuntime, Tensor};
+    /// let ctx = EagerRuntime::new()?;
+    /// let reversed = ctx.with_eager_session(|s| {
+    ///     let x = s.constant_from(Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0])?)?;
+    ///     s.reverse(&x, &[0])
+    /// })??;
+    /// assert_eq!(reversed.value()?.as_slice::<f64>()?, &[3.0, 2.0, 1.0]);
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
+    /// # Errors
+    /// Returns a typed foreign-runtime, invalid-axis, or backend error.
+    pub fn reverse(&mut self, input: &EagerTensor, axes: &[usize]) -> Result<EagerTensor> {
+        self.ensure_runtime(input)?;
+        crate::eager_ops::validate_eager_axes("EagerSession::reverse", input.shape().len(), axes)?;
+        self.run_unary(
+            input,
+            StdTensorOp::Reverse {
+                axes: axes.to_vec(),
+            },
+        )
+    }
+
+    /// Slice an eager tensor using runtime start indices in this borrowed session.
+    ///
+    /// # Examples
+    /// ```rust
+    /// use tenferro_ad::{EagerRuntime, Tensor};
+    /// let ctx = EagerRuntime::new()?;
+    /// let selected = ctx.with_eager_session(|s| {
+    ///     let x = s.constant_from(Tensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0])?)?;
+    ///     let starts = s.constant_from(Tensor::from_vec_col_major(vec![1], vec![1_i64])?)?;
+    ///     s.dynamic_slice(&x, &starts, &[2])
+    /// })??;
+    /// assert_eq!(selected.value()?.as_slice::<f64>()?, &[2.0, 3.0]);
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
+    /// # Errors
+    /// Returns a typed foreign-runtime, invalid-index or slice-shape, or backend error.
+    pub fn dynamic_slice(
+        &mut self,
+        input: &EagerTensor,
+        starts: &EagerTensor,
+        sizes: &[usize],
+    ) -> Result<EagerTensor> {
+        self.ensure_runtime(input)?;
+        self.ensure_runtime(starts)?;
+        EagerTensor::nary_op_in_session(
+            &[input, starts],
+            StdTensorOp::DynamicSlice {
+                slice_sizes: sizes.to_vec(),
+            },
+            self.backend,
+        )
+    }
+
+    /// Gather elements of an eager tensor in this borrowed session.
+    ///
+    /// # Examples
+    /// ```rust
+    /// use tenferro_ad::{EagerRuntime, GatherConfig, Tensor};
+    /// let ctx = EagerRuntime::new()?;
+    /// let result = ctx.with_eager_session(|s| {
+    ///     let x = s.constant_from(Tensor::from_vec_col_major(vec![3], vec![10.0_f64, 20.0, 30.0])?)?;
+    ///     let indices = s.constant_from(Tensor::from_vec_col_major(vec![2, 1], vec![2_i64, 0])?)?;
+    ///     s.gather(&x, &indices, GatherConfig {
+    ///         offset_dims: vec![], collapsed_slice_dims: vec![0],
+    ///         start_index_map: vec![0], index_vector_dim: 1,
+    ///         slice_sizes: vec![1],
+    ///     })
+    /// })??;
+    /// assert_eq!(result.value()?.as_slice::<f64>()?, &[30.0, 10.0]);
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
+    /// # Errors
+    /// Returns a typed foreign-runtime, invalid-index/configuration, or backend error.
+    pub fn gather(
+        &mut self,
+        input: &EagerTensor,
+        indices: &EagerTensor,
+        config: GatherConfig,
+    ) -> Result<EagerTensor> {
+        self.ensure_runtime(input)?;
+        self.ensure_runtime(indices)?;
+        EagerTensor::nary_op_in_session(
+            &[input, indices],
+            StdTensorOp::Gather(config),
+            self.backend,
+        )
+    }
+
+    /// Concatenate eager tensors along one axis in this borrowed session.
+    ///
+    /// # Examples
+    /// ```rust
+    /// use tenferro_ad::{EagerRuntime, Tensor};
+    /// let ctx = EagerRuntime::new()?;
+    /// let result = ctx.with_eager_session(|s| {
+    ///     let a = s.constant_from(Tensor::from_vec_col_major(vec![1], vec![1.0_f64])?)?;
+    ///     let b = s.constant_from(Tensor::from_vec_col_major(vec![1], vec![2.0_f64])?)?;
+    ///     s.concatenate(&[&a, &b], 0)
+    /// })??;
+    /// assert_eq!(result.value()?.as_slice::<f64>()?, &[1.0, 2.0]);
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
+    /// # Errors
+    /// Returns a typed empty-input, foreign-runtime, invalid-axis/shape, or backend error.
+    pub fn concatenate(&mut self, inputs: &[&EagerTensor], axis: usize) -> Result<EagerTensor> {
+        for input in inputs {
+            self.ensure_runtime(input)?;
+        }
+        EagerTensor::nary_op_in_session(
+            inputs,
+            StdTensorOp::Concatenate {
+                axis,
+                input_count: inputs.len(),
+            },
+            self.backend,
+        )
+    }
+
+    /// Scatter updates into an eager tensor within this borrowed session.
+    ///
+    /// # Examples
+    /// ```rust
+    /// use tenferro_ad::{EagerRuntime, ScatterConfig, Tensor};
+    /// let ctx = EagerRuntime::new()?;
+    /// let result = ctx.with_eager_session(|s| {
+    ///     let input = s.constant_from(Tensor::from_vec_col_major(vec![4], vec![0.0_f64; 4])?)?;
+    ///     let indices = s.constant_from(Tensor::from_vec_col_major(vec![2, 1], vec![1_i64, 3])?)?;
+    ///     let updates = s.constant_from(Tensor::from_vec_col_major(vec![2], vec![5.0_f64, 7.0])?)?;
+    ///     s.scatter(&input, &indices, &updates, ScatterConfig {
+    ///         update_window_dims: vec![],
+    ///         inserted_window_dims: vec![0],
+    ///         scatter_dims_to_operand_dims: vec![0],
+    ///         index_vector_dim: 1,
+    ///     })
+    /// })??;
+    /// assert_eq!(result.value()?.as_slice::<f64>()?, &[0.0, 5.0, 0.0, 7.0]);
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
+    /// # Errors
+    /// Returns a typed foreign-runtime, invalid-index/configuration, or backend error.
+    pub fn scatter(
+        &mut self,
+        input: &EagerTensor,
+        indices: &EagerTensor,
+        updates: &EagerTensor,
+        config: ScatterConfig,
+    ) -> Result<EagerTensor> {
+        self.ensure_runtime(input)?;
+        self.ensure_runtime(indices)?;
+        self.ensure_runtime(updates)?;
+        EagerTensor::nary_op_in_session(
+            &[input, indices, updates],
+            StdTensorOp::Scatter(config),
+            self.backend,
+        )
+    }
+
+    /// Extract a diagonal along two axes in this borrowed session.
+    ///
+    /// # Examples
+    /// ```rust
+    /// use tenferro_ad::{EagerRuntime, Tensor};
+    /// let ctx = EagerRuntime::new()?;
+    /// let diagonal = ctx.with_eager_session(|s| {
+    ///     let matrix = s.constant_from(Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0])?)?;
+    ///     s.extract_diag(&matrix, 0, 1)
+    /// })??;
+    /// assert_eq!(diagonal.value()?.as_slice::<f64>()?, &[1.0, 4.0]);
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
+    /// # Errors
+    /// Returns a typed foreign-runtime, invalid-axis, or backend error.
+    pub fn extract_diag(
+        &mut self,
+        input: &EagerTensor,
+        axis_a: usize,
+        axis_b: usize,
+    ) -> Result<EagerTensor> {
+        self.ensure_runtime(input)?;
+        self.run_unary(input, StdTensorOp::ExtractDiag { axis_a, axis_b })
+    }
+
+    /// Embed the input along a diagonal in this borrowed session.
+    ///
+    /// # Examples
+    /// ```rust
+    /// use tenferro_ad::{EagerRuntime, Tensor};
+    /// let ctx = EagerRuntime::new()?;
+    /// let matrix = ctx.with_eager_session(|s| {
+    ///     let diagonal = s.constant_from(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?)?;
+    ///     s.embed_diag(&diagonal, 0, 1)
+    /// })??;
+    /// assert_eq!(matrix.value()?.as_slice::<f64>()?, &[1.0, 0.0, 0.0, 2.0]);
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
+    /// # Errors
+    /// Returns a typed foreign-runtime, invalid-axis, or backend error.
+    pub fn embed_diag(
+        &mut self,
+        input: &EagerTensor,
+        axis_a: usize,
+        axis_b: usize,
+    ) -> Result<EagerTensor> {
+        self.ensure_runtime(input)?;
+        self.run_unary(input, StdTensorOp::EmbedDiag { axis_a, axis_b })
+    }
+
+    /// Reduce an eager tensor over selected axes within this borrowed session.
+    /// `None` reduces all axes, while `Some(&[])` retains the input shape.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
+    /// use tenferro_cpu::CpuBackend;
+    /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
+    /// let x = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?, ctx.clone())?;
+    /// let sum = ctx.with_eager_session(|session| session.reduce_sum(&x, None))??;
+    /// assert_eq!(sum.value()?.as_slice::<f64>()?, &[3.0]);
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::ContextMismatch`] for a foreign runtime, or a typed
+    /// validation/backend error for invalid axes or unsupported dtypes.
+    pub fn reduce_sum(
+        &mut self,
+        input: &EagerTensor,
+        axes: Option<&[usize]>,
+    ) -> Result<EagerTensor> {
+        self.ensure_runtime(input)?;
+        input.reduce_sum_in_session(axes, self.backend)
+    }
+
+    /// Sum elementwise squares over the selected axes in this borrowed session.
+    /// Only `f32` and `f64` are supported; an empty axis slice squares each value.
+    ///
+    /// # Examples
+    /// ```rust
+    /// use tenferro_ad::{EagerRuntime, Tensor};
+    /// let ctx = EagerRuntime::new()?;
+    /// let sum = ctx.with_eager_session(|s| {
+    ///     let input = s.constant_from(Tensor::from_vec_col_major([2], vec![3.0_f64, 4.0])?)?;
+    ///     s.reduce_sum_squares(&input, &[0])
+    /// })??;
+    /// assert_eq!(sum.value()?.as_slice::<f64>()?, &[25.0]);
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
+    /// # Errors
+    /// Returns typed foreign-runtime, invalid-axis, unsupported-dtype, or backend errors.
+    pub fn reduce_sum_squares(
+        &mut self,
+        input: &EagerTensor,
+        axes: &[usize],
+    ) -> Result<EagerTensor> {
+        self.ensure_runtime(input)?;
+        crate::eager_ops::validate_eager_axes(
+            "EagerSession::reduce_sum_squares",
+            input.shape().len(),
+            axes,
+        )?;
+        self.run_unary(
+            input,
+            StdTensorOp::ReduceSumSquares {
+                axes: axes.to_vec(),
+            },
+        )
+    }
+
+    /// Reduce the product of selected axes in this borrowed session.
+    /// `None` reduces every axis.
+    ///
+    /// # Examples
+    /// ```rust
+    /// use tenferro_ad::{EagerRuntime, Tensor};
+    /// let ctx = EagerRuntime::new()?;
+    /// let result = ctx.with_eager_session(|s| {
+    ///     let x = s.constant_from(Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0])?)?;
+    ///     s.reduce_prod(&x, None)
+    /// })??;
+    /// assert_eq!(result.value()?.as_slice::<f64>()?, &[6.0]);
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
+    /// # Errors
+    /// Returns a typed foreign-runtime, invalid-axis, unsupported-dtype, or backend error.
+    pub fn reduce_prod(
+        &mut self,
+        input: &EagerTensor,
+        axes: Option<&[usize]>,
+    ) -> Result<EagerTensor> {
+        self.ensure_runtime(input)?;
+        let axes = axes.map_or_else(|| (0..input.shape().len()).collect(), <[usize]>::to_vec);
+        crate::eager_ops::validate_eager_axes(
+            "EagerSession::reduce_prod",
+            input.shape().len(),
+            &axes,
+        )?;
+        self.run_unary(input, StdTensorOp::ReduceProd { axes })
+    }
+
+    /// Reduce the maximum over selected axes in this borrowed session.
+    /// `None` reduces every axis.
+    ///
+    /// # Examples
+    /// ```rust
+    /// use tenferro_ad::{EagerRuntime, Tensor};
+    /// let ctx = EagerRuntime::new()?;
+    /// let result = ctx.with_eager_session(|s| {
+    ///     let x = s.constant_from(Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0])?)?;
+    ///     s.reduce_max(&x, None)
+    /// })??;
+    /// assert_eq!(result.value()?.as_slice::<f64>()?, &[3.0]);
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
+    /// # Errors
+    /// Returns a typed foreign-runtime, invalid-axis, unsupported-dtype, or backend error.
+    pub fn reduce_max(
+        &mut self,
+        input: &EagerTensor,
+        axes: Option<&[usize]>,
+    ) -> Result<EagerTensor> {
+        self.ensure_runtime(input)?;
+        let axes = axes.map_or_else(|| (0..input.shape().len()).collect(), <[usize]>::to_vec);
+        crate::eager_ops::validate_eager_axes(
+            "EagerSession::reduce_max",
+            input.shape().len(),
+            &axes,
+        )?;
+        self.run_unary(input, StdTensorOp::ReduceMax { axes })
+    }
+
+    /// Reduce the minimum over selected axes in this borrowed session.
+    /// `None` reduces every axis.
+    ///
+    /// # Examples
+    /// ```rust
+    /// use tenferro_ad::{EagerRuntime, Tensor};
+    /// let ctx = EagerRuntime::new()?;
+    /// let result = ctx.with_eager_session(|s| {
+    ///     let x = s.constant_from(Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0])?)?;
+    ///     s.reduce_min(&x, None)
+    /// })??;
+    /// assert_eq!(result.value()?.as_slice::<f64>()?, &[2.0]);
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
+    /// # Errors
+    /// Returns a typed foreign-runtime, invalid-axis, unsupported-dtype, or backend error.
+    pub fn reduce_min(
+        &mut self,
+        input: &EagerTensor,
+        axes: Option<&[usize]>,
+    ) -> Result<EagerTensor> {
+        self.ensure_runtime(input)?;
+        let axes = axes.map_or_else(|| (0..input.shape().len()).collect(), <[usize]>::to_vec);
+        crate::eager_ops::validate_eager_axes(
+            "EagerSession::reduce_min",
+            input.shape().len(),
+            &axes,
+        )?;
+        self.run_unary(input, StdTensorOp::ReduceMin { axes })
+    }
+
+    /// Duplicate an eager value into an independent tensor within the caller's
+    /// borrowed session, preserving its dtype and placement.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
+    /// use tenferro_cpu::CpuBackend;
+    /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
+    /// let x = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![1], vec![2.0_f64])?, ctx.clone())?;
+    /// let copy = ctx.with_eager_session(|session| session.duplicate_value(&x))??;
+    /// assert_eq!(copy.as_slice::<f64>()?, &[2.0]);
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::ContextMismatch`] for a foreign runtime, or a typed
+    /// runtime/backend error when the retained value cannot be duplicated.
+    pub fn duplicate_value(&mut self, input: &EagerTensor) -> Result<Tensor> {
+        self.ensure_runtime(input)?;
+        input.duplicate_value_in_session(self.backend)
+    }
+
+    /// Import an untracked leaf within this borrowed session.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_ad::{EagerRuntime, Tensor};
+    /// use tenferro_cpu::CpuBackend;
+    /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
+    /// let c = ctx.with_eager_session(|session| {
+    ///     session.constant_from(Tensor::from_vec_col_major(vec![1], vec![2.0_f64])?)
+    /// })??;
+    /// assert_eq!(c.value()?.as_slice::<f64>()?, &[2.0]);
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Propagates typed backend and eager-value registration failures.
+    pub fn constant_from(&mut self, tensor: Tensor) -> Result<EagerTensor> {
+        EagerTensor::new_leaf_in_session(Arc::clone(self.runtime), tensor, false, self.backend)
+    }
+
+    /// Upload a host tensor and import it as an untracked leaf in this session.
+    /// Unlike [`Self::constant_from`], this explicitly crosses the host/device boundary.
+    ///
+    /// # Examples
+    /// ```rust
+    /// use tenferro_ad::{EagerRuntime, Tensor};
+    /// let ctx = EagerRuntime::new()?;
+    /// let c = ctx.with_eager_session(|s| {
+    ///     s.constant_from_host(Tensor::from_vec_col_major([1], vec![2.0_f64])?)
+    /// })??;
+    /// assert_eq!(c.value()?.as_slice::<f64>()?, &[2.0]);
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
+    /// # Errors
+    /// Returns a typed backend upload or eager-value registration error.
+    pub fn constant_from_host(&mut self, tensor: Tensor) -> Result<EagerTensor> {
+        let uploaded = self
+            .backend
+            .upload_host_tensor(TensorRead::from_tensor(&tensor))
+            .map_err(Error::from)?;
+        self.constant_from(uploaded)
+    }
+
+    /// Import a trainable leaf within this borrowed session.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_ad::{EagerRuntime, Tensor};
+    /// use tenferro_cpu::CpuBackend;
+    /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
+    /// let x = ctx.with_eager_session(|session| {
+    ///     session.variable_from(Tensor::from_vec_col_major(vec![1], vec![2.0_f64])?)
+    /// })??;
+    /// assert!(x.tracks_grad());
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Propagates typed backend and eager-value/gradient registration failures.
+    pub fn variable_from(&mut self, tensor: Tensor) -> Result<EagerTensor> {
+        EagerTensor::new_leaf_in_session(Arc::clone(self.runtime), tensor, true, self.backend)
+    }
+
+    /// Add eager tensors with the same broadcast and AD rules as the eager
+    /// operation surface, reusing this borrowed execution session.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
+    /// use tenferro_cpu::CpuBackend;
+    /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
+    /// let x = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?, ctx.clone())?;
+    /// let scalar = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![], vec![3.0_f64])?, ctx.clone())?;
+    /// let y = ctx.with_eager_session(|session| session.add(&x, &scalar))??;
+    /// assert_eq!(y.value()?.as_slice::<f64>()?, &[4.0, 5.0]);
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::ContextMismatch`] for a tensor from another runtime,
+    /// or a typed broadcast/backend error for the operands.
+    pub fn add(&mut self, lhs: &EagerTensor, rhs: &EagerTensor) -> Result<EagerTensor> {
+        self.run_binary("add", lhs, rhs, StdTensorOp::Add)
+    }
+
+    /// Subtract eager tensors within this borrowed session.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
+    /// use tenferro_cpu::CpuBackend;
+    /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
+    /// let x = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![1], vec![3.0_f64])?, ctx.clone())?;
+    /// let y = ctx.with_eager_session(|session| session.sub(&x, &x))??;
+    /// assert_eq!(y.value()?.as_slice::<f64>()?, &[0.0]);
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::ContextMismatch`] for a foreign runtime, or a typed
+    /// broadcast/backend error for the operands.
+    pub fn sub(&mut self, lhs: &EagerTensor, rhs: &EagerTensor) -> Result<EagerTensor> {
+        self.run_binary("sub", lhs, rhs, StdTensorOp::Sub)
+    }
+
+    /// Multiply eager tensors within this borrowed session.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
+    /// use tenferro_cpu::CpuBackend;
+    /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
+    /// let x = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![1], vec![3.0_f64])?, ctx.clone())?;
+    /// let y = ctx.with_eager_session(|session| session.mul(&x, &x))??;
+    /// assert_eq!(y.value()?.as_slice::<f64>()?, &[9.0]);
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::ContextMismatch`] for a foreign runtime, or a typed
+    /// broadcast/backend error for the operands.
+    pub fn mul(&mut self, lhs: &EagerTensor, rhs: &EagerTensor) -> Result<EagerTensor> {
+        self.run_binary("mul", lhs, rhs, StdTensorOp::Mul)
+    }
+
+    /// Divide eager tensors elementwise with broadcast rules.
+    ///
+    /// # Examples
+    /// ```rust
+    /// use tenferro_ad::{EagerRuntime, Tensor};
+    /// let ctx = EagerRuntime::new()?;
+    /// let y = ctx.with_eager_session(|s| {
+    ///     let x = s.constant_from(Tensor::from_vec_col_major(vec![1], vec![6.0_f64])?)?;
+    ///     let divisor = s.constant_from(Tensor::from_vec_col_major(vec![], vec![2.0_f64])?)?;
+    ///     s.div(&x, &divisor)
+    /// })??;
+    /// assert_eq!(y.value()?.as_slice::<f64>()?, &[3.0]);
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
+    /// # Errors
+    /// Returns a typed foreign-runtime, broadcast, numerical, or backend error.
+    pub fn div(&mut self, lhs: &EagerTensor, rhs: &EagerTensor) -> Result<EagerTensor> {
+        self.run_binary("div", lhs, rhs, StdTensorOp::Div)
+    }
+
+    /// Compute the elementwise remainder with broadcast rules.
+    ///
+    /// # Examples
+    /// ```rust
+    /// use tenferro_ad::{EagerRuntime, Tensor};
+    /// let ctx = EagerRuntime::new()?;
+    /// let y = ctx.with_eager_session(|s| {
+    ///     let x = s.constant_from(Tensor::from_vec_col_major(vec![1], vec![5.0_f64])?)?;
+    ///     let divisor = s.constant_from(Tensor::from_vec_col_major(vec![], vec![2.0_f64])?)?;
+    ///     s.rem(&x, &divisor)
+    /// })??;
+    /// assert_eq!(y.value()?.as_slice::<f64>()?, &[1.0]);
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
+    /// # Errors
+    /// Returns a typed foreign-runtime, broadcast, numerical, or backend error.
+    pub fn rem(&mut self, lhs: &EagerTensor, rhs: &EagerTensor) -> Result<EagerTensor> {
+        self.run_binary("rem", lhs, rhs, StdTensorOp::Rem)
+    }
+
+    /// Raise eager tensor elements to broadcast exponents.
+    ///
+    /// # Examples
+    /// ```rust
+    /// use tenferro_ad::{EagerRuntime, Tensor};
+    /// let ctx = EagerRuntime::new()?;
+    /// let y = ctx.with_eager_session(|s| {
+    ///     let x = s.constant_from(Tensor::from_vec_col_major(vec![1], vec![2.0_f64])?)?;
+    ///     let exponent = s.constant_from(Tensor::from_vec_col_major(vec![], vec![3.0_f64])?)?;
+    ///     s.pow(&x, &exponent)
+    /// })??;
+    /// assert_eq!(y.value()?.as_slice::<f64>()?, &[8.0]);
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
+    /// # Errors
+    /// Returns a typed foreign-runtime, broadcast, numerical, or backend error.
+    pub fn pow(&mut self, lhs: &EagerTensor, rhs: &EagerTensor) -> Result<EagerTensor> {
+        self.run_binary("pow", lhs, rhs, StdTensorOp::Pow)
+    }
+
+    /// Compute the elementwise maximum under broadcast rules.
+    ///
+    /// # Examples
+    /// ```rust
+    /// use tenferro_ad::{EagerRuntime, Tensor};
+    /// let ctx = EagerRuntime::new()?;
+    /// let y = ctx.with_eager_session(|s| {
+    ///     let x = s.constant_from(Tensor::from_vec_col_major(vec![1], vec![2.0_f64])?)?;
+    ///     let bound = s.constant_from(Tensor::from_vec_col_major(vec![], vec![3.0_f64])?)?;
+    ///     s.maximum(&x, &bound)
+    /// })??;
+    /// assert_eq!(y.value()?.as_slice::<f64>()?, &[3.0]);
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
+    /// # Errors
+    /// Returns a typed foreign-runtime, broadcast, unsupported-dtype, or backend error.
+    pub fn maximum(&mut self, lhs: &EagerTensor, rhs: &EagerTensor) -> Result<EagerTensor> {
+        self.run_binary("maximum", lhs, rhs, StdTensorOp::Maximum)
+    }
+
+    /// Compute the elementwise minimum under broadcast rules.
+    ///
+    /// # Examples
+    /// ```rust
+    /// use tenferro_ad::{EagerRuntime, Tensor};
+    /// let ctx = EagerRuntime::new()?;
+    /// let y = ctx.with_eager_session(|s| {
+    ///     let x = s.constant_from(Tensor::from_vec_col_major(vec![1], vec![2.0_f64])?)?;
+    ///     let bound = s.constant_from(Tensor::from_vec_col_major(vec![], vec![3.0_f64])?)?;
+    ///     s.minimum(&x, &bound)
+    /// })??;
+    /// assert_eq!(y.value()?.as_slice::<f64>()?, &[2.0]);
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
+    /// # Errors
+    /// Returns a typed foreign-runtime, broadcast, unsupported-dtype, or backend error.
+    pub fn minimum(&mut self, lhs: &EagerTensor, rhs: &EagerTensor) -> Result<EagerTensor> {
+        self.run_binary("minimum", lhs, rhs, StdTensorOp::Minimum)
+    }
+
+    /// Compare eager tensors elementwise under broadcast rules.
+    ///
+    /// # Examples
+    /// ```rust
+    /// use tenferro_ad::{CompareDir, EagerRuntime, Tensor};
+    /// let ctx = EagerRuntime::new()?;
+    /// let y = ctx.with_eager_session(|s| {
+    ///     let x = s.constant_from(Tensor::from_vec_col_major(vec![1], vec![2.0_f64])?)?;
+    ///     let bound = s.constant_from(Tensor::from_vec_col_major(vec![], vec![1.0_f64])?)?;
+    ///     s.compare(&x, &bound, CompareDir::Gt)
+    /// })??;
+    /// assert_eq!(y.value()?.as_slice::<bool>()?, &[true]);
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
+    /// # Errors
+    /// Returns a typed foreign-runtime, broadcast, unsupported-dtype, or backend error.
+    pub fn compare(
+        &mut self,
+        lhs: &EagerTensor,
+        rhs: &EagerTensor,
+        dir: CompareDir,
+    ) -> Result<EagerTensor> {
+        self.run_binary("compare", lhs, rhs, StdTensorOp::Compare(dir))
+    }
+
+    /// Select eager values elementwise using a broadcast boolean condition.
+    ///
+    /// # Examples
+    /// ```rust
+    /// use tenferro_ad::{EagerRuntime, Tensor};
+    /// let ctx = EagerRuntime::new()?;
+    /// let y = ctx.with_eager_session(|s| {
+    ///     let condition = s.constant_from(Tensor::from_vec_col_major(vec![2], vec![true, false])?)?;
+    ///     let yes = s.constant_from(Tensor::from_vec_col_major(vec![], vec![10.0_f64])?)?;
+    ///     let no = s.constant_from(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?)?;
+    ///     s.where_select(&condition, &yes, &no)
+    /// })??;
+    /// assert_eq!(y.value()?.as_slice::<f64>()?, &[10.0, 2.0]);
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
+    /// # Errors
+    /// Returns a typed foreign-runtime, broadcast, unsupported-dtype, or backend error.
+    pub fn where_select(
+        &mut self,
+        condition: &EagerTensor,
+        on_true: &EagerTensor,
+        on_false: &EagerTensor,
+    ) -> Result<EagerTensor> {
+        self.run_ternary(
+            "where_select",
+            condition,
+            on_true,
+            on_false,
+            StdTensorOp::Select,
+        )
+    }
+
+    /// Alias for [`Self::where_select`] with the same borrowed-session semantics.
+    ///
+    /// # Examples
+    /// ```rust
+    /// use tenferro_ad::{EagerRuntime, Tensor};
+    /// let ctx = EagerRuntime::new()?;
+    /// let y = ctx.with_eager_session(|s| {
+    ///     let predicate = s.constant_from(Tensor::from_vec_col_major(vec![], vec![true])?)?;
+    ///     let yes = s.constant_from(Tensor::from_vec_col_major(vec![], vec![3.0_f64])?)?;
+    ///     let no = s.constant_from(Tensor::from_vec_col_major(vec![], vec![4.0_f64])?)?;
+    ///     s.select(&predicate, &yes, &no)
+    /// })??;
+    /// assert_eq!(y.value()?.as_slice::<f64>()?, &[3.0]);
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
+    /// # Errors
+    /// Returns a typed foreign-runtime, broadcast, unsupported-dtype, or backend error.
+    pub fn select(
+        &mut self,
+        condition: &EagerTensor,
+        on_true: &EagerTensor,
+        on_false: &EagerTensor,
+    ) -> Result<EagerTensor> {
+        self.where_select(condition, on_true, on_false)
+    }
+
+    /// Clamp eager values elementwise between broadcast lower and upper bounds.
+    ///
+    /// # Examples
+    /// ```rust
+    /// use tenferro_ad::{EagerRuntime, Tensor};
+    /// let ctx = EagerRuntime::new()?;
+    /// let y = ctx.with_eager_session(|s| {
+    ///     let x = s.constant_from(Tensor::from_vec_col_major(vec![2], vec![-2.0_f64, 5.0])?)?;
+    ///     let lo = s.constant_from(Tensor::from_vec_col_major(vec![], vec![-1.0_f64])?)?;
+    ///     let hi = s.constant_from(Tensor::from_vec_col_major(vec![], vec![4.0_f64])?)?;
+    ///     s.clamp(&x, &lo, &hi)
+    /// })??;
+    /// assert_eq!(y.value()?.as_slice::<f64>()?, &[-1.0, 4.0]);
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
+    /// # Errors
+    /// Returns a typed foreign-runtime, broadcast, unsupported-dtype, or backend error.
+    pub fn clamp(
+        &mut self,
+        input: &EagerTensor,
+        lower: &EagerTensor,
+        upper: &EagerTensor,
+    ) -> Result<EagerTensor> {
+        self.run_ternary("clamp", input, lower, upper, StdTensorOp::Clamp)
+    }
+
+    /// Contract eager tensors according to a dot-general dimension mapping.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_ad::{DotGeneralConfig, EagerRuntime, Tensor};
+    /// use tenferro_cpu::CpuBackend;
+    /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
+    /// let result = ctx.with_eager_session(|session| {
+    ///     let lhs = session.variable_from(Tensor::from_vec_col_major(vec![1, 2], vec![2.0_f64, 3.0])?)?;
+    ///     let rhs = session.constant_from(Tensor::from_vec_col_major(vec![2, 1], vec![4.0_f64, 5.0])?)?;
+    ///     session.dot_general(&lhs, &rhs, DotGeneralConfig {
+    ///         lhs_contracting_dims: [1].as_slice().into(),
+    ///         rhs_contracting_dims: [0].as_slice().into(),
+    ///         lhs_batch_dims: [].as_slice().into(),
+    ///         rhs_batch_dims: [].as_slice().into(),
+    ///     })
+    /// })??;
+    /// assert_eq!(result.value()?.as_slice::<f64>()?, &[23.0]);
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::ContextMismatch`] for a foreign eager runtime,
+    /// a typed validation error for incompatible contraction dimensions,
+    /// or the backend's typed execution error.
+    pub fn dot_general(
+        &mut self,
+        lhs: &EagerTensor,
+        rhs: &EagerTensor,
+        config: DotGeneralConfig,
+    ) -> Result<EagerTensor> {
+        self.ensure_runtime(lhs)?;
+        self.ensure_runtime(rhs)?;
+        config
+            .validate_dims_with_ranks(lhs.shape().len(), rhs.shape().len())
+            .map_err(Error::TensorRuntime)?;
+        EagerTensor::nary_op_in_session(
+            &[lhs, rhs],
+            StdTensorOp::DotGeneral { config },
+            self.backend,
+        )
+    }
+
+    /// Scale an eager tensor by a real scalar in this borrowed session.
+    /// Integer factors are rounded; finite zero maps to `false` for boolean inputs.
+    ///
+    /// # Examples
+    /// ```rust
+    /// use tenferro_ad::{EagerRuntime, Tensor};
+    /// let ctx = EagerRuntime::new()?;
+    /// let scaled = ctx.with_eager_session(|s| {
+    ///     let x = s.constant_from(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?)?;
+    ///     s.scale_real(&x, 2.0)
+    /// })??;
+    /// assert_eq!(scaled.value()?.as_slice::<f64>()?, &[2.0, 4.0]);
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
+    /// # Errors
+    /// Returns a typed foreign-runtime, invalid-factor/dtype, or backend error.
+    pub fn scale_real(&mut self, input: &EagerTensor, factor: f64) -> Result<EagerTensor> {
+        self.ensure_runtime(input)?;
+        let scalar = match input.dtype() {
+            DType::F64 => Tensor::from_vec_col_major(vec![], vec![factor])?,
+            DType::F32 => Tensor::from_vec_col_major(vec![], vec![factor as f32])?,
+            DType::I32 => Tensor::from_vec_col_major(vec![], vec![round_real_to_i32(factor)?])?,
+            DType::I64 => Tensor::from_vec_col_major(vec![], vec![round_real_to_i64(factor)?])?,
+            DType::Bool => Tensor::from_vec_col_major(vec![], vec![bool_from_real(factor)?])?,
+            DType::C64 => Tensor::from_vec_col_major(vec![], vec![Complex64::new(factor, 0.0)])?,
+            DType::C32 => {
+                Tensor::from_vec_col_major(vec![], vec![Complex32::new(factor as f32, 0.0)])?
+            }
+            DType::External(_) => {
+                return Err(Error::TensorRuntime(
+                    tenferro_tensor::Error::invalid_argument(
+                        "scale_real",
+                        "dtype",
+                        "an externally defined scalar has no eager constant",
+                    ),
+                ));
+            }
+        };
+        let scalar = self.constant_from(scalar)?;
+        self.mul(input, &scalar)
+    }
+
+    /// Scale a complex eager tensor by a complex scalar in this borrowed session.
+    ///
+    /// # Examples
+    /// ```rust
+    /// use num_complex::Complex64;
+    /// use tenferro_ad::{EagerRuntime, Tensor};
+    /// let ctx = EagerRuntime::new()?;
+    /// let scaled = ctx.with_eager_session(|s| {
+    ///     let x = s.constant_from(Tensor::from_vec_col_major(vec![1], vec![Complex64::new(1.0, 2.0)])?)?;
+    ///     s.scale_complex(&x, Complex64::new(0.0, 1.0))
+    /// })??;
+    /// assert_eq!(scaled.value()?.as_slice::<Complex64>()?, &[Complex64::new(-2.0, 1.0)]);
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
+    /// # Errors
+    /// Returns a typed foreign-runtime, non-complex-dtype, or backend error.
+    pub fn scale_complex(&mut self, input: &EagerTensor, factor: Complex64) -> Result<EagerTensor> {
+        self.ensure_runtime(input)?;
+        let scalar = match input.dtype() {
+            DType::C64 => Tensor::from_vec_col_major(vec![], vec![factor])?,
+            DType::C32 => Tensor::from_vec_col_major(
+                vec![],
+                vec![Complex32::new(factor.re as f32, factor.im as f32)],
+            )?,
+            dtype => {
+                return Err(Error::TensorRuntime(
+                    tenferro_tensor::Error::invalid_argument(
+                        "scale_complex",
+                        "dtype",
+                        format!("requires complex tensor dtype, got {dtype:?}"),
+                    ),
+                ));
+            }
+        };
+        let scalar = self.constant_from(scalar)?;
+        self.mul(input, &scalar)
+    }
+
+    /// Multiply two rank-2 eager tensors in this borrowed session.
+    ///
+    /// # Examples
+    /// ```rust
+    /// use tenferro_ad::{EagerRuntime, Tensor};
+    /// let ctx = EagerRuntime::new()?;
+    /// let result = ctx.with_eager_session(|s| {
+    ///     let a = s.constant_from(Tensor::from_vec_col_major(vec![1, 1], vec![2.0_f64])?)?;
+    ///     let b = s.constant_from(Tensor::from_vec_col_major(vec![1, 1], vec![3.0_f64])?)?;
+    ///     s.matmul(&a, &b)
+    /// })??;
+    /// assert_eq!(result.value()?.as_slice::<f64>()?, &[6.0]);
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
+    /// # Errors
+    /// Returns a typed foreign-runtime, rank/shape/dtype validation, or backend error.
+    pub fn matmul(&mut self, lhs: &EagerTensor, rhs: &EagerTensor) -> Result<EagerTensor> {
+        self.ensure_runtime(lhs)?;
+        self.ensure_runtime(rhs)?;
+        let lhs_shape = lhs.shape();
+        let rhs_shape = rhs.shape();
+        if lhs_shape.len() != 2 {
+            return Err(tenferro_tensor::Error::rank_mismatch("matmul", 2, lhs_shape.len()).into());
+        }
+        if rhs_shape.len() != 2 {
+            return Err(tenferro_tensor::Error::rank_mismatch("matmul", 2, rhs_shape.len()).into());
+        }
+        if lhs_shape[1] != rhs_shape[0] {
+            return Err(
+                tenferro_tensor::Error::shape_mismatch("matmul", lhs_shape, rhs_shape).into(),
+            );
+        }
+        self.dot_general(
+            lhs,
+            rhs,
+            DotGeneralConfig {
+                lhs_contracting_dims: [1].as_slice().into(),
+                rhs_contracting_dims: [0].as_slice().into(),
+                lhs_batch_dims: [].as_slice().into(),
+                rhs_batch_dims: [].as_slice().into(),
+            },
+        )
+    }
+
+    /// Contract eagerly with optional conjugation of either operand.
+    /// Untracked operands use the backend's conjugating contraction directly;
+    /// tracked operands record explicit conjugations for reverse-mode AD.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_ad::{DotGeneralConfig, EagerRuntime, Tensor};
+    /// use tenferro_cpu::CpuBackend;
+    /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
+    /// let result = ctx.with_eager_session(|session| {
+    ///     let lhs = session.constant_from(Tensor::from_vec_col_major(vec![1, 1], vec![2.0_f64])?)?;
+    ///     let rhs = session.constant_from(Tensor::from_vec_col_major(vec![1, 1], vec![3.0_f64])?)?;
+    ///     session.dot_general_with_conj(&lhs, &rhs, DotGeneralConfig {
+    ///         lhs_contracting_dims: [1].as_slice().into(),
+    ///         rhs_contracting_dims: [0].as_slice().into(),
+    ///         lhs_batch_dims: [].as_slice().into(),
+    ///         rhs_batch_dims: [].as_slice().into(),
+    ///     }, true, false)
+    /// })??;
+    /// assert_eq!(result.value()?.as_slice::<f64>()?, &[6.0]);
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::ContextMismatch`] for a foreign eager runtime,
+    /// a typed validation error for invalid dimensions, or a backend error.
+    pub fn dot_general_with_conj(
+        &mut self,
+        lhs: &EagerTensor,
+        rhs: &EagerTensor,
+        config: DotGeneralConfig,
+        lhs_conj: bool,
+        rhs_conj: bool,
+    ) -> Result<EagerTensor> {
+        self.ensure_runtime(lhs)?;
+        self.ensure_runtime(rhs)?;
+        config
+            .validate_dims_with_ranks(lhs.shape().len(), rhs.shape().len())
+            .map_err(Error::TensorRuntime)?;
+        if !lhs.requires_grad && !rhs.requires_grad {
+            let output = crate::eager_exec::exec_dot_general_with_conj_on_tensor_reads_in_session(
+                lhs.tensor_read(),
+                rhs.tensor_read(),
+                &config,
+                lhs_conj,
+                rhs_conj,
+                self.backend,
+            )?;
+            return EagerTensor::new_untracked_result(Arc::clone(self.runtime), output);
+        }
+        let lhs = if lhs_conj {
+            self.conj(lhs)?
+        } else {
+            lhs.clone()
+        };
+        let rhs = if rhs_conj {
+            self.conj(rhs)?
+        } else {
+            rhs.clone()
+        };
+        self.dot_general(&lhs, &rhs, config)
+    }
+
+    fn run_binary(
+        &mut self,
+        name: &'static str,
+        lhs: &EagerTensor,
+        rhs: &EagerTensor,
+        op: StdTensorOp,
+    ) -> Result<EagerTensor> {
+        self.ensure_runtime(lhs)?;
+        self.ensure_runtime(rhs)?;
+        let (lhs, rhs) = crate::eager_ops::broadcast_binary_in_session(name, lhs, rhs, self)?;
+        EagerTensor::nary_op_in_session(&[&lhs, &rhs], op, self.backend)
+    }
+
+    fn run_ternary(
+        &mut self,
+        name: &'static str,
+        first: &EagerTensor,
+        second: &EagerTensor,
+        third: &EagerTensor,
+        op: StdTensorOp,
+    ) -> Result<EagerTensor> {
+        self.ensure_runtime(first)?;
+        self.ensure_runtime(second)?;
+        self.ensure_runtime(third)?;
+        let (first, second, third) =
+            crate::eager_ops::broadcast_ternary_in_session(name, first, second, third, self)?;
+        EagerTensor::nary_op_in_session(&[&first, &second, &third], op, self.backend)
+    }
+
+    fn run_unary(&mut self, input: &EagerTensor, op: StdTensorOp) -> Result<EagerTensor> {
+        self.ensure_runtime(input)?;
+        EagerTensor::nary_op_in_session(&[input], op, self.backend)
+    }
+
+    pub(crate) fn record_outputs(
+        &mut self,
+        op: &StdTensorOp,
+        outputs: &[&Tensor],
+        inputs: &[&EagerTensor],
+    ) -> Result<RecordedEagerOutputs> {
+        record_eager_outputs_in_session(op, outputs, inputs, self.backend)
+    }
+
+    pub(crate) fn ensure_runtime(&self, input: &EagerTensor) -> Result<()> {
+        if !Arc::ptr_eq(self.runtime, &input.ctx) {
+            return Err(Error::ContextMismatch {
+                lhs: self.runtime.id(),
+                rhs: input.ctx_id(),
+            });
+        }
+        Ok(())
+    }
+
+    pub(crate) fn runtime(&self) -> &Arc<EagerRuntime> {
+        self.runtime
+    }
+
+    pub(crate) fn execute_prepared_extension(
+        &mut self,
+        executor: &dyn tenferro_runtime::PreparedOperationExecutor,
+        inputs: &[TensorRead<'_>],
+    ) -> Result<Vec<Tensor>> {
+        // The eager owner is already locked; acquire the extension-cache lock
+        // second, as in the top-level extension execution region.
+        let mut caches = self.runtime.lock_extension_caches()?;
+        executor.execute_in_session(self.backend, &mut caches, inputs)
+    }
 }
 
 impl fmt::Debug for EagerRuntime {
@@ -1183,10 +2774,20 @@ impl EagerRuntime {
     ) -> Result<Self> {
         let runtime = eager_runtime_for_backend(&backend)
             .map_err(|source| runtime_config_error("EagerRuntime::from_backend", source))?;
+        let extension_backend_kind = match &backend {
+            EagerBackend::Cpu(_) => Some(EagerExtensionBackendKind::Cpu),
+            #[cfg(test)]
+            EagerBackend::Recording(_) => None,
+            #[cfg(feature = "cuda")]
+            EagerBackend::Cuda(_) => Some(EagerExtensionBackendKind::Cuda),
+            #[cfg(feature = "webgpu")]
+            EagerBackend::WebGpu(_) => Some(EagerExtensionBackendKind::WebGpu),
+        };
         Ok(Self {
             id: ContextId::fresh(),
             runtime,
             backend: Mutex::new(backend),
+            extension_backend_kind,
             extension_install_lock: Mutex::new(()),
             extension_caches: Mutex::new(ExtensionCacheStore::new()),
             semantic_extension_rules,
@@ -1460,10 +3061,10 @@ impl EagerRuntime {
     ///     Tensor::from_vec_col_major(vec![1], vec![3.0_f64]).unwrap(),
     ///     ctx.clone(),
     /// )?;
-    /// let y = {
+    /// let y = ctx.with_eager_session(|s| {
     ///     let _guard = ctx.no_grad();
-    ///     x.mul(&x)?
-    /// };
+    ///     s.mul(&x, &x)
+    /// })??;
     /// assert!(!y.tracks_grad());
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
@@ -1553,39 +3154,21 @@ impl EagerRuntime {
     }
 
     pub(crate) fn eager_extension_target(&self) -> Result<EagerExtensionTarget> {
-        let (engine_id, backend_kind) = {
-            let backend = self.lock_backend()?;
-            match &*backend {
-                EagerBackend::Cpu(_) => (
-                    cpu_runtime_engine_id().map_err(|source| {
-                        runtime_config_error("EagerRuntime::eager_extension_target", source)
-                    })?,
-                    EagerExtensionBackendKind::Cpu,
-                ),
-                #[cfg(test)]
-                EagerBackend::Recording(_) => {
-                    return Err(Error::unsupported(
-                        "EagerRuntime::eager_extension_target",
-                        ErrorPhase::Execution,
-                        "the recording backend has no registered eager extension engine",
-                    ));
-                }
-                #[cfg(feature = "cuda")]
-                EagerBackend::Cuda(_) => (
-                    cuda_runtime_engine_id().map_err(|source| {
-                        runtime_config_error("EagerRuntime::eager_extension_target", source)
-                    })?,
-                    EagerExtensionBackendKind::Cuda,
-                ),
-                #[cfg(feature = "webgpu")]
-                EagerBackend::WebGpu(_) => (
-                    tenferro_gpu::webgpu::webgpu_runtime_engine_id().map_err(|source| {
-                        runtime_config_error("EagerRuntime::eager_extension_target", source)
-                    })?,
-                    EagerExtensionBackendKind::WebGpu,
-                ),
-            }
-        };
+        let backend_kind = self.extension_backend_kind.ok_or_else(|| {
+            Error::unsupported(
+                "EagerRuntime::eager_extension_target",
+                ErrorPhase::Execution,
+                "the recording backend has no registered eager extension engine",
+            )
+        })?;
+        let engine_id = match backend_kind {
+            EagerExtensionBackendKind::Cpu => cpu_runtime_engine_id(),
+            #[cfg(feature = "cuda")]
+            EagerExtensionBackendKind::Cuda => cuda_runtime_engine_id(),
+            #[cfg(feature = "webgpu")]
+            EagerExtensionBackendKind::WebGpu => tenferro_gpu::webgpu::webgpu_runtime_engine_id(),
+        }
+        .map_err(|source| runtime_config_error("EagerRuntime::eager_extension_target", source))?;
         let target = EagerExtensionTarget {
             engine_id,
             backend_kind,
@@ -1871,6 +3454,46 @@ impl EagerRuntime {
         Ok(backend.with_backend_session(f))
     }
 
+    /// Enter a runtime-bound eager session for one or more eager operations.
+    ///
+    /// Only tensors owned by this runtime may execute on the borrowed session;
+    /// the backend lock and the CPU execution permit remain live for the callback.
+    /// The CPU backend may run the callback on a worker thread. Start thread-local
+    /// [`Self::no_grad`] and [`Self::capture_trace`] guards *inside* the callback
+    /// when their scope must include its operations; a guard on the calling thread
+    /// is not transferred to that worker.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
+    /// use tenferro_cpu::CpuBackend;
+    ///
+    /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
+    /// let x = EagerTensor::from_tensor_in(
+    ///     Tensor::from_vec_col_major(vec![1], vec![2.0_f64])?, ctx.clone(),
+    /// )?;
+    /// let y = ctx.with_eager_session(|session| session.neg(&x))??;
+    /// assert_eq!(y.value()?.as_slice::<f64>()?, &[-2.0]);
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::RuntimeState`] if the backend lock is poisoned. The
+    /// callback retains typed eager/backend errors in its return value.
+    pub fn with_eager_session<R: Send>(
+        self: &Arc<Self>,
+        f: impl FnOnce(&mut EagerSession<'_>) -> R + Send,
+    ) -> Result<R> {
+        self.with_execution_session(|backend| {
+            f(&mut EagerSession {
+                runtime: self,
+                backend,
+            })
+        })
+    }
+
     /// Materialize a host-placement read without entering a backend session.
     ///
     /// Returns `None` when this runtime's backend has no session-free host
@@ -2152,7 +3775,10 @@ impl EagerRuntime {
     /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
     /// let x = EagerTensor::requires_grad_in(Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]).unwrap(), ctx.clone()).unwrap();
     /// let y = EagerTensor::requires_grad_in(Tensor::from_vec_col_major(vec![3], vec![4.0_f64, 5.0, 6.0]).unwrap(), ctx.clone()).unwrap();
-    /// let loss = x.mul(&y).unwrap().reduce_sum(Some(&[0])).unwrap();
+    /// let loss = ctx.with_eager_session(|s| {
+    ///     let product = s.mul(&x, &y)?;
+    ///     s.reduce_sum(&product, Some(&[0]))
+    /// })??;
     /// let _ = loss.backward().unwrap();
     ///
     /// ctx.clear_grads()?;
@@ -2215,8 +3841,8 @@ impl EagerRuntime {
     ///
     /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
     /// let c = ctx.constant_from(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap())?;
-    /// let x = EagerTensor::requires_grad_in(Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]).unwrap(), ctx)?;
-    /// let z = x.add(&c).unwrap();
+    /// let x = EagerTensor::requires_grad_in(Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]).unwrap(), ctx.clone())?;
+    /// let z = ctx.with_eager_session(|s| s.add(&x, &c))??;
     ///
     /// assert_eq!(z.value()?.as_slice::<f64>().unwrap(), &[4.0, 6.0]);
     /// # Ok::<(), tenferro_ad::Error>(())
@@ -2243,7 +3869,10 @@ impl EagerRuntime {
     ///
     /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
     /// let p = ctx.variable_from(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap())?;
-    /// let loss = p.exp().unwrap().reduce_sum(Some(&[0])).unwrap();
+    /// let loss = ctx.with_eager_session(|s| {
+    ///     let y = s.exp(&p)?;
+    ///     s.reduce_sum(&y, Some(&[0]))
+    /// })??;
     /// let _ = loss.backward().unwrap();
     ///
     /// let grad = p.grad().unwrap().unwrap();
@@ -2276,7 +3905,7 @@ impl EagerRuntime {
     ///     Tensor::from_vec_col_major(vec![], vec![3.0_f64]).unwrap(),
     ///     ctx.clone(),
     /// )?;
-    /// let loss = x.mul(&x)?;
+    /// let loss = ctx.with_eager_session(|s| s.mul(&x, &x))??;
     /// let dx = ctx.grad(&loss, &x)?;
     /// assert_eq!(dx.value()?.as_slice::<f64>().unwrap(), &[6.0]);
     /// # Ok::<(), tenferro_ad::Error>(())
@@ -2310,7 +3939,7 @@ impl EagerRuntime {
     ///     Tensor::from_vec_col_major(vec![], vec![4.0_f64]).unwrap(),
     ///     ctx.clone(),
     /// )?;
-    /// let loss = y.mul(&y)?;
+    /// let loss = ctx.with_eager_session(|s| s.mul(&y, &y))??;
     /// assert!(ctx.grad_optional(&loss, &x)?.is_none());
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
@@ -2332,10 +3961,7 @@ impl EagerRuntime {
         }
 
         let value = output.to_tensor()?;
-        let seed = {
-            let mut backend = self.lock_backend()?;
-            one_like_tensor(&value, &mut *backend)?
-        };
+        let seed = self.with_execution_session(|session| one_like_tensor(&value, session))??;
         let seed = EagerTensor::new_result(Arc::clone(self), eager_val_key(), seed, false, None)?;
         self.vjp_optional(output, wrt, &seed)
     }
@@ -2353,7 +3979,7 @@ impl EagerRuntime {
     ///     Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0]).unwrap(),
     ///     ctx.clone(),
     /// )?;
-    /// let y = x.mul(&x)?;
+    /// let y = ctx.with_eager_session(|s| s.mul(&x, &x))??;
     /// let seed = EagerTensor::from_tensor_in(
     ///     Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 1.0]).unwrap(),
     ///     ctx.clone(),
@@ -2400,7 +4026,7 @@ impl EagerRuntime {
     ///     Tensor::from_vec_col_major(vec![1], vec![1.0_f64]).unwrap(),
     ///     ctx.clone(),
     /// )?;
-    /// let loss = y.mul(&y)?;
+    /// let loss = ctx.with_eager_session(|s| s.mul(&y, &y))??;
     /// assert!(ctx.vjp_optional(&loss, &x, &seed)?.is_none());
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
@@ -2443,7 +4069,7 @@ impl EagerRuntime {
     ///     Tensor::from_vec_col_major(vec![1], vec![1.0_f64]).unwrap(),
     ///     ctx.clone(),
     /// )?;
-    /// let y = x.mul(&x)?;
+    /// let y = ctx.with_eager_session(|s| s.mul(&x, &x))??;
     /// let dy = ctx.jvp(&y, &x, &tangent)?;
     /// assert_eq!(dy.value()?.as_slice::<f64>().unwrap(), &[6.0]);
     /// # Ok::<(), tenferro_ad::Error>(())
@@ -2486,7 +4112,7 @@ impl EagerRuntime {
     ///     Tensor::from_vec_col_major(vec![1], vec![1.0_f64]).unwrap(),
     ///     ctx.clone(),
     /// )?;
-    /// let loss = y.mul(&y)?;
+    /// let loss = ctx.with_eager_session(|s| s.mul(&y, &y))??;
     /// assert!(ctx.jvp_optional(&loss, &x, &tangent)?.is_none());
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
@@ -2517,7 +4143,7 @@ impl EagerRuntime {
     fn store_grads(
         &self,
         cotangents: &HashMap<ValueKey<StdTensorOp>, Tensor>,
-        backend: &mut EagerBackend,
+        session: &mut dyn BackendSession,
     ) -> Result<()> {
         let mut updates = Vec::new();
 
@@ -2548,18 +4174,14 @@ impl EagerRuntime {
                 Some(existing) => {
                     let existing_read = existing.tensor_read("EagerRuntime::store_grads")?;
                     let incoming_read = TensorRead::from_tensor(incoming);
-                    let tensor = backend
-                        .with_backend_session(|session| {
-                            session.add_read(existing_read, incoming_read)
-                        })
+                    let tensor = session
+                        .add_read(existing_read, incoming_read)
                         .map_err(Error::from)?;
                     AdValueRecord::from_tensor(tensor, "EagerRuntime::store_grads")?
                 }
                 None => {
-                    let duplicate = backend
-                        .with_backend_session(|session| {
-                            session.to_contiguous_read(TensorRead::from_tensor(incoming))
-                        })
+                    let duplicate = session
+                        .to_contiguous_read(TensorRead::from_tensor(incoming))
                         .map_err(Error::from)?;
                     AdValueRecord::from_tensor(duplicate, "EagerRuntime::store_grads")?
                 }
@@ -3171,13 +4793,16 @@ fn validate_seed_tensor(op: &'static str, primal: &EagerTensor, seed: &EagerTens
 ///
 /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
 /// let x = EagerTensor::requires_grad_in(Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]).unwrap(), ctx)?;
-/// let loss = x.mul(&x).unwrap().reduce_sum(Some(&[0])).unwrap();
-/// let _cotangents = loss.backward().unwrap();
-/// let loss = x.mul(&x).unwrap().reduce_sum(Some(&[0])).unwrap();
-/// let _cotangents = loss.backward().unwrap();
+/// for _ in 0..2 {
+///     let loss = x.runtime().with_eager_session(|s| {
+///         let squared = s.mul(&x, &x)?;
+///         s.reduce_sum(&squared, Some(&[0]))
+///     })??;
+///     loss.backward()?;
+/// }
 ///
-/// assert_eq!(x.grad().unwrap().unwrap().as_slice::<f64>().unwrap(), &[4.0, 8.0, 12.0]);
-/// x.clear_grad();
+/// assert_eq!(x.grad()?.unwrap().as_slice::<f64>().unwrap(), &[4.0, 8.0, 12.0]);
+/// x.clear_grad()?;
 ///
 /// assert!(x.grad().unwrap().is_none());
 /// # Ok::<(), tenferro_ad::Error>(())
@@ -3300,6 +4925,24 @@ impl EagerTensor {
         tensor: Tensor,
         requires_grad: bool,
     ) -> Result<Self> {
+        Self::new_leaf_with_session(ctx, tensor, requires_grad, None)
+    }
+
+    pub(crate) fn new_leaf_in_session(
+        ctx: Arc<EagerRuntime>,
+        tensor: Tensor,
+        requires_grad: bool,
+        session: &mut dyn BackendSession,
+    ) -> Result<Self> {
+        Self::new_leaf_with_session(ctx, tensor, requires_grad, Some(session))
+    }
+
+    fn new_leaf_with_session(
+        ctx: Arc<EagerRuntime>,
+        tensor: Tensor,
+        requires_grad: bool,
+        session: Option<&mut dyn BackendSession>,
+    ) -> Result<Self> {
         let key = eager_val_key();
         // A host-placement tensor needs no backend session: the CPU backend only
         // copies the host buffer for it, so entering a session would add
@@ -3307,13 +4950,14 @@ impl EagerTensor {
         // any provider work (#1704). Views and backend-family reads keep the
         // session path, and device runtimes keep it for every read.
         let read = TensorRead::from_tensor(&tensor);
-        let semantic_tensor = match ctx.to_contiguous_host_read(&read)? {
-            Some(materialized) => materialized,
-            None => ctx
-                .with_execution_session(|session| {
-                    session.to_contiguous_read(TensorRead::from_tensor(&tensor))
-                })?
-                .map_err(Error::from)?,
+        let semantic_tensor = match session {
+            Some(session) => session.to_contiguous_read(read).map_err(Error::from)?,
+            None => match ctx.to_contiguous_host_read(&read)? {
+                Some(materialized) => materialized,
+                None => ctx
+                    .with_execution_session(|session| session.to_contiguous_read(read))?
+                    .map_err(Error::from)?,
+            },
         };
         let semantic_value = Arc::new(RetainedValue::from_tensor(semantic_tensor));
         let semantic_trace = TracedTensor::from_shared_tensor_value_symbolic_shape(semantic_value)?;
@@ -3609,12 +5253,7 @@ impl EagerTensor {
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
     pub fn duplicate_value(&self) -> Result<Tensor> {
-        // A pooled value duplicates through its descriptor view; a caller-owned
-        // payload has no such view and duplicates through its own read path, which
-        // copies the value while keeping its element type.
-        if let Ok(value) = self.value()
-            && let Ok(tensor) = value.duplicate_host_tensor()
-        {
+        if let Some(tensor) = self.duplicate_host_value() {
             return Ok(tensor);
         }
         let read = self
@@ -3624,6 +5263,27 @@ impl EagerTensor {
         self.ctx
             .with_execution_session(|session| session.to_contiguous_read(read))?
             .map_err(Error::from)
+    }
+
+    fn duplicate_host_value(&self) -> Option<Tensor> {
+        // A pooled value duplicates through its descriptor view; a caller-owned
+        // payload has no such view and duplicates through its own read path, which
+        // copies the value while keeping its element type.
+        self.value().ok()?.duplicate_host_tensor().ok()
+    }
+
+    pub(crate) fn duplicate_value_in_session(
+        &self,
+        session: &mut dyn BackendSession,
+    ) -> Result<Tensor> {
+        if let Some(tensor) = self.duplicate_host_value() {
+            return Ok(tensor);
+        }
+        let read = self
+            ._record
+            .value
+            .tensor_read("EagerTensor::duplicate_value")?;
+        session.to_contiguous_read(read).map_err(Error::from)
     }
 
     // INVARIANT: the error variants return the unchanged eager handle so a
@@ -3803,8 +5463,11 @@ impl EagerTensor {
     /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
     ///
     /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
-    /// let x = EagerTensor::requires_grad_in(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap(), ctx).unwrap();
-    /// let loss = x.exp().unwrap().reduce_sum(Some(&[0])).unwrap();
+    /// let x = EagerTensor::requires_grad_in(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap(), ctx.clone()).unwrap();
+    /// let loss = ctx.with_eager_session(|s| {
+    ///     let y = s.exp(&x)?;
+    ///     s.reduce_sum(&y, Some(&[0]))
+    /// })??;
     /// let _cotangents = loss.backward().unwrap();
     ///
     /// let grad = x.grad()?.unwrap();
@@ -3849,7 +5512,10 @@ impl EagerTensor {
     /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
     /// let x = EagerTensor::requires_grad_in(Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]).unwrap(), ctx.clone()).unwrap();
     /// let y = EagerTensor::requires_grad_in(Tensor::from_vec_col_major(vec![3], vec![4.0_f64, 5.0, 6.0]).unwrap(), ctx).unwrap();
-    /// let loss = x.mul(&y).unwrap().reduce_sum(Some(&[0])).unwrap();
+    /// let loss = x.runtime().with_eager_session(|s| {
+    ///     let product = s.mul(&x, &y)?;
+    ///     s.reduce_sum(&product, Some(&[0]))
+    /// })??;
     /// let _ = loss.backward().unwrap();
     ///
     /// x.clear_grad()?;
@@ -4050,10 +5716,13 @@ impl EagerTensor {
     ///
     /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
     /// let x = EagerTensor::requires_grad_in(Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]).unwrap(), ctx).unwrap();
-    /// let loss = x.add(&x).unwrap().reduce_sum(Some(&[0])).unwrap();
-    /// let _cotangents = loss.backward().unwrap();
-    /// let loss = x.add(&x).unwrap().reduce_sum(Some(&[0])).unwrap();
-    /// let _cotangents = loss.backward().unwrap();
+    /// for _ in 0..2 {
+    ///     let loss = x.runtime().with_eager_session(|s| {
+    ///         let doubled = s.add(&x, &x)?;
+    ///         s.reduce_sum(&doubled, Some(&[0]))
+    ///     })??;
+    ///     loss.backward()?;
+    /// }
     ///
     /// assert_eq!(x.grad().unwrap().unwrap().as_slice::<f64>().unwrap(), &[4.0, 4.0, 4.0]);
     /// # Ok::<(), tenferro_ad::Error>(())
@@ -4072,10 +5741,9 @@ impl EagerTensor {
         }
 
         let value = self.to_tensor()?;
-        let seed = {
-            let mut backend = self.ctx.lock_backend()?;
-            one_like_tensor(&value, &mut *backend)?
-        };
+        let seed = self
+            .ctx
+            .with_execution_session(|session| one_like_tensor(&value, session))??;
         self.backward_from_seed(seed)
     }
 
@@ -4101,7 +5769,7 @@ impl EagerTensor {
     ///     Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap(),
     ///     ctx,
     /// )?;
-    /// let y = x.mul(&x)?;
+    /// let y = x.runtime().with_eager_session(|s| s.mul(&x, &x))??;
     /// y.backward_with(&seed)?;
     /// assert_eq!(x.grad()?.unwrap().as_slice::<f64>().unwrap(), &[4.0, 12.0]);
     /// # Ok::<(), tenferro_ad::Error>(())
@@ -4171,8 +5839,8 @@ impl EagerTensor {
             };
             cotangents.insert(key, tensor);
         }
-        let mut backend = self.ctx.lock_backend()?;
-        self.ctx.store_grads(&cotangents, &mut backend)?;
+        self.ctx
+            .with_execution_session(|session| self.ctx.store_grads(&cotangents, session))??;
         Gradients::from_tensors(cotangents)
     }
 }
@@ -4201,27 +5869,42 @@ pub(crate) fn record_eager_outputs(
         .iter()
         .map(|output| tensor_meta_from_tensor(output))
         .collect::<Vec<_>>();
-    record_eager_outputs_inner(op, output_metadata, inputs)
+    record_eager_outputs_inner(op, output_metadata, inputs, None)
 }
 
-pub(crate) fn record_eager_value_outputs(
+pub(crate) fn record_eager_outputs_in_session(
+    op: &StdTensorOp,
+    outputs: &[&Tensor],
+    inputs: &[&EagerTensor],
+    session: &mut dyn BackendSession,
+) -> Result<RecordedEagerOutputs> {
+    let metadata = outputs
+        .iter()
+        .map(|output| tensor_meta_from_tensor(output))
+        .collect();
+    record_eager_outputs_inner(op, metadata, inputs, Some(session))
+}
+
+pub(crate) fn record_eager_value_outputs_in_session(
     op: &StdTensorOp,
     outputs: &[&TensorValue],
     inputs: &[&EagerTensor],
+    session: &mut dyn BackendSession,
 ) -> Result<RecordedEagerOutputs> {
-    let output_metadata = outputs
+    let metadata = outputs
         .iter()
         .map(|output| tensor_meta_from_value(output))
-        .collect::<Vec<_>>();
-    record_eager_outputs_inner(op, output_metadata, inputs)
+        .collect();
+    record_eager_outputs_inner(op, metadata, inputs, Some(session))
 }
 
 fn record_eager_outputs_inner(
     op: &StdTensorOp,
     output_metadata: Vec<TensorMeta>,
     inputs: &[&EagerTensor],
+    session: Option<&mut dyn BackendSession>,
 ) -> Result<RecordedEagerOutputs> {
-    let semantic_traces = record_semantic_eager_outputs(op, &output_metadata, inputs)?;
+    let semantic_traces = record_semantic_eager_outputs(op, &output_metadata, inputs, session)?;
     record_eager_outputs_from_metadata(output_metadata, semantic_traces, inputs)
 }
 
@@ -4229,6 +5912,7 @@ fn record_semantic_eager_outputs(
     op: &StdTensorOp,
     output_metadata: &[TensorMeta],
     inputs: &[&EagerTensor],
+    mut session: Option<&mut dyn BackendSession>,
 ) -> Result<Vec<Option<TracedTensor>>> {
     // Materialize a constant semantic leaf for any untracked input that lost
     // its implicit semantic trace on the active-edge fast path. This keeps
@@ -4238,9 +5922,11 @@ fn record_semantic_eager_outputs(
     let mut owned_constants = Vec::<TracedTensor>::new();
     for input in inputs {
         if input.semantic_trace.is_none() {
-            owned_constants.push(TracedTensor::from_tensor_symbolic_shape(
-                input.to_tensor()?,
-            )?);
+            let value = match session.as_deref_mut() {
+                Some(session) => input.duplicate_value_in_session(session)?,
+                None => input.to_tensor()?,
+            };
+            owned_constants.push(TracedTensor::from_tensor_symbolic_shape(value)?);
         }
     }
     let mut constants = owned_constants.iter();
@@ -4513,11 +6199,54 @@ pub(crate) fn zero_like_tensor<B: TensorBackend>(
         .map_err(Error::from)
 }
 
-pub(crate) fn one_like_tensor<B: TensorBackend>(input: &Tensor, backend: &mut B) -> Result<Tensor> {
+pub(crate) fn one_like_tensor(input: &Tensor, session: &mut dyn BackendSession) -> Result<Tensor> {
     let host = ones_tensor(input.dtype(), input.shape().to_vec())?;
-    backend
+    session
         .upload_host_tensor(TensorRead::from_tensor(&host))
         .map_err(Error::from)
+}
+
+fn finite_real_factor(value: f64) -> Result<f64> {
+    if value.is_finite() {
+        Ok(value)
+    } else {
+        Err(Error::TensorRuntime(
+            tenferro_tensor::Error::invalid_argument(
+                "scale_real",
+                "factor",
+                format!("real scalar must be finite, got {value}"),
+            ),
+        ))
+    }
+}
+
+fn round_real_to_i64(value: f64) -> Result<i64> {
+    let rounded = finite_real_factor(value)?.round();
+    if rounded < i64::MIN as f64 || rounded >= -(i64::MIN as f64) {
+        return Err(Error::TensorRuntime(
+            tenferro_tensor::Error::invalid_argument(
+                "scale_real",
+                "factor",
+                format!("rounded real scalar {rounded} is out of i64 range"),
+            ),
+        ));
+    }
+    Ok(rounded as i64)
+}
+
+fn round_real_to_i32(value: f64) -> Result<i32> {
+    let rounded = round_real_to_i64(value)?;
+    i32::try_from(rounded).map_err(|_| {
+        Error::TensorRuntime(tenferro_tensor::Error::invalid_argument(
+            "scale_real",
+            "factor",
+            format!("rounded real scalar {rounded} is out of i32 range"),
+        ))
+    })
+}
+
+fn bool_from_real(value: f64) -> Result<bool> {
+    Ok(finite_real_factor(value)? != 0.0)
 }
 
 #[cfg(test)]

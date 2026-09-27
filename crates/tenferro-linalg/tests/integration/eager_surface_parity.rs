@@ -3,7 +3,7 @@
 use num_complex::Complex64;
 use tenferro_ad::{AdContext, EagerRuntime, EagerTensor, Tensor};
 use tenferro_cpu::CpuBackend;
-use tenferro_linalg::{EagerTensorLinalgExt, TracedTensorLinalgExt};
+use tenferro_linalg::{EagerSessionLinalgExt, TracedTensorLinalgExt};
 use tenferro_runtime::{DType, Error, ErrorPhase, TracedTensor, TypedTensor};
 use tenferro_tensor::Error as TensorError;
 
@@ -101,20 +101,50 @@ fn f64_values(tensor: &EagerTensor) -> Vec<f64> {
         .to_vec()
 }
 
+fn eager_lstsq(matrix: &EagerTensor, rhs: &EagerTensor) -> tenferro_ad::Result<EagerTensor> {
+    matrix
+        .runtime()
+        .with_eager_session(|session| session.lstsq(matrix, rhs))?
+}
+
+fn eager_norm(
+    input: &EagerTensor,
+    ord: Option<f64>,
+    dim: Option<&[usize]>,
+    keepdim: bool,
+) -> tenferro_ad::Result<EagerTensor> {
+    input
+        .runtime()
+        .with_eager_session(|session| session.norm(input, ord, dim, keepdim))?
+}
+
 #[test]
 fn eager_composites_match_diagonal_matrix_values() {
     let a = eager(vec![2.0, 0.0, 0.0, 4.0], vec![2, 2]);
 
-    let (sign, logabsdet) = a.slogdet().unwrap();
+    let (sign, logabsdet, det, inv, eigvalsh, eigvals, inverse, inverse_with_rtol) = a
+        .runtime()
+        .with_eager_session(|session| {
+            let (sign, logabsdet) = session.slogdet(&a)?;
+            Ok::<_, tenferro_ad::Error>((
+                sign,
+                logabsdet,
+                session.det(&a)?,
+                session.inv(&a)?,
+                session.eigvalsh(&a)?,
+                session.eigvals(&a)?,
+                session.pinv(&a)?,
+                session.pinv_with_rtol(&a, 1.0e-12)?,
+            ))
+        })
+        .unwrap()
+        .unwrap();
     assert_eq!(f64_values(&sign), vec![1.0]);
     assert!((f64_values(&logabsdet)[0] - 8.0_f64.ln()).abs() < 1.0e-12);
-    assert!((f64_values(&a.det().unwrap())[0] - 8.0).abs() < 1.0e-12);
-    assert_eq!(f64_values(&a.inv().unwrap()), vec![0.5, 0.0, 0.0, 0.25]);
-    assert_eq!(f64_values(&a.eigvalsh().unwrap()), vec![2.0, 4.0]);
-
-    let mut eigvals = a
-        .eigvals()
-        .unwrap()
+    assert!((f64_values(&det)[0] - 8.0).abs() < 1.0e-12);
+    assert_eq!(f64_values(&inv), vec![0.5, 0.0, 0.0, 0.25]);
+    assert_eq!(f64_values(&eigvalsh), vec![2.0, 4.0]);
+    let mut eigvals = eigvals
         .to_tensor()
         .unwrap()
         .as_slice::<Complex64>()
@@ -125,21 +155,20 @@ fn eager_composites_match_diagonal_matrix_values() {
         eigvals,
         vec![Complex64::new(2.0, 0.0), Complex64::new(4.0, 0.0)]
     );
-
-    assert_eq!(f64_values(&a.pinv().unwrap()), vec![0.5, 0.0, 0.0, 0.25]);
-    assert_eq!(
-        f64_values(&a.pinv_with_rtol(1.0e-12).unwrap()),
-        vec![0.5, 0.0, 0.0, 0.25]
+    assert_eq!(f64_values(&inverse), vec![0.5, 0.0, 0.0, 0.25]);
+    assert_eq!(f64_values(&inverse_with_rtol), vec![0.5, 0.0, 0.0, 0.25]);
+    assert!(
+        (f64_values(&eager_norm(&a, None, None, false).unwrap())[0] - 20.0_f64.sqrt()).abs()
+            < 1.0e-12
     );
-    assert!((f64_values(&a.norm(None, None, false).unwrap())[0] - 20.0_f64.sqrt()).abs() < 1.0e-12);
 }
 
 #[test]
 fn eager_vector_norm_and_keepdim_follow_traced_contract() {
     let x = eager(vec![3.0, 4.0], vec![2]);
 
-    let norm = x.norm(Some(2.0), Some(&[0]), true).unwrap();
-    let no_op = x.norm(None, Some(&[]), false).unwrap();
+    let norm = eager_norm(&x, Some(2.0), Some(&[0]), true).unwrap();
+    let no_op = eager_norm(&x, None, Some(&[]), false).unwrap();
 
     assert_eq!(norm.shape(), &[1]);
     assert!((f64_values(&norm)[0] - 5.0).abs() < 1.0e-12);
@@ -161,37 +190,40 @@ fn eager_norm_supports_zero_and_matrix_induced_orders() {
     let matrix = eager(vec![1.0, 3.0, 2.0, 4.0], vec![2, 2]);
 
     let cases = [
-        (vector.norm(Some(0.0), Some(&[0]), false).unwrap(), 3.0),
         (
-            vector.norm(Some(f64::INFINITY), Some(&[0]), false).unwrap(),
+            eager_norm(&vector, Some(0.0), Some(&[0]), false).unwrap(),
             3.0,
         ),
         (
-            vector
-                .norm(Some(f64::NEG_INFINITY), Some(&[0]), false)
-                .unwrap(),
+            eager_norm(&vector, Some(f64::INFINITY), Some(&[0]), false).unwrap(),
+            3.0,
+        ),
+        (
+            eager_norm(&vector, Some(f64::NEG_INFINITY), Some(&[0]), false).unwrap(),
             0.0,
         ),
         (
-            vector.norm(Some(3.0), Some(&[0]), false).unwrap(),
+            eager_norm(&vector, Some(3.0), Some(&[0]), false).unwrap(),
             36.0_f64.cbrt(),
         ),
         (
-            complex_vector.norm(Some(2.0), Some(&[0]), false).unwrap(),
+            eager_norm(&complex_vector, Some(2.0), Some(&[0]), false).unwrap(),
             194.0_f64.sqrt(),
         ),
-        (matrix.norm(Some(1.0), Some(&[0, 1]), false).unwrap(), 6.0),
-        (matrix.norm(Some(-1.0), Some(&[0, 1]), false).unwrap(), 4.0),
         (
-            matrix
-                .norm(Some(f64::INFINITY), Some(&[0, 1]), false)
-                .unwrap(),
+            eager_norm(&matrix, Some(1.0), Some(&[0, 1]), false).unwrap(),
+            6.0,
+        ),
+        (
+            eager_norm(&matrix, Some(-1.0), Some(&[0, 1]), false).unwrap(),
+            4.0,
+        ),
+        (
+            eager_norm(&matrix, Some(f64::INFINITY), Some(&[0, 1]), false).unwrap(),
             7.0,
         ),
         (
-            matrix
-                .norm(Some(f64::NEG_INFINITY), Some(&[0, 1]), false)
-                .unwrap(),
+            eager_norm(&matrix, Some(f64::NEG_INFINITY), Some(&[0, 1]), false).unwrap(),
             3.0,
         ),
     ];
@@ -215,8 +247,8 @@ fn eager_spectral_norm_preserves_signed_and_complex_input() {
     );
 
     for order in [Some(2.0), Some(-2.0)] {
-        let signed_value = f64_values(&signed.norm(order, Some(&[0, 1]), false).unwrap());
-        let complex_value = f64_values(&complex.norm(order, Some(&[0, 1]), false).unwrap());
+        let signed_value = f64_values(&eager_norm(&signed, order, Some(&[0, 1]), false).unwrap());
+        let complex_value = f64_values(&eager_norm(&complex, order, Some(&[0, 1]), false).unwrap());
         assert!((signed_value[0] - 2.0_f64.sqrt()).abs() < 1.0e-12);
         assert!((complex_value[0] - 2.0_f64.sqrt()).abs() < 1.0e-12);
     }
@@ -236,7 +268,12 @@ fn eager_composite_records_existing_primitives_for_backward() {
     )
     .unwrap();
 
-    a.det().unwrap().backward().unwrap();
+    a.runtime()
+        .with_eager_session(|session| session.det(&a))
+        .unwrap()
+        .unwrap()
+        .backward()
+        .unwrap();
 
     let grad = a.grad().unwrap().unwrap();
     let actual = grad.as_slice::<f64>().unwrap();
@@ -253,7 +290,7 @@ fn lstsq_validation_is_paired_across_eager_and_traced_surfaces() {
     let traced_b = traced_i32(vec![1, 2], vec![2, 1]);
     assert_lstsq_validation_reason(
         "integer dtype",
-        eager_a.lstsq(&eager_b),
+        eager_lstsq(&eager_a, &eager_b),
         traced_a.lstsq(&traced_b),
         "does not support dtype I32",
     );
@@ -264,7 +301,7 @@ fn lstsq_validation_is_paired_across_eager_and_traced_surfaces() {
     let traced_b = TracedTensor::from_vec_col_major(vec![2, 1], vec![1.0_f64, 2.0]).unwrap();
     assert_lstsq_validation_reason(
         "rank-one A",
-        eager_a.lstsq(&eager_b),
+        eager_lstsq(&eager_a, &eager_b),
         traced_a.lstsq(&traced_b),
         "rank mismatch",
     );
@@ -276,7 +313,7 @@ fn lstsq_validation_is_paired_across_eager_and_traced_surfaces() {
     let traced_b = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
     assert_lstsq_validation_reason(
         "rank-one B",
-        eager_a.lstsq(&eager_b),
+        eager_lstsq(&eager_a, &eager_b),
         traced_a.lstsq(&traced_b),
         "rank mismatch",
     );
@@ -287,7 +324,7 @@ fn lstsq_validation_is_paired_across_eager_and_traced_surfaces() {
         TracedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 0.0, 0.0, 1.0, 1.0, 1.0])
             .unwrap();
     let traced_b = TracedTensor::from_vec_col_major(vec![2, 1], vec![1.0_f64, 2.0]).unwrap();
-    let eager_error = eager_a.lstsq(&eager_b).unwrap_err();
+    let eager_error = eager_lstsq(&eager_a, &eager_b).unwrap_err();
     let traced_error = traced_a.lstsq(&traced_b).unwrap_err();
     const WIDE_REASON: &str = "lstsq requires a tall or square matrix (rows 2 >= cols 3); \
         underdetermined (wide) systems are not supported";
@@ -334,20 +371,20 @@ fn eager_norm_covers_remaining_orders_permutations_and_errors() {
     let empty = eager(vec![], vec![0, 2]);
 
     for order in [Some(2.0), Some(-2.0), Some(0.0), Some(3.0)] {
-        matrix.norm(order, Some(&[0, 1]), false).unwrap();
+        eager_norm(&matrix, order, Some(&[0, 1]), false).unwrap();
     }
-    tensor.norm(None, Some(&[2, 0]), true).unwrap();
-    tensor.norm(Some(f64::INFINITY), None, false).unwrap();
-    tensor.norm(Some(f64::NEG_INFINITY), None, false).unwrap();
-    tensor.norm(Some(0.0), None, false).unwrap();
-    tensor.norm(Some(3.0), None, false).unwrap();
+    eager_norm(&tensor, None, Some(&[2, 0]), true).unwrap();
+    eager_norm(&tensor, Some(f64::INFINITY), None, false).unwrap();
+    eager_norm(&tensor, Some(f64::NEG_INFINITY), None, false).unwrap();
+    eager_norm(&tensor, Some(0.0), None, false).unwrap();
+    eager_norm(&tensor, Some(3.0), None, false).unwrap();
 
-    assert!(tensor.norm(None, Some(&[0, 0]), false).is_err());
-    assert!(tensor.norm(None, Some(&[3]), false).is_err());
-    assert!(tensor.norm(Some(f64::NAN), None, false).is_err());
+    assert!(eager_norm(&tensor, None, Some(&[0, 0]), false).is_err());
+    assert!(eager_norm(&tensor, None, Some(&[3]), false).is_err());
+    assert!(eager_norm(&tensor, Some(f64::NAN), None, false).is_err());
     for error in [
-        empty.norm(None, Some(&[0, 0]), false).unwrap_err(),
-        tensor.norm(None, Some(&[0, 0]), false).unwrap_err(),
+        eager_norm(&empty, None, Some(&[0, 0]), false).unwrap_err(),
+        eager_norm(&tensor, None, Some(&[0, 0]), false).unwrap_err(),
     ] {
         assert!(matches!(
             error,

@@ -17,9 +17,12 @@ fn prelude_calls_eager_linalg_operation() {
     let runtime = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
     let input = EagerTensor::from_tensor_in(
         Tensor::from_vec_col_major([2, 2], vec![2.0_f64, 0.0, 0.0, 4.0]).unwrap(),
-        runtime,
+        runtime.clone(),
     )
     .unwrap();
-    let (_u, singular_values, _vt) = input.svd().unwrap();
+    let (_u, singular_values, _vt) = runtime
+        .with_eager_session(|session| session.svd(&input))
+        .unwrap()
+        .unwrap();
     assert_eq!(singular_values.shape(), &[2]);
 }

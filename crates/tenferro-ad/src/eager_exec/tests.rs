@@ -45,7 +45,7 @@ fn eager_read_dispatch_only_materializes_when_the_operation_requires_it() {
     use super::exec_standard_op_on_tensor_reads_in_session as execute;
     use crate::eager_backend::EagerBackend;
     use std::sync::atomic::{AtomicUsize, Ordering};
-    use tenferro_tensor::{TensorRead, TensorView};
+    use tenferro_tensor::{BackendSessionHost, TensorRead, TensorView};
 
     let copies = Arc::new(AtomicUsize::new(0));
     let mut backend = EagerBackend::recording_cpu(Arc::clone(&copies));
@@ -54,12 +54,11 @@ fn eager_read_dispatch_only_materializes_when_the_operation_requires_it() {
         panic!("f64 view")
     };
     let read = TensorRead::from_view(TensorView::F64(view.transpose_view([1, 0]).unwrap()));
-    let result = execute(
-        &StdTensorOp::Mul,
-        &[read.clone(), read.clone()],
-        &mut backend,
-    )
-    .unwrap();
+    let result = backend
+        .with_backend_session(|session| {
+            execute(&StdTensorOp::Mul, &[read.clone(), read.clone()], session)
+        })
+        .unwrap();
     assert_eq!(data(&result[0]), vec![1., 9., 25., 4., 16., 36.]);
     assert_eq!(
         copies.load(Ordering::Relaxed),
@@ -70,7 +69,9 @@ fn eager_read_dispatch_only_materializes_when_the_operation_requires_it() {
 
     let rhs = Tensor::from_vec_col_major(vec![3, 2], vec![2.0_f32; 6]).unwrap();
     let rhs = TensorRead::from_view(TensorRead::from_tensor(&rhs).tensor_view());
-    let result = execute(&StdTensorOp::Mul, &[read.clone(), rhs], &mut backend).unwrap();
+    let result = backend
+        .with_backend_session(|session| execute(&StdTensorOp::Mul, &[read.clone(), rhs], session))
+        .unwrap();
     assert_eq!(data(&result[0]), vec![2., 6., 10., 4., 8., 12.]);
     assert_eq!(
         copies.swap(0, Ordering::Relaxed),
@@ -79,24 +80,31 @@ fn eager_read_dispatch_only_materializes_when_the_operation_requires_it() {
     );
 
     // Owned-only operations retain their explicit materialization boundary.
-    let result = execute(
-        &StdTensorOp::Tril { k: 0 },
-        std::slice::from_ref(&read),
-        &mut backend,
-    )
-    .unwrap();
+    let result = backend
+        .with_backend_session(|session| {
+            execute(
+                &StdTensorOp::Tril { k: 0 },
+                std::slice::from_ref(&read),
+                session,
+            )
+        })
+        .unwrap();
     assert_eq!(data(&result[0]), vec![1., 3., 5., 0., 4., 6.]);
     assert_eq!(copies.swap(0, Ordering::Relaxed), 1);
 
     // Default read hooks reject views; never conceal unsupported capabilities
     // with an implicit eager copy. Production CPU sessions override exp_read.
-    let error = execute(&StdTensorOp::Exp, &[read], &mut backend).unwrap_err();
+    let error = backend
+        .with_backend_session(|session| execute(&StdTensorOp::Exp, &[read], session))
+        .unwrap_err();
     assert_eq!(error.kind(), ErrorKind::Unsupported);
     assert_eq!(copies.load(Ordering::Relaxed), 0);
 
     let empty = f64t(vec![0, 3], vec![]);
     let read = TensorRead::from_view(TensorRead::from_tensor(&empty).tensor_view());
-    let result = execute(&StdTensorOp::Mul, &[read.clone(), read], &mut backend).unwrap();
+    let result = backend
+        .with_backend_session(|session| execute(&StdTensorOp::Mul, &[read.clone(), read], session))
+        .unwrap();
     assert_eq!(result[0].shape(), &[0, 3]);
     assert!(data(&result[0]).is_empty());
     assert_eq!(copies.load(Ordering::Relaxed), 0);
@@ -425,6 +433,34 @@ fn shape_of_each_axis() {
         let result = exec_op_on_tensors(&StdTensorOp::ShapeOf { axis }, &[&x], &mut b).unwrap();
         assert_eq!(data(&result[0]), vec![expected]);
     }
+}
+
+#[test]
+fn generated_outputs_use_the_callers_borrowed_session() {
+    use super::{
+        exec_standard_op_on_tensor_reads_with_session, exec_standard_op_on_tensors_with_session,
+    };
+    use tenferro_tensor::{BackendSessionHost, TensorRead};
+
+    let mut backend = CpuBackend::new();
+    let input = f64t(vec![2, 3], vec![0.0; 6]);
+    backend
+        .with_backend_session(|session| {
+            let constant = StdTensorOp::Constant {
+                dtype: DType::F64,
+                bytes: 3.125_f64.to_le_bytes().to_vec(),
+            };
+            let values = exec_standard_op_on_tensor_reads_with_session(&constant, &[], session)?;
+            assert_eq!(data(&values[0]), vec![3.125]);
+            let shape = StdTensorOp::ShapeOf { axis: 1 };
+            let reads = [TensorRead::from_tensor(&input)];
+            let values = exec_standard_op_on_tensor_reads_with_session(&shape, &reads, session)?;
+            assert_eq!(data(&values[0]), vec![3.0]);
+            let values = exec_standard_op_on_tensors_with_session(&shape, &[&input], session)?;
+            assert_eq!(data(&values[0]), vec![3.0]);
+            Ok::<_, tenferro_runtime::Error>(())
+        })
+        .unwrap();
 }
 
 #[test]

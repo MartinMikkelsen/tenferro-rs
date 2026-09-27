@@ -9,7 +9,9 @@ pub(crate) mod plan;
 mod tests;
 
 use tenferro_gpu::cuda::CudaExecSession;
-use tenferro_tensor::{DType, SliceConfig, Tensor, TensorIndexing, TensorStructural, TensorWrite};
+use tenferro_tensor::{
+    DType, SliceConfig, Tensor, TensorIndexing, TensorRead, TensorStructural, TensorWrite,
+};
 
 use crate::backend::FftExecutionCache;
 use crate::{
@@ -134,7 +136,10 @@ impl FftBackend for CudaExecSession<'_> {
             }
             if !is_identity_permutation(&canonical.inverse_permutation) {
                 canonical_output = self
-                    .transpose(&canonical_output, &canonical.inverse_permutation)
+                    .transpose_read(
+                        TensorRead::from_tensor(&canonical_output),
+                        &canonical.inverse_permutation,
+                    )
                     .map_err(|source| {
                         CudaFftError::interop("cuda_fft_inverse_transpose", source)
                     })?;
@@ -394,7 +399,7 @@ fn canonicalize_input(
     let mut owner = if is_identity_permutation(&canonical.permutation) {
         None
     } else {
-        Some(session.transpose(input, &canonical.permutation)?)
+        Some(session.transpose_read(TensorRead::from_tensor(input), &canonical.permutation)?)
     };
 
     if spec.operation() != FftOperation::C2r {

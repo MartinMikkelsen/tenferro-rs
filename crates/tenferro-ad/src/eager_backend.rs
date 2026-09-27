@@ -1,3 +1,4 @@
+#[cfg(test)]
 use std::any::TypeId;
 #[cfg(test)]
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -11,17 +12,17 @@ use tenferro_gpu::webgpu::WebGpuBackend;
 use tenferro_runtime::{
     EngineId, EngineRegistration, HardwareClassId, Runtime, RuntimeConfigError,
 };
-use tenferro_tensor::backend::ElementwiseFusionPlan;
+#[cfg(test)]
 use tenferro_tensor::{
-    BackendCachedDot, BackendRuntimeCache, BackendSession, BackendSessionHost, CompareDir, DType,
-    DotGeneralConfig, ElementwiseReadOp, GatherConfig, MemoryKind, PadConfig,
-    Result as TensorResult, ScatterConfig, SliceConfig, Tensor, TensorAnalytic, TensorBackend,
-    TensorBuffer, TensorDeviceTransfer, TensorDot, TensorElementwise, TensorFusion, TensorIndexing,
-    TensorRead, TensorReduction, TensorStructural, TensorValue, TensorWrite,
+    BackendCachedDot, CompareDir, DotGeneralConfig, ElementwiseReadOp, GatherConfig, PadConfig,
+    ScatterConfig, SliceConfig, TensorAnalytic, TensorBackend, TensorBuffer, TensorDeviceTransfer,
+    TensorDot, TensorElementwise, TensorFusion, TensorIndexing, TensorReduction, TensorStructural,
+    TensorWrite,
 };
-
-#[doc(hidden)]
-struct EagerBackendSessionMarker;
+use tenferro_tensor::{
+    BackendRuntimeCache, BackendSession, BackendSessionHost, DType, MemoryKind,
+    Result as TensorResult, Tensor, TensorRead,
+};
 
 /// Copy an owned host read into a fresh compact host tensor, or `None` when the
 /// CPU backend's host clone would refuse it.
@@ -247,22 +248,6 @@ pub(crate) fn cpu_runtime_engine_registration(
     backend: &CpuBackend,
 ) -> Result<EngineRegistration, RuntimeConfigError> {
     tenferro_cpu::runtime_engine_registration(backend)
-}
-
-macro_rules! dispatch {
-    ($backend:expr, $method:ident($($arg:expr),* $(,)?)) => {
-        match $backend {
-            EagerBackend::Cpu(backend) => {
-                backend.with_backend_session(|__s| __s.$method($($arg),*))
-            }
-            #[cfg(test)]
-            EagerBackend::Recording(backend) => backend.$method($($arg),*),
-            #[cfg(feature = "cuda")]
-            EagerBackend::Cuda(backend) => backend.$method($($arg),*),
-            #[cfg(feature = "webgpu")]
-            EagerBackend::WebGpu(backend) => backend.$method($($arg),*),
-        }
-    };
 }
 
 #[cfg(test)]
@@ -719,143 +704,8 @@ impl BackendSessionHost for RecordingBackend {
 #[cfg(test)]
 impl TensorBackend for RecordingBackend {}
 
-macro_rules! delegate_tensor_backend_methods {
-    ($(fn $method:ident($($arg:ident: $ty:ty),* $(,)?) -> $ret:ty;)*) => {
-        $(
-            fn $method(&mut self, $($arg: $ty),*) -> $ret {
-                dispatch!(self, $method($($arg),*))
-            }
-        )*
-    };
-}
-
-impl BackendSession for EagerBackend {
-    fn session_type_id(&self) -> TypeId {
-        TypeId::of::<EagerBackendSessionMarker>()
-    }
-
-    unsafe fn session_data_mut(&mut self) -> *mut () {
-        self as *mut Self as *mut ()
-    }
-}
-
 impl BackendRuntimeCache for EagerBackend {
     type RuntimeCache = ();
-}
-
-impl TensorElementwise for EagerBackend {
-    fn elementwise_read_into(
-        &mut self,
-        op: ElementwiseReadOp,
-        inputs: &[TensorRead<'_>],
-        out: TensorWrite<'_>,
-    ) -> TensorResult<()> {
-        dispatch!(self, elementwise_read_into(op, inputs, out))
-    }
-
-    delegate_tensor_backend_methods! {
-        fn add_read(lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> TensorResult<Tensor>;
-        fn sub_read(lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> TensorResult<Tensor>;
-        fn mul_read(lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> TensorResult<Tensor>;
-        fn neg_read(input: TensorRead<'_>) -> TensorResult<Tensor>;
-        fn conj_read(input: TensorRead<'_>) -> TensorResult<Tensor>;
-        fn div_read(lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> TensorResult<Tensor>;
-        fn rem(lhs: &Tensor, rhs: &Tensor) -> TensorResult<Tensor>;
-        fn rem_read(lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> TensorResult<Tensor>;
-        fn abs_read(input: TensorRead<'_>) -> TensorResult<Tensor>;
-        fn sign_read(input: TensorRead<'_>) -> TensorResult<Tensor>;
-        fn maximum_read(lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> TensorResult<Tensor>;
-        fn minimum_read(lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> TensorResult<Tensor>;
-        fn compare_read(lhs: TensorRead<'_>, rhs: TensorRead<'_>, dir: &CompareDir) -> TensorResult<Tensor>;
-        fn select_read(pred: TensorRead<'_>, on_true: TensorRead<'_>, on_false: TensorRead<'_>) -> TensorResult<Tensor>;
-        fn clamp_read(input: TensorRead<'_>, lower: TensorRead<'_>, upper: TensorRead<'_>) -> TensorResult<Tensor>;
-    }
-}
-
-impl TensorAnalytic for EagerBackend {
-    delegate_tensor_backend_methods! {
-        fn exp_read(input: TensorRead<'_>) -> TensorResult<Tensor>;
-        fn log_read(input: TensorRead<'_>) -> TensorResult<Tensor>;
-        fn sin_read(input: TensorRead<'_>) -> TensorResult<Tensor>;
-        fn cos_read(input: TensorRead<'_>) -> TensorResult<Tensor>;
-        fn tanh_read(input: TensorRead<'_>) -> TensorResult<Tensor>;
-        fn sqrt_read(input: TensorRead<'_>) -> TensorResult<Tensor>;
-        fn rsqrt_read(input: TensorRead<'_>) -> TensorResult<Tensor>;
-        fn pow_read(lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> TensorResult<Tensor>;
-        fn expm1_read(input: TensorRead<'_>) -> TensorResult<Tensor>;
-        fn log1p_read(input: TensorRead<'_>) -> TensorResult<Tensor>;
-    }
-}
-
-impl TensorStructural for EagerBackend {
-    delegate_tensor_backend_methods! {
-        fn to_contiguous_read(input: TensorRead<'_>) -> TensorResult<Tensor>;
-        fn copy_read_into(src: TensorRead<'_>, dst: TensorWrite<'_>) -> TensorResult<()>;
-        fn reshape_read(input: TensorRead<'_>, shape: &[usize]) -> TensorResult<Tensor>;
-        fn broadcast_in_dim_read(input: TensorRead<'_>, shape: &[usize], dims: &[usize]) -> TensorResult<Tensor>;
-        fn cast(input: &Tensor, to: DType) -> TensorResult<Tensor>;
-        fn extract_diagonal(input: &Tensor, axis_a: usize, axis_b: usize) -> TensorResult<Tensor>;
-        fn embed_diagonal(input: &Tensor, axis_a: usize, axis_b: usize) -> TensorResult<Tensor>;
-        fn tril(input: &Tensor, k: i64) -> TensorResult<Tensor>;
-        fn triu(input: &Tensor, k: i64) -> TensorResult<Tensor>;
-    }
-
-    // The previous read-half default delegated owned tensors to the one-shot
-    // method and rejected borrowed views. Reproduce it explicitly rather than
-    // forwarding a view, which would widen the accepted input surface.
-    fn transpose_read(&mut self, input: TensorRead<'_>, perm: &[usize]) -> TensorResult<Tensor> {
-        let input = tenferro_tensor::backend::read_owned_tensor("transpose", input)?;
-        dispatch!(self, transpose_read(TensorRead::from_tensor(input), perm))
-    }
-}
-
-impl TensorReduction for EagerBackend {
-    delegate_tensor_backend_methods! {
-        fn reduce_sum_squares_read(input: TensorRead<'_>, axes: &[usize]) -> TensorResult<Tensor>;
-    }
-
-    // The previous read-half default delegated owned tensors to the one-shot
-    // method and rejected views. Dispatching a view to the concrete backend
-    // would widen the accepted input surface, so reproduce the old default.
-    fn reduce_sum_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> TensorResult<Tensor> {
-        let input = tenferro_tensor::backend::read_owned_tensor("reduce_sum", input)?;
-        dispatch!(self, reduce_sum_read(TensorRead::from_tensor(input), axes))
-    }
-
-    fn reduce_prod_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> TensorResult<Tensor> {
-        let input = tenferro_tensor::backend::read_owned_tensor("reduce_prod", input)?;
-        dispatch!(self, reduce_prod_read(TensorRead::from_tensor(input), axes))
-    }
-
-    fn reduce_max_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> TensorResult<Tensor> {
-        let input = tenferro_tensor::backend::read_owned_tensor("reduce_max", input)?;
-        dispatch!(self, reduce_max_read(TensorRead::from_tensor(input), axes))
-    }
-
-    fn reduce_min_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> TensorResult<Tensor> {
-        let input = tenferro_tensor::backend::read_owned_tensor("reduce_min", input)?;
-        dispatch!(self, reduce_min_read(TensorRead::from_tensor(input), axes))
-    }
-}
-
-impl TensorDot for EagerBackend {
-    delegate_tensor_backend_methods! {
-        fn dot_general_read(lhs: TensorRead<'_>, rhs: TensorRead<'_>, config: &DotGeneralConfig) -> TensorResult<Tensor>;
-        fn dot_general_with_conj(lhs: &Tensor, rhs: &Tensor, config: &DotGeneralConfig, lhs_conj: bool, rhs_conj: bool) -> TensorResult<Tensor>;
-    }
-}
-
-impl TensorIndexing for EagerBackend {
-    delegate_tensor_backend_methods! {
-        fn gather(operand: &Tensor, start_indices: &Tensor, config: &GatherConfig) -> TensorResult<Tensor>;
-        fn scatter(operand: &Tensor, scatter_indices: &Tensor, updates: &Tensor, config: &ScatterConfig) -> TensorResult<Tensor>;
-        fn slice(input: &Tensor, config: &SliceConfig) -> TensorResult<Tensor>;
-        fn dynamic_slice(input: &Tensor, starts: &Tensor, slice_sizes: &[usize]) -> TensorResult<Tensor>;
-        fn dynamic_update_slice(operand: &Tensor, update: &Tensor, starts: &Tensor) -> TensorResult<Tensor>;
-        fn pad(input: &Tensor, config: &PadConfig) -> TensorResult<Tensor>;
-        fn concatenate(inputs: &[&Tensor], axis: usize) -> TensorResult<Tensor>;
-        fn reverse(input: &Tensor, axes: &[usize]) -> TensorResult<Tensor>;
-    }
 }
 
 impl BackendSessionHost for EagerBackend {
@@ -878,28 +728,3 @@ impl BackendSessionHost for EagerBackend {
         }
     }
 }
-
-impl TensorDeviceTransfer for EagerBackend {
-    delegate_tensor_backend_methods! {
-        fn download_to_host(tensor: TensorRead<'_>) -> TensorResult<Tensor>;
-        fn upload_host_tensor(tensor: TensorRead<'_>) -> TensorResult<Tensor>;
-    }
-}
-
-impl TensorBuffer for EagerBackend {
-    delegate_tensor_backend_methods! {
-        fn reclaim_buffer(tensor: Tensor) -> ();
-    }
-}
-
-impl TensorFusion for EagerBackend {
-    delegate_tensor_backend_methods! {
-        fn execute_elementwise_fusion(inputs: &[&Tensor], plan: &ElementwiseFusionPlan) -> TensorResult<Option<Vec<Tensor>>>;
-        fn execute_broadcast_multiply(lhs: TensorRead<'_>, lhs_shape: &[usize], lhs_dims: &[usize], rhs: TensorRead<'_>, rhs_shape: &[usize], rhs_dims: &[usize]) -> TensorResult<Option<Tensor>>;
-        fn execute_broadcast_multiply_value(lhs: TensorRead<'_>, lhs_shape: &[usize], lhs_dims: &[usize], rhs: TensorRead<'_>, rhs_shape: &[usize], rhs_dims: &[usize]) -> TensorResult<Option<TensorValue>>;
-    }
-}
-
-impl BackendCachedDot for EagerBackend {}
-
-impl TensorBackend for EagerBackend {}

@@ -101,7 +101,7 @@ operations.
 | --- | --- | --- | --- |
 | Everyday tensor ops | `TensorSessionOpsExt` / `TypedTensorSessionOpsExt` session-explicit methods | `EagerTensor` methods / associated functions | `TracedTensor` methods / associated functions |
 | Einsum | `[&a, &b].einsum(...)` via `TensorEinsumExt` / `TypedTensorEinsumExt`; `TensorReadEinsumExt` / `TypedTensorReadEinsumExt` for views; `ConcreteEinsumPlan` for repeated fixed metadata | `[&a, &b].einsum(...)` via `EagerEinsumExt` | `trace.einsum(...)` via `TraceContextEinsumExt` plus `extension_module` |
-| FFT | `x.fft(...)` via `TensorFftExt`; `read.fft_read(...)` via `TensorReadFftExt` | `x.fft(...)` via `EagerTensorFftExt` with `autodiff` | `x.fft(...)` via `TracedTensorFftExt` plus `extension_module` |
+| FFT | `x.fft(...)` via `TensorFftExt`; `read.fft_read(...)` via `TensorReadFftExt` | `session.fft(&x, ...)` via `EagerSessionFftExt` with `autodiff` (`EagerTensorFftExt` only for consuming in-place FFT) | `x.fft(...)` via `TracedTensorFftExt` plus `extension_module` |
 | Tensordot sugar | Use `matmul` or `dot_general` directly | `a.tensordot(&b, axes)` via `EagerTensorEinsumExt` | `a.tensordot(&b, axes)` via `TracedTensorEinsumExt` |
 | Linear algebra | `TensorLinalgExt` session methods via `with_backend_session` | `EagerTensorLinalgExt` methods with `autodiff` | `TracedTensorLinalgExt` methods |
 | Automatic differentiation | Not applicable | `backward()` plus `EagerRuntime` functional `grad`, `vjp`, `jvp`, HVP via composition | `grad`, `vjp`, `jvp`, HVP via composition |

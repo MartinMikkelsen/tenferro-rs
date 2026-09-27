@@ -93,7 +93,7 @@ fn eager_runtime_built_from_ad_context_uses_shared_transform_cache() {
         ctx.clone(),
     )
     .unwrap();
-    let y = x.mul(&x).unwrap();
+    let y = ctx.with_eager_session(|s| s.mul(&x, &x)).unwrap().unwrap();
 
     assert_eq!(ad.ad_transform_cache_stats().unwrap().entries, 0);
     let _ = ctx.vjp(&y, &x, &seed).unwrap();
@@ -126,8 +126,16 @@ fn ad_transform_cache_entry_limit_evicts_lru_entries() {
     )
     .unwrap();
 
-    let _ = ctx.vjp(&x0.mul(&x0).unwrap(), &x0, &seed).unwrap();
-    let _ = ctx.vjp(&x1.mul(&x1).unwrap(), &x1, &seed).unwrap();
+    let output0 = ctx
+        .with_eager_session(|s| s.mul(&x0, &x0))
+        .unwrap()
+        .unwrap();
+    let _ = ctx.vjp(&output0, &x0, &seed).unwrap();
+    let output1 = ctx
+        .with_eager_session(|s| s.mul(&x1, &x1))
+        .unwrap()
+        .unwrap();
+    let _ = ctx.vjp(&output1, &x1, &seed).unwrap();
 
     assert_eq!(ad.ad_transform_cache_stats().unwrap().entries, 1);
 }
@@ -179,9 +187,15 @@ fn eager_backward_shape_churn_keeps_transform_cache_shape_specific() {
     fn fixture(ctx: &std::sync::Arc<EagerRuntime>, shape: Vec<usize>, seed: usize) -> Fixture {
         let x = EagerTensor::requires_grad_in(tensor(shape.clone(), seed), ctx.clone()).unwrap();
         let weight = EagerTensor::from_tensor_in(tensor(shape, seed + 1000), ctx.clone()).unwrap();
-        let loss = x.mul(&weight).unwrap().mul(&x).unwrap();
-        let axes: Vec<_> = (0..loss.shape().len()).collect();
-        let loss = loss.reduce_sum(Some(&axes)).unwrap();
+        let loss = ctx
+            .with_eager_session(|s| {
+                let weighted = s.mul(&x, &weight)?;
+                let quadratic = s.mul(&weighted, &x)?;
+                let axes: Vec<_> = (0..quadratic.shape().len()).collect();
+                s.reduce_sum(&quadratic, Some(&axes))
+            })
+            .unwrap()
+            .unwrap();
         Fixture { x, loss }
     }
 

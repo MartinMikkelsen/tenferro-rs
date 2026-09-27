@@ -32,37 +32,57 @@ fn eager_public_tensor_accessors_are_fallible_source_contract() {
 fn eager_axis_ops_validate_before_recording_source_contract() {
     let source = include_str!("../../src/eager_ops.rs");
 
+    let sum = source
+        .split_once("fn reduce_sum_in_session(")
+        .and_then(|(_, rest)| {
+            rest.split_once("StdTensorOp::ReduceSum")
+                .map(|(body, _)| body)
+        })
+        .expect("missing borrowed reduction sum source section");
+    assert!(sum.contains("validate_eager_axes("));
+
+    let session_source = include_str!("../../src/eager.rs");
     for (method, op_variant) in [
         (
-            "pub fn reduce_sum(&self, axes: Option<&[usize]>)",
-            "StdTensorOp::ReduceSum",
-        ),
-        (
-            "pub fn reduce_prod(&self, axes: Option<&[usize]>)",
-            "StdTensorOp::ReduceProd",
-        ),
-        (
-            "pub fn reduce_max(&self, axes: Option<&[usize]>)",
+            "pub fn reduce_max(\n        &mut self,",
             "StdTensorOp::ReduceMax",
         ),
         (
-            "pub fn reduce_min(&self, axes: Option<&[usize]>)",
+            "pub fn reduce_min(\n        &mut self,",
             "StdTensorOp::ReduceMin",
         ),
-        (
-            "pub fn reverse(&self, axes: &[usize])",
-            "StdTensorOp::Reverse",
-        ),
     ] {
-        let body = source
+        let body = session_source
             .split_once(method)
             .and_then(|(_, rest)| rest.split_once(op_variant).map(|(before_op, _)| before_op))
-            .unwrap_or_else(|| panic!("missing source contract section for {method}"));
+            .unwrap_or_else(|| panic!("missing borrowed source contract section for {method}"));
         assert!(
             body.contains("validate_eager_axes("),
-            "{method} must validate axes before recording {op_variant}"
+            "{method} must validate axes before recording"
         );
     }
+    let product = session_source
+        .split_once("pub fn reduce_prod(\n        &mut self,")
+        .and_then(|(_, rest)| {
+            rest.split_once("StdTensorOp::ReduceProd")
+                .map(|(body, _)| body)
+        })
+        .expect("missing EagerSession::reduce_prod source section");
+    assert!(
+        product.contains("validate_eager_axes("),
+        "borrowed product reduction must validate axes before recording"
+    );
+    let reverse = session_source
+        .split_once("pub fn reverse(&mut self, input: &EagerTensor, axes: &[usize])")
+        .and_then(|(_, rest)| {
+            rest.split_once("StdTensorOp::Reverse")
+                .map(|(before_op, _)| before_op)
+        })
+        .expect("missing EagerSession::reverse source section");
+    assert!(
+        reverse.contains("validate_eager_axes("),
+        "borrowed reverse must validate axes before recording"
+    );
 }
 
 #[test]
@@ -114,34 +134,31 @@ fn eager_runtime_lock_scopes_are_bounded_source_contract() {
 
 #[test]
 fn eager_dot_general_surfaces_validate_config_before_dispatch_source_contract() {
-    let source = include_str!("../../src/eager_ops.rs");
-
-    let dot_general = source
-        .split_once("pub fn dot_general(&self, other: &Self, config: DotGeneralConfig)")
+    let session_source = include_str!("../../src/eager.rs");
+    let dot_general = session_source
+        .split_once("pub fn dot_general(\n        &mut self,")
         .and_then(|(_, rest)| {
-            rest.split_once("self.binary_op")
+            rest.split_once("EagerTensor::nary_op_in_session")
                 .map(|(before_dispatch, _)| before_dispatch)
         })
-        .expect("missing EagerTensor::dot_general source section");
+        .expect("missing EagerSession::dot_general source section");
     assert!(
-        dot_general.contains("validate_eager_dot_general_config("),
-        "EagerTensor::dot_general must validate DotGeneralConfig before dispatch"
+        dot_general.contains("validate_dims_with_ranks("),
+        "EagerSession::dot_general must validate DotGeneralConfig before dispatch"
     );
 
-    let dot_general_with_conj = source
+    let dot_general_with_conj = session_source
         .split_once("pub fn dot_general_with_conj(")
-        .and_then(|(_, rest)| {
-            rest.split_once("exec_dot_general_with_conj_on_tensor_reads")
-                .map(|(before_dispatch, _)| before_dispatch)
-        })
-        .expect("missing EagerTensor::dot_general_with_conj source section");
+        .and_then(|(_, rest)| rest.split_once("if !lhs.requires_grad"))
+        .map(|(before_dispatch, _)| before_dispatch)
+        .expect("missing EagerSession::dot_general_with_conj source section");
     assert!(
         dot_general_with_conj.contains("config: DotGeneralConfig"),
-        "EagerTensor dot-general surfaces should consistently take owned configs"
+        "EagerSession dot-general surfaces should consistently take owned configs"
     );
     assert!(
-        dot_general_with_conj.contains("validate_eager_dot_general_config("),
-        "EagerTensor::dot_general_with_conj must validate DotGeneralConfig before fast-path dispatch"
+        dot_general_with_conj.contains("validate_dims_with_ranks("),
+        "EagerSession::dot_general_with_conj must validate DotGeneralConfig before fast-path dispatch"
     );
 }
 
@@ -191,7 +208,11 @@ fn eager_binary_methods_return_shape_errors() {
     )
     .unwrap();
 
-    let err = x.add(&y).unwrap_err();
+    let err = x
+        .runtime()
+        .with_eager_session(|s| s.add(&x, &y))
+        .unwrap()
+        .unwrap_err();
 
     assert!(matches!(
         err,

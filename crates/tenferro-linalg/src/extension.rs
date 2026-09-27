@@ -991,11 +991,11 @@ fn execute_linalg_extension_reads_in_session<S: LinalgBackend>(
         }
         LinalgOp::Eig { .. } => return session.eig_read(inputs[0].clone()),
         LinalgOp::EigVals { .. } => return Ok(vec![session.eig_values_read(inputs[0].clone())?]),
-        LinalgOp::Solve => {
-            return Ok(vec![
-                session.solve_read(inputs[0].clone(), inputs[1].clone())?
-            ]);
-        }
+        LinalgOp::Solve => match session.solve_read(inputs[0].clone(), inputs[1].clone()) {
+            Ok(output) => return Ok(vec![output]),
+            Err(error) if error.kind() == ErrorKind::Unsupported => {}
+            Err(error) => return Err(error),
+        },
         _ => {}
     }
     if let LinalgOp::TriangularSolve {

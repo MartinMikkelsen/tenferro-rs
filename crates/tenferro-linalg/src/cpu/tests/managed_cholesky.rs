@@ -515,14 +515,19 @@ fn managed_borrowed_cholesky_respects_offset_and_rejects_strides() {
 #[cfg(feature = "autodiff")]
 #[test]
 fn managed_eager_cholesky_preserves_domain_and_values() {
-    use crate::EagerTensorLinalgExt;
+    use crate::EagerSessionLinalgExt;
     use tenferro_ad::{EagerRuntime, EagerTensor};
     let domain = FakeDomain::new();
     let input = domain.tensor(&[2, 2], vec![4.0_f64, 2.0, 2.0, 3.0]);
     let input_id = input.allocation_id();
     let runtime = EagerRuntime::with_cpu_backend(backend(&domain)).unwrap();
-    let eager = EagerTensor::from_tensor_in(Tensor::from_typed(input), runtime).unwrap();
-    let output = eager.cholesky().unwrap().to_tensor().unwrap();
+    let eager = EagerTensor::from_tensor_in(Tensor::from_typed(input), runtime.clone()).unwrap();
+    let output = runtime
+        .with_eager_session(|session| session.cholesky(&eager))
+        .unwrap()
+        .unwrap()
+        .to_tensor()
+        .unwrap();
     let output = output.as_typed::<f64>().unwrap();
     assert_eq!(output.allocation_domain(), Some(domain.id()));
     assert_ne!(output.allocation_id(), input_id);

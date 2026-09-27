@@ -1008,14 +1008,18 @@ backend.with_backend_session(|session| -> Result<(), tenferro_tensor::Error> {
         // snippet-start:tenferro_fft_23
 use num_complex::Complex64;
 use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
-use tenferro_fft::{EagerTensorFftExt, FftNorm};
+use tenferro_fft::{EagerSessionFftExt, FftNorm};
 
+let runtime = EagerRuntime::new()?;
 let x = EagerTensor::from_tensor_in(
     Tensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0])?,
-    EagerRuntime::new()?,
+    runtime.clone(),
 )?;
-let spectrum = x.rfft(None, -1, FftNorm::Backward)?;
-let restored = spectrum.irfft(Some(4), -1, FftNorm::Backward)?;
+let (spectrum, restored) = runtime.with_eager_session(|session| {
+    let spectrum = session.rfft(&x, None, -1, FftNorm::Backward)?;
+    let restored = session.irfft(&spectrum, Some(4), -1, FftNorm::Backward)?;
+    Ok::<_, tenferro_ad::Error>((spectrum, restored))
+})??;
 
 assert_eq!(spectrum.shape(), &[3]);
 assert_eq!(restored.to_tensor()?.as_slice::<f64>()?, &[1.0, 2.0, 3.0, 4.0]);

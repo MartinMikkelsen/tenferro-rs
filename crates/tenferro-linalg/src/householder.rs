@@ -147,6 +147,19 @@ impl HouseholderQr<tenferro_ad::EagerTensor> {
 
     /// Construct compact state from compatible eager factors.
     ///
+    /// # Examples
+    /// ```rust
+    /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
+    /// use tenferro_linalg::HouseholderQr;
+    /// let ctx = EagerRuntime::new()?;
+    /// let state = ctx.with_eager_session(|s| {
+    ///     let q = s.constant_from(Tensor::from_vec_col_major([1, 1], vec![1.0_f64])?)?;
+    ///     let r = s.constant_from(Tensor::from_vec_col_major([1, 1], vec![2.0_f64])?)?;
+    ///     HouseholderQr::<EagerTensor>::from_factors(&q, &r, s)
+    /// })??;
+    /// assert!(format!("{state:?}").starts_with("HouseholderQr"));
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
     /// # Errors
     ///
     /// Returns `tenferro_ad::Error::Validation` for known invalid metadata,
@@ -155,8 +168,10 @@ impl HouseholderQr<tenferro_ad::EagerTensor> {
     pub fn from_factors(
         q: &tenferro_ad::EagerTensor,
         r: &tenferro_ad::EagerTensor,
+        session: &mut tenferro_ad::EagerSession<'_>,
     ) -> tenferro_ad::Result<Self> {
-        eager_state(crate::eager_ext::apply_linalg_eager(
+        eager_state(crate::eager_ext::apply_linalg_eager_in_session(
+            session,
             crate::extension::LinalgOp::HouseholderQrFromFactors,
             &[q, r],
         )?)
@@ -164,13 +179,31 @@ impl HouseholderQr<tenferro_ad::EagerTensor> {
 
     /// Append an eager column block functionally.
     ///
+    /// # Examples
+    /// ```rust
+    /// use tenferro_ad::{EagerRuntime, Tensor};
+    /// use tenferro_linalg::EagerSessionLinalgExt;
+    /// let ctx = EagerRuntime::new()?;
+    /// let state = ctx.with_eager_session(|s| {
+    ///     let a = s.constant_from(Tensor::from_vec_col_major([2, 1], vec![1.0_f64, 0.0])?)?;
+    ///     let b = s.constant_from(Tensor::from_vec_col_major([2, 1], vec![0.0_f64, 1.0])?)?;
+    ///     s.householder_qr(&a)?.append_columns(&b, s)
+    /// })??;
+    /// assert!(format!("{state:?}").starts_with("HouseholderQr"));
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
     /// # Errors
     ///
     /// Returns `tenferro_ad::Error::Validation` for known invalid metadata,
     /// `tenferro_ad::Error::Extension` for unsupported or provider failures,
     /// or `tenferro_ad::Error::RuntimeState` when eager execution is unavailable.
-    pub fn append_columns(&self, block: &tenferro_ad::EagerTensor) -> tenferro_ad::Result<Self> {
-        eager_state(crate::eager_ext::apply_linalg_eager(
+    pub fn append_columns(
+        &self,
+        block: &tenferro_ad::EagerTensor,
+        session: &mut tenferro_ad::EagerSession<'_>,
+    ) -> tenferro_ad::Result<Self> {
+        eager_state(crate::eager_ext::apply_linalg_eager_in_session(
+            session,
             crate::extension::LinalgOp::HouseholderQrAppend,
             &[&self.packed, &self.coeff, block],
         )?)
@@ -178,14 +211,31 @@ impl HouseholderQr<tenferro_ad::EagerTensor> {
 
     /// Extract eager R.
     ///
+    /// # Examples
+    /// ```rust
+    /// use tenferro_ad::{EagerRuntime, Tensor};
+    /// use tenferro_linalg::{EagerSessionLinalgExt, QrOptions};
+    /// let ctx = EagerRuntime::new()?;
+    /// let r = ctx.with_eager_session(|s| {
+    ///     let a = s.constant_from(Tensor::from_vec_col_major([2, 1], vec![1.0_f64, 2.0])?)?;
+    ///     s.householder_qr(&a)?.r(QrOptions::default(), s)
+    /// })??;
+    /// assert_eq!(r.shape(), &[1, 1]);
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
     /// # Errors
     ///
     /// Returns `tenferro_ad::Error::Validation` for known invalid metadata,
     /// `tenferro_ad::Error::Extension` for unsupported or provider failures,
     /// or `tenferro_ad::Error::RuntimeState` when eager execution is unavailable.
-    pub fn r(&self, options: QrOptions) -> tenferro_ad::Result<tenferro_ad::EagerTensor> {
+    pub fn r(
+        &self,
+        options: QrOptions,
+        session: &mut tenferro_ad::EagerSession<'_>,
+    ) -> tenferro_ad::Result<tenferro_ad::EagerTensor> {
         eager_one(
-            crate::eager_ext::apply_linalg_eager(
+            crate::eager_ext::apply_linalg_eager_in_session(
+                session,
                 crate::extension::LinalgOp::HouseholderQrR {
                     gauge: options.gauge,
                 },
@@ -197,6 +247,18 @@ impl HouseholderQr<tenferro_ad::EagerTensor> {
 
     /// Materialize eager Q columns, up to the full-Q width.
     ///
+    /// # Examples
+    /// ```rust
+    /// use tenferro_ad::{EagerRuntime, Tensor};
+    /// use tenferro_linalg::{EagerSessionLinalgExt, QrOptions};
+    /// let ctx = EagerRuntime::new()?;
+    /// let q = ctx.with_eager_session(|s| {
+    ///     let a = s.constant_from(Tensor::from_vec_col_major([2, 1], vec![1.0_f64, 2.0])?)?;
+    ///     s.householder_qr(&a)?.q_columns(0..1, QrOptions::default(), s)
+    /// })??;
+    /// assert_eq!(q.shape(), &[2, 1]);
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
     /// Columns `0..k` are the thin-Q factor; columns `k..m` span the orthogonal
     /// complement of the input's column space. `PositiveDiagonal` fixes only
     /// the first `k` columns, because the gauge comes from R's diagonal.
@@ -212,9 +274,11 @@ impl HouseholderQr<tenferro_ad::EagerTensor> {
         &self,
         columns: Range<usize>,
         options: QrOptions,
+        session: &mut tenferro_ad::EagerSession<'_>,
     ) -> tenferro_ad::Result<tenferro_ad::EagerTensor> {
         eager_one(
-            crate::eager_ext::apply_linalg_eager(
+            crate::eager_ext::apply_linalg_eager_in_session(
+                session,
                 crate::extension::LinalgOp::HouseholderQrQColumns {
                     start: columns.start,
                     end: columns.end,
@@ -228,7 +292,7 @@ impl HouseholderQr<tenferro_ad::EagerTensor> {
 }
 
 #[cfg(feature = "autodiff")]
-fn eager_state(
+pub(crate) fn eager_state(
     outputs: Vec<tenferro_ad::EagerTensor>,
 ) -> tenferro_ad::Result<HouseholderQr<tenferro_ad::EagerTensor>> {
     let mut outputs = outputs.into_iter();

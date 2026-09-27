@@ -837,12 +837,17 @@ Tests follow implementation ownership.
 
 ## Public API Convention
 
-- **AD core ops**: `EagerTensor` and `TracedTensor` use methods as the
-  canonical surface for single-output operations (`x.exp()`,
-  `x.reshape(shape)`, `a.dot_general(&b, config)`), operator overloads where
-  they read naturally (`&a + &b`, `&a * &b`), and associated functions for
-  core operations with no natural receiver (`EagerTensor::where_select(...)`,
-  `TracedTensor::concatenate(...)`).
+- **AD core ops**: `TracedTensor` uses methods for single-output operations
+  (`x.exp()`, `x.reshape(shape)`, `a.dot_general(&b, config)`), operator
+  overloads where they read naturally (`&a + &b`), and associated functions
+  without a natural receiver (`TracedTensor::concatenate(...)`). Eager
+  operations instead use a runtime-bound, explicitly borrowed `EagerSession`
+  (`ctx.with_eager_session(|s| s.exp(&x))`, `s.where_select(&cond, &x, &y)`);
+  `EagerTensor` remains the value/trace handle, not an implicit per-operation
+  backend entry point. Do not add operator overloads that hide eager entry.
+  The existing tensor-owned linalg `solve` preserves calling-thread `no_grad`
+  behavior, and consuming in-place FFT preserves exclusive ownership; neither
+  is a precedent for new implicit eager operation methods.
 - **Non-AD concrete ops**: `Tensor` and dynamic-rank `TypedTensor<T>` use
   crate-root session extension traits (`TensorSessionOpsExt`,
   `TypedTensorSessionOpsExt`, and `TypedTensorMaskSessionOpsExt`) whose
@@ -852,10 +857,11 @@ Tests follow implementation ownership.
   release API.
 - **Extension families**: extension crates cannot add inherent methods to
   external tensor types, so their canonical tensor-facing surface is extension
-  traits (`TracedTensorLinalgExt`, `EagerEinsumExt`, `TraceContextEinsumExt`,
-  `TracedTensorEinsumExt`, `TracedTensorFftExt`) re-exported at the crate
-  root. Do not expose public `traced_tensor` / `eager_tensor` module free
-  functions for standard operation families.
+  traits (`TracedTensorLinalgExt`, `EagerEinsumExt`, `EagerSessionLinalgExt`,
+  `EagerSessionFftExt`, `TraceContextEinsumExt`, `TracedTensorEinsumExt`,
+  `TracedTensorFftExt`) re-exported at the crate root. Do not expose public
+  `traced_tensor` / `eager_tensor` module free functions for standard
+  operation families.
 - **No compatibility shims for operation-surface style changes**: when API
   compatibility is not explicitly required, remove old module functions
   instead of keeping wrappers beside the canonical surface.

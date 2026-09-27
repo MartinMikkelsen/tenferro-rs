@@ -31,7 +31,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // after warm-up. Scope entry and graph/input preparation are not timed.
     let (primal, jvp, vjp, replay) =
         owner.with_execution_scope(|| -> tenferro_ad::Result<_> {
-            let primal = x.mul(&x)?;
+            let primal = eager.with_eager_session(|s| s.mul(&x, &x))??;
             let jvp = eager.jvp(&primal, &x, &seed)?;
             let vjp = eager.vjp(&primal, &x, &seed)?;
             let replay = runtime.run_prepared(&prepared, &[])?;

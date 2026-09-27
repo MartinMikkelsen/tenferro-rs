@@ -1,32 +1,44 @@
 use num_complex::{Complex32, Complex64};
-use tenferro_ad::{CompareDir, DType, DotGeneralConfig, EagerTensor, Error, Result, Tensor};
+use tenferro_ad::{
+    CompareDir, DType, DotGeneralConfig, EagerSession, EagerTensor, Error, Result, Tensor,
+};
 use tenferro_runtime::ErrorPhase;
 
-use crate::eager_ext::{apply_linalg_eager, lu, one_output, qr, solve, svd, triangular_solve};
-use crate::extension::{EighOptions, LinalgOp, DEFAULT_DECOMPOSITION_DERIVATIVE_EPS};
+use crate::eager_ext::EagerSessionLinalgExt;
 use crate::validation::{ensure_float_or_complex, validate_lstsq};
 
-pub(crate) fn slogdet(a: &EagerTensor) -> Result<(EagerTensor, EagerTensor)> {
-    let (_p, _l, u, parity) = lu(a)?;
-    let diag_u = u.extract_diag(0, 1)?;
-    let sign_u = diag_u.sign()?.reduce_prod(Some(&[0]))?;
-    let sign = parity.mul(&sign_u)?;
-    let logabsdet = diag_u.abs()?.log()?.reduce_sum(Some(&[0]))?;
+pub(crate) fn slogdet(
+    session: &mut EagerSession<'_>,
+    a: &EagerTensor,
+) -> Result<(EagerTensor, EagerTensor)> {
+    let (_p, _l, u, parity) = session.lu(a)?;
+    let diag_u = session.extract_diag(&u, 0, 1)?;
+    let sign_u = session.sign(&diag_u)?;
+    let sign_u = session.reduce_prod(&sign_u, Some(&[0]))?;
+    let sign = session.mul(&parity, &sign_u)?;
+    let abs_diag = session.abs(&diag_u)?;
+    let log_diag = session.log(&abs_diag)?;
+    let logabsdet = session.reduce_sum(&log_diag, Some(&[0]))?;
     Ok((sign, logabsdet))
 }
 
-pub(crate) fn det(a: &EagerTensor) -> Result<EagerTensor> {
-    let (sign, logabsdet) = slogdet(a)?;
-    sign.mul(&logabsdet.exp()?)
+pub(crate) fn det(session: &mut EagerSession<'_>, a: &EagerTensor) -> Result<EagerTensor> {
+    let (sign, logabsdet) = slogdet(session, a)?;
+    let exponent = session.exp(&logabsdet)?;
+    session.mul(&sign, &exponent)
 }
 
-pub(crate) fn inv(a: &EagerTensor) -> Result<EagerTensor> {
+pub(crate) fn inv(session: &mut EagerSession<'_>, a: &EagerTensor) -> Result<EagerTensor> {
     ensure_min_rank("inv", a.shape().len(), 2)?;
-    let eye = eye_like(a, a.shape()[0])?;
-    solve(a, &eye)
+    let eye = eye_like(session, a, a.shape()[0])?;
+    session.solve(a, &eye)
 }
 
-pub(crate) fn lstsq(a: &EagerTensor, b: &EagerTensor) -> Result<EagerTensor> {
+pub(crate) fn lstsq(
+    session: &mut EagerSession<'_>,
+    a: &EagerTensor,
+    b: &EagerTensor,
+) -> Result<EagerTensor> {
     validate_lstsq(
         "lstsq",
         a.dtype(),
@@ -37,75 +49,54 @@ pub(crate) fn lstsq(a: &EagerTensor, b: &EagerTensor) -> Result<EagerTensor> {
     )?;
     // Least squares via thin QR: A = Q R (full column rank), so
     // argmin_x |A x - b| solves R x = Qᴴ b.
-    let (q, r) = qr(a)?;
-    let qh = q
-        .conj()?
-        .transpose(&matrix_transpose_perm(q.shape().len()))?;
-    let qh_b = matmul_preserve_trailing_batch(&qh, b)?;
-    triangular_solve(&r, &qh_b, true, false, false, false)
+    let (q, r) = session.qr(a)?;
+    let q_conj = session.conj(&q)?;
+    let qh = session.transpose(&q_conj, &matrix_transpose_perm(q.shape().len()))?;
+    let qh_b = session.dot_general(&qh, b, trailing_batch_dot_config(qh.shape().len()))?;
+    session.triangular_solve(&r, &qh_b, true, false, false, false)
 }
 
-pub(crate) fn eigvalsh(a: &EagerTensor) -> Result<EagerTensor> {
-    one_output(
-        apply_linalg_eager(
-            LinalgOp::EighVals {
-                derivative_eps: DEFAULT_DECOMPOSITION_DERIVATIVE_EPS,
-                driver: EighOptions::default().driver,
-            },
-            &[a],
-        )?,
-        "eigvalsh",
-    )
-}
-
-pub(crate) fn eigvals(a: &EagerTensor) -> Result<EagerTensor> {
-    one_output(
-        apply_linalg_eager(
-            LinalgOp::EigVals {
-                input_dtype: a.dtype(),
-            },
-            &[a],
-        )?,
-        "eigvals",
-    )
-}
-
-pub(crate) fn pinv(a: &EagerTensor) -> Result<EagerTensor> {
+pub(crate) fn pinv(session: &mut EagerSession<'_>, a: &EagerTensor) -> Result<EagerTensor> {
     ensure_float_or_complex("pinv", a.dtype())?;
     let max_dim = match (a.shape().first(), a.shape().get(1)) {
         (Some(&m), Some(&n)) => m.max(n),
         (Some(&m), None) => m,
         _ => 0,
     };
-    pinv_with_rtol(a, default_pinv_rtol(a.dtype(), max_dim))
+    pinv_with_rtol(session, a, default_pinv_rtol(a.dtype(), max_dim))
 }
 
-pub(crate) fn pinv_with_rtol(a: &EagerTensor, rtol: f64) -> Result<EagerTensor> {
+pub(crate) fn pinv_with_rtol(
+    session: &mut EagerSession<'_>,
+    a: &EagerTensor,
+    rtol: f64,
+) -> Result<EagerTensor> {
     ensure_float_or_complex("pinv_with_rtol", a.dtype())?;
-    let (u, s, vt) = svd(a)?;
-    let abs_s = s.abs()?;
-    let s_max = abs_s.reduce_max(Some(&[0]))?;
-    let threshold_scalar = scalar_real(&s, rtol.max(0.0))?;
-    let threshold = s_max.mul(&threshold_scalar)?;
-    let threshold = broadcast_batch_scalar_to_leading_axis(&threshold, s.shape())?;
-    let mask = abs_s
-        .compare(&threshold, CompareDir::Gt)?
-        .convert(s.dtype())?;
-    let ones = ones_like(&s)?;
-    let denom = s.add(&ones.add(&mask.neg()?)?)?;
-    let s_inv = mask.div(&denom)?;
+    let (u, s, vt) = session.svd(a)?;
+    let abs_s = session.abs(&s)?;
+    let s_max = session.reduce_max(&abs_s, Some(&[0]))?;
+    let threshold_scalar =
+        session.constant_from_host(scalar_real_tensor(s.dtype(), rtol.max(0.0))?)?;
+    let threshold = session.mul(&s_max, &threshold_scalar)?;
+    let threshold = broadcast_batch_scalar_to_leading_axis(session, &threshold, s.shape())?;
+    let compare = session.compare(&abs_s, &threshold, CompareDir::Gt)?;
+    let mask = session.convert(&compare, s.dtype())?;
+    let ones = ones_like(session, &s)?;
+    let neg_mask = session.neg(&mask)?;
+    let denominator_offset = session.add(&ones, &neg_mask)?;
+    let denom = session.add(&s, &denominator_offset)?;
+    let s_inv = session.div(&mask, &denom)?;
 
-    let v = vt
-        .conj()?
-        .transpose(&matrix_transpose_perm(vt.shape().len()))?;
-    let uh = u
-        .conj()?
-        .transpose(&matrix_transpose_perm(u.shape().len()))?;
-    let vs = scale_matrix_columns(&v, &s_inv)?;
-    matmul_preserve_trailing_batch(&vs, &uh)
+    let conjugated = session.conj(&vt)?;
+    let v = session.transpose(&conjugated, &matrix_transpose_perm(vt.shape().len()))?;
+    let conjugated = session.conj(&u)?;
+    let uh = session.transpose(&conjugated, &matrix_transpose_perm(u.shape().len()))?;
+    let vs = scale_matrix_columns(session, &v, &s_inv)?;
+    matmul_preserve_trailing_batch(session, &vs, &uh)
 }
 
 pub(crate) fn norm(
+    session: &mut EagerSession<'_>,
     a: &EagerTensor,
     ord: Option<f64>,
     dim: Option<&[usize]>,
@@ -122,28 +113,36 @@ pub(crate) fn norm(
     }
 
     let out = if can_square_without_abs(a.dtype(), axes.len(), ord) {
-        frobenius_norm(a, &axes)?
+        frobenius_norm(session, a, &axes)?
     } else {
         match axes.len() {
-            1 => vector_norm(a, axes[0], ord)?,
-            2 => matrix_norm(a, &axes, ord)?,
+            1 => vector_norm(session, a, axes[0], ord)?,
+            2 => matrix_norm(session, a, &axes, ord)?,
             _ => {
-                let abs = a.abs()?;
+                let abs = session.abs(a)?;
                 match ord {
-                    None => frobenius_norm(&abs, &axes)?,
-                    Some(p) if p == f64::INFINITY => abs.reduce_max(Some(&axes))?,
-                    Some(p) if p == f64::NEG_INFINITY => abs.reduce_min(Some(&axes))?,
-                    Some(0.0) => count_nonzero(&abs, &axes)?,
-                    Some(p) => p_norm(&abs, &axes, p)?,
+                    None => frobenius_norm(session, &abs, &axes)?,
+                    Some(p) if p == f64::INFINITY => session.reduce_max(&abs, Some(&axes))?,
+                    Some(p) if p == f64::NEG_INFINITY => session.reduce_min(&abs, Some(&axes))?,
+                    Some(0.0) => count_nonzero(session, &abs, &axes)?,
+                    Some(p) => p_norm(session, &abs, &axes, p)?,
                 }
             }
         }
     };
-    restore_keepdim(out, a.shape(), &axes, keepdim)
+    restore_keepdim(session, out, a.shape(), &axes, keepdim)
 }
 
-fn scalar_real(anchor: &EagerTensor, value: f64) -> Result<EagerTensor> {
-    let tensor = match anchor.dtype() {
+fn scalar_real(
+    session: &mut EagerSession<'_>,
+    anchor: &EagerTensor,
+    value: f64,
+) -> Result<EagerTensor> {
+    session.constant_from_host(scalar_real_tensor(anchor.dtype(), value)?)
+}
+
+fn scalar_real_tensor(dtype: DType, value: f64) -> Result<Tensor> {
+    let tensor = match dtype {
         DType::F64 => Tensor::from_vec_col_major(vec![], vec![value])?,
         DType::F32 => Tensor::from_vec_col_major(vec![], vec![value as f32])?,
         DType::I32 => Tensor::from_vec_col_major(vec![], vec![value.round() as i32])?,
@@ -162,7 +161,7 @@ fn scalar_real(anchor: &EagerTensor, value: f64) -> Result<EagerTensor> {
             ));
         }
     };
-    EagerTensor::from_tensor_in(tensor, anchor.runtime().clone())
+    Ok(tensor)
 }
 
 fn can_square_without_abs(dtype: DType, axes_len: usize, ord: Option<f64>) -> bool {
@@ -184,24 +183,36 @@ fn validate_axes(op: &'static str, rank: usize, axes: &[usize]) -> Result<()> {
         .map_err(Error::TensorRuntime)
 }
 
-fn ones_like(input: &EagerTensor) -> Result<EagerTensor> {
-    broadcast_scalar(scalar_real(input, 1.0)?, input.shape())
+fn ones_like(session: &mut EagerSession<'_>, input: &EagerTensor) -> Result<EagerTensor> {
+    let scalar = session.constant_from_host(scalar_real_tensor(input.dtype(), 1.0)?)?;
+    broadcast_scalar(session, &scalar, input.shape())
 }
 
-fn eye_like(anchor: &EagerTensor, size: usize) -> Result<EagerTensor> {
+fn eye_like(
+    session: &mut EagerSession<'_>,
+    anchor: &EagerTensor,
+    size: usize,
+) -> Result<EagerTensor> {
     let mut vector_shape = vec![size];
     vector_shape.extend_from_slice(&anchor.shape()[2..]);
-    broadcast_scalar(scalar_real(anchor, 1.0)?, &vector_shape)?.embed_diag(0, 1)
+    let scalar = session.constant_from_host(scalar_real_tensor(anchor.dtype(), 1.0)?)?;
+    let ones = session.broadcast_in_dim(&scalar, &vector_shape, &[])?;
+    session.embed_diag(&ones, 0, 1)
 }
 
-fn broadcast_scalar(input: EagerTensor, shape: &[usize]) -> Result<EagerTensor> {
+fn broadcast_scalar(
+    session: &mut EagerSession<'_>,
+    input: &EagerTensor,
+    shape: &[usize],
+) -> Result<EagerTensor> {
     if input.shape() == shape {
-        return Ok(input);
+        return Ok(input.clone());
     }
-    input.broadcast_in_dim(shape, &[])
+    session.broadcast_in_dim(input, shape, &[])
 }
 
 fn broadcast_batch_scalar_to_leading_axis(
+    session: &mut EagerSession<'_>,
     input: &EagerTensor,
     shape: &[usize],
 ) -> Result<EagerTensor> {
@@ -209,20 +220,25 @@ fn broadcast_batch_scalar_to_leading_axis(
         return Ok(input.clone());
     }
     let dims: Vec<usize> = (1..shape.len()).collect();
-    input.broadcast_in_dim(shape, &dims)
+    session.broadcast_in_dim(input, shape, &dims)
 }
 
-fn matmul_preserve_trailing_batch(lhs: &EagerTensor, rhs: &EagerTensor) -> Result<EagerTensor> {
-    let batch_dims: Vec<usize> = (2..lhs.shape().len()).collect();
-    lhs.dot_general(
-        rhs,
-        DotGeneralConfig {
-            lhs_contracting_dims: [1].as_slice().into(),
-            rhs_contracting_dims: [0].as_slice().into(),
-            lhs_batch_dims: batch_dims.clone().into(),
-            rhs_batch_dims: batch_dims.into(),
-        },
-    )
+fn matmul_preserve_trailing_batch(
+    session: &mut EagerSession<'_>,
+    lhs: &EagerTensor,
+    rhs: &EagerTensor,
+) -> Result<EagerTensor> {
+    session.dot_general(lhs, rhs, trailing_batch_dot_config(lhs.shape().len()))
+}
+
+fn trailing_batch_dot_config(rank: usize) -> DotGeneralConfig {
+    let batch_dims: Vec<usize> = (2..rank).collect();
+    DotGeneralConfig {
+        lhs_contracting_dims: [1].as_slice().into(),
+        rhs_contracting_dims: [0].as_slice().into(),
+        lhs_batch_dims: batch_dims.clone().into(),
+        rhs_batch_dims: batch_dims.into(),
+    }
 }
 
 fn matrix_transpose_perm(rank: usize) -> Vec<usize> {
@@ -231,11 +247,21 @@ fn matrix_transpose_perm(rank: usize) -> Vec<usize> {
     perm
 }
 
-fn frobenius_norm(abs: &EagerTensor, axes: &[usize]) -> Result<EagerTensor> {
-    abs.reduce_sum_squares(axes)?.sqrt()
+fn frobenius_norm(
+    session: &mut EagerSession<'_>,
+    abs: &EagerTensor,
+    axes: &[usize],
+) -> Result<EagerTensor> {
+    let squares = session.reduce_sum_squares(abs, axes)?;
+    session.sqrt(&squares)
 }
 
-fn p_norm(abs: &EagerTensor, axes: &[usize], p: f64) -> Result<EagerTensor> {
+fn p_norm(
+    session: &mut EagerSession<'_>,
+    abs: &EagerTensor,
+    axes: &[usize],
+    p: f64,
+) -> Result<EagerTensor> {
     if !p.is_finite() || p == 0.0 {
         return Err(Error::invalid_argument(
             "norm",
@@ -245,11 +271,13 @@ fn p_norm(abs: &EagerTensor, axes: &[usize], p: f64) -> Result<EagerTensor> {
         ));
     }
     if p == 2.0 {
-        return frobenius_norm(abs, axes);
+        return frobenius_norm(session, abs, axes);
     }
-    abs.pow(&scalar_real(abs, p)?)?
-        .reduce_sum(Some(axes))?
-        .pow(&scalar_real(abs, 1.0 / p)?)
+    let order = scalar_real(session, abs, p)?;
+    let powered = session.pow(abs, &order)?;
+    let summed = session.reduce_sum(&powered, Some(axes))?;
+    let inverse_order = scalar_real(session, abs, 1.0 / p)?;
+    session.pow(&summed, &inverse_order)
 }
 
 fn default_pinv_rtol(dtype: DType, max_dim: usize) -> f64 {
@@ -264,76 +292,106 @@ fn default_pinv_rtol(dtype: DType, max_dim: usize) -> f64 {
     eps * max_dim as f64
 }
 
-fn vector_norm(a: &EagerTensor, axis: usize, ord: Option<f64>) -> Result<EagerTensor> {
-    let abs = a.abs()?;
+fn vector_norm(
+    session: &mut EagerSession<'_>,
+    a: &EagerTensor,
+    axis: usize,
+    ord: Option<f64>,
+) -> Result<EagerTensor> {
+    let abs = session.abs(a)?;
     match ord {
-        None => frobenius_norm(&abs, &[axis]),
-        Some(0.0) => count_nonzero(&abs, &[axis]),
-        Some(p) if p == f64::INFINITY => abs.reduce_max(Some(&[axis])),
-        Some(p) if p == f64::NEG_INFINITY => abs.reduce_min(Some(&[axis])),
-        Some(p) => p_norm(&abs, &[axis], p),
+        None => frobenius_norm(session, &abs, &[axis]),
+        Some(0.0) => count_nonzero(session, &abs, &[axis]),
+        Some(p) if p == f64::INFINITY => session.reduce_max(&abs, Some(&[axis])),
+        Some(p) if p == f64::NEG_INFINITY => session.reduce_min(&abs, Some(&[axis])),
+        Some(p) => p_norm(session, &abs, &[axis], p),
     }
 }
 
-fn matrix_norm(a: &EagerTensor, axes: &[usize], ord: Option<f64>) -> Result<EagerTensor> {
-    let matrix = move_axes_to_front(a, axes)?;
+fn matrix_norm(
+    session: &mut EagerSession<'_>,
+    a: &EagerTensor,
+    axes: &[usize],
+    ord: Option<f64>,
+) -> Result<EagerTensor> {
+    let matrix = move_axes_to_front(session, a, axes)?;
     if matches!(ord, Some(2.0) | Some(-2.0)) {
-        let singular_values = svd(&matrix)?.1.abs()?;
+        let singular_values = session.svd(&matrix)?.1;
+        let singular_values = session.abs(&singular_values)?;
         return if ord == Some(2.0) {
-            singular_values.reduce_max(Some(&[0]))
+            session.reduce_max(&singular_values, Some(&[0]))
         } else {
-            singular_values.reduce_min(Some(&[0]))
+            session.reduce_min(&singular_values, Some(&[0]))
         };
     }
 
-    let abs = matrix.abs()?;
+    let abs = session.abs(&matrix)?;
     match ord {
-        None => frobenius_norm(&abs, &[0, 1]),
-        Some(p) if p == f64::INFINITY => matrix_row_sum_norm(&abs, true),
-        Some(p) if p == f64::NEG_INFINITY => matrix_row_sum_norm(&abs, false),
-        Some(1.0) => matrix_col_sum_norm(&abs, true),
-        Some(-1.0) => matrix_col_sum_norm(&abs, false),
-        Some(0.0) => count_nonzero(&abs, &[0, 1]),
-        Some(p) => p_norm(&abs, &[0, 1], p),
+        None => frobenius_norm(session, &abs, &[0, 1]),
+        Some(p) if p == f64::INFINITY => matrix_row_sum_norm(session, &abs, true),
+        Some(p) if p == f64::NEG_INFINITY => matrix_row_sum_norm(session, &abs, false),
+        Some(1.0) => matrix_col_sum_norm(session, &abs, true),
+        Some(-1.0) => matrix_col_sum_norm(session, &abs, false),
+        Some(0.0) => count_nonzero(session, &abs, &[0, 1]),
+        Some(p) => p_norm(session, &abs, &[0, 1], p),
     }
 }
 
-fn scale_matrix_columns(matrix: &EagerTensor, scale: &EagerTensor) -> Result<EagerTensor> {
+fn scale_matrix_columns(
+    session: &mut EagerSession<'_>,
+    matrix: &EagerTensor,
+    scale: &EagerTensor,
+) -> Result<EagerTensor> {
     let mut scale_shape = vec![1, scale.shape()[0]];
     scale_shape.extend_from_slice(&matrix.shape()[2..]);
     let dims: Vec<usize> = (0..matrix.shape().len()).collect();
-    matrix.mul(
-        &scale
-            .reshape(&scale_shape)?
-            .broadcast_in_dim(matrix.shape(), &dims)?,
-    )
+    let reshaped = session.reshape(scale, &scale_shape)?;
+    let broadcast = session.broadcast_in_dim(&reshaped, matrix.shape(), &dims)?;
+    session.mul(matrix, &broadcast)
 }
 
-fn count_nonzero(abs: &EagerTensor, axes: &[usize]) -> Result<EagerTensor> {
-    abs.compare(&scalar_real(abs, 0.0)?, CompareDir::Gt)?
-        .convert(abs.dtype())?
-        .reduce_sum(Some(axes))
+fn count_nonzero(
+    session: &mut EagerSession<'_>,
+    abs: &EagerTensor,
+    axes: &[usize],
+) -> Result<EagerTensor> {
+    let zero = scalar_real(session, abs, 0.0)?;
+    let compared = session.compare(abs, &zero, CompareDir::Gt)?;
+    let converted = session.convert(&compared, abs.dtype())?;
+    session.reduce_sum(&converted, Some(axes))
 }
 
-fn matrix_row_sum_norm(abs: &EagerTensor, take_max: bool) -> Result<EagerTensor> {
-    let row_sums = abs.reduce_sum(Some(&[1]))?;
+fn matrix_row_sum_norm(
+    session: &mut EagerSession<'_>,
+    abs: &EagerTensor,
+    take_max: bool,
+) -> Result<EagerTensor> {
+    let row_sums = session.reduce_sum(abs, Some(&[1]))?;
     if take_max {
-        row_sums.reduce_max(Some(&[0]))
+        session.reduce_max(&row_sums, Some(&[0]))
     } else {
-        row_sums.reduce_min(Some(&[0]))
+        session.reduce_min(&row_sums, Some(&[0]))
     }
 }
 
-fn matrix_col_sum_norm(abs: &EagerTensor, take_max: bool) -> Result<EagerTensor> {
-    let col_sums = abs.reduce_sum(Some(&[0]))?;
+fn matrix_col_sum_norm(
+    session: &mut EagerSession<'_>,
+    abs: &EagerTensor,
+    take_max: bool,
+) -> Result<EagerTensor> {
+    let col_sums = session.reduce_sum(abs, Some(&[0]))?;
     if take_max {
-        col_sums.reduce_max(Some(&[0]))
+        session.reduce_max(&col_sums, Some(&[0]))
     } else {
-        col_sums.reduce_min(Some(&[0]))
+        session.reduce_min(&col_sums, Some(&[0]))
     }
 }
 
-fn move_axes_to_front(tensor: &EagerTensor, axes: &[usize]) -> Result<EagerTensor> {
+fn move_axes_to_front(
+    session: &mut EagerSession<'_>,
+    tensor: &EagerTensor,
+    axes: &[usize],
+) -> Result<EagerTensor> {
     if axes.iter().enumerate().all(|(index, &axis)| index == axis) {
         return Ok(tensor.clone());
     }
@@ -348,10 +406,11 @@ fn move_axes_to_front(tensor: &EagerTensor, axes: &[usize]) -> Result<EagerTenso
             perm.push(axis);
         }
     }
-    tensor.transpose(&perm)
+    session.transpose(tensor, &perm)
 }
 
 fn restore_keepdim(
+    session: &mut EagerSession<'_>,
     reduced: EagerTensor,
     original_shape: &[usize],
     axes: &[usize],
@@ -364,5 +423,5 @@ fn restore_keepdim(
     for &axis in axes {
         kept_shape[axis] = 1;
     }
-    reduced.reshape(&kept_shape)
+    session.reshape(&reduced, &kept_shape)
 }

@@ -28,8 +28,15 @@ fn test_f32_gpu_fusion_chain_e2e() {
     let a = EagerTensor::from_tensor_in(a_device, ctx.clone()).unwrap();
     let b = EagerTensor::from_tensor_in(b_device, ctx.clone()).unwrap();
     let c = EagerTensor::from_tensor_in(c_device, ctx.clone()).unwrap();
-    let sum = a.add(&b).unwrap();
-    let result = sum.mul(&c).unwrap().to_tensor().unwrap();
+    let result = ctx
+        .with_eager_session(|s| {
+            let sum = s.add(&a, &b)?;
+            s.mul(&sum, &c)
+        })
+        .unwrap()
+        .unwrap()
+        .to_tensor()
+        .unwrap();
 
     let result = ctx
         .with_execution_session(|session| {

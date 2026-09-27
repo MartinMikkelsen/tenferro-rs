@@ -1,5 +1,5 @@
 // Run with: cargo test --features cuda -- --ignored
-use tenferro_tensor::{DType, TensorRead};
+use tenferro_tensor::{DType, TensorRead, TensorView};
 
 use super::{
     assert_cuda_unsupported_dtype, assert_tensor_close, cpu_backend, download, gpu_backend,
@@ -169,6 +169,17 @@ fn test_cubecl_sum_squares_matches_cpu_for_multi_axis_and_empty_axes() {
                 })
                 .unwrap();
             assert_tensor_close(&download(&gpu, &gpu_output), &expected, 1e-5);
+            let gpu_view = match gpu_input.dtype() {
+                DType::F32 => TensorView::F32(gpu_input.as_typed::<f32>().unwrap().as_view()),
+                DType::F64 => TensorView::F64(gpu_input.as_typed::<f64>().unwrap().as_view()),
+                _ => unreachable!("sum-of-squares test uses float inputs"),
+            };
+            let view_output = gpu
+                .with_backend_session(|session| {
+                    session.reduce_sum_squares_read(TensorRead::from_view(gpu_view), axes)
+                })
+                .unwrap();
+            assert_tensor_close(&download(&gpu, &view_output), &expected, 1e-5);
         }
     }
 

@@ -4,7 +4,7 @@ use std::sync::Arc;
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use tenferro_ad::{AdContext, EagerRuntime, EagerTensor, Tensor};
 use tenferro_cpu::CpuBackend;
-use tenferro_linalg::EagerTensorLinalgExt;
+use tenferro_linalg::{EagerSessionLinalgExt, EagerTensorLinalgExt};
 
 const DEFAULT_SIZES: &[usize] = &[8, 16];
 
@@ -113,8 +113,9 @@ fn triangular_solve_fixture(n: usize, threads: usize) -> Fixture {
     let ctx = ad_ctx(threads);
     let matrix = variable(&ctx, vec![n, n], upper_matrix(n));
     let rhs = eager(&ctx, vec![n, 2], dense_matrix(n, 3)[0..(n * 2)].to_vec());
-    let solution = matrix
-        .triangular_solve(&rhs, true, false, false, false)
+    let solution = ctx
+        .with_eager_session(|s| s.triangular_solve(&matrix, &rhs, true, false, false, false))
+        .unwrap()
         .unwrap();
     let loss = reduce_all(&solution);
     Fixture {
@@ -127,7 +128,7 @@ fn triangular_solve_fixture(n: usize, threads: usize) -> Fixture {
 fn svd_values_fixture(n: usize, threads: usize) -> Fixture {
     let ctx = ad_ctx(threads);
     let matrix = variable(&ctx, vec![n, n], dense_matrix(n, 5));
-    let (_u, singular_values, _vt) = matrix.svd().unwrap();
+    let (_u, singular_values, _vt) = ctx.with_eager_session(|s| s.svd(&matrix)).unwrap().unwrap();
     let loss = singular_values.reduce_sum(Some(&[0])).unwrap();
     Fixture {
         ctx,

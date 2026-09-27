@@ -18,7 +18,7 @@ use std::time::Duration;
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use tenferro_ad::{EagerRuntime, EagerTensor};
 use tenferro_cpu::CpuBackend;
-use tenferro_linalg::EagerTensorLinalgExt;
+use tenferro_linalg::{EagerSessionLinalgExt, EagerTensorLinalgExt};
 use tenferro_tensor::Tensor;
 
 fn runtime() -> Arc<EagerRuntime> {
@@ -76,7 +76,10 @@ fn bench_group(c: &mut Criterion, tracked: bool, label: &str) {
         let b = mat(&rt, tracked);
         group.bench_function(BenchmarkId::new("matmul_2x2", "f64"), |bench| {
             bench.iter(|| {
-                let out = black_box(&a).matmul(black_box(&b)).expect("matmul");
+                let out = rt
+                    .with_eager_session(|session| session.matmul(black_box(&a), black_box(&b)))
+                    .expect("borrow eager session")
+                    .expect("matmul");
                 consume(out);
             });
         });
@@ -99,7 +102,10 @@ fn bench_group(c: &mut Criterion, tracked: bool, label: &str) {
         let a = leaf(&rt, tracked, mat2(1.0, 0.0, 0.0, 2.0));
         group.bench_function(BenchmarkId::new("svd_2x2", "f64"), |bench| {
             bench.iter(|| {
-                let (u, _s, _vt) = black_box(&a).svd().expect("svd");
+                let (u, _s, _vt) = rt
+                    .with_eager_session(|session| session.svd(black_box(&a)))
+                    .expect("borrow eager session")
+                    .expect("svd");
                 consume(u);
             });
         });
@@ -110,7 +116,10 @@ fn bench_group(c: &mut Criterion, tracked: bool, label: &str) {
         let a = leaf(&rt, tracked, mat2(4.0, 1.0, 1.0, 3.0));
         group.bench_function(BenchmarkId::new("eigh_2x2", "f64"), |bench| {
             bench.iter(|| {
-                let (w, _v) = black_box(&a).eigh().expect("eigh");
+                let (w, _v) = rt
+                    .with_eager_session(|session| session.eigh(black_box(&a)))
+                    .expect("borrow eager session")
+                    .expect("eigh");
                 consume(w);
             });
         });

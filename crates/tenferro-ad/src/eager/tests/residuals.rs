@@ -39,8 +39,20 @@ fn exp_tanh_reuse_saved_outputs_with_dropped_handles_and_correct_higher_derivati
                 Arc::clone(&ctx),
             )
             .unwrap();
-            let y = if tanh { x.tanh() } else { x.exp() }.unwrap();
-            let loss = y.reduce_sum(Some(&[0])).unwrap();
+            let y = ctx
+                .with_eager_session(|session| {
+                    if tanh {
+                        session.tanh(&x)
+                    } else {
+                        session.exp(&x)
+                    }
+                })
+                .unwrap()
+                .unwrap();
+            let loss = ctx
+                .with_eager_session(|session| session.reduce_sum(&y, Some(&[0])))
+                .unwrap()
+                .unwrap();
             let saved = loss.trace.as_ref().unwrap().collect();
             assert_eq!(saved.len(), 1);
             let weak = Arc::downgrade(&saved[0].value);
@@ -71,9 +83,11 @@ fn exp_tanh_reuse_saved_outputs_with_dropped_handles_and_correct_higher_derivati
             // Only inspect first-order execution plans; higher-order programs
             // retain the complete mathematical producer graph deliberately.
             assert_no_live_transcendental(&ctx);
-            let second = ctx
-                .grad(&first.reduce_sum(Some(&[0])).unwrap(), &x)
+            let first_sum = ctx
+                .with_eager_session(|session| session.reduce_sum(&first, Some(&[0])))
+                .unwrap()
                 .unwrap();
+            let second = ctx.grad(&first_sum, &x).unwrap();
             for (actual, &x) in second
                 .value()
                 .unwrap()
@@ -90,6 +104,7 @@ fn exp_tanh_reuse_saved_outputs_with_dropped_handles_and_correct_higher_derivati
                 assert!((actual - expected).abs() < 1e-11, "{actual} != {expected}");
             }
             drop(second);
+            drop(first_sum);
             drop(first);
             drop(loss);
             assert!(
@@ -110,7 +125,13 @@ fn cached_execution_rebinds_residuals_for_each_forward() {
             Arc::clone(&ctx),
         )
         .unwrap();
-        let loss = x.exp().unwrap().reduce_sum(Some(&[0])).unwrap();
+        let loss = ctx
+            .with_eager_session(|session| {
+                let y = session.exp(&x)?;
+                session.reduce_sum(&y, Some(&[0]))
+            })
+            .unwrap()
+            .unwrap();
         let gradient = ctx.grad(&loss, &x).unwrap();
         assert!(
             (gradient.value().unwrap().as_slice::<f64>().unwrap()[0] - value.exp()).abs() < 1e-12
@@ -130,11 +151,17 @@ fn intermediate_inputs_are_retained_without_retaining_all_outputs() {
         Arc::clone(&ctx),
     )
     .unwrap();
-    let square = x.mul(&x).unwrap();
+    let square = ctx.with_eager_session(|s| s.mul(&x, &x)).unwrap().unwrap();
     assert!(square.trace.as_ref().unwrap().collect().is_empty());
-    let fourth = square.mul(&square).unwrap();
+    let fourth = ctx
+        .with_eager_session(|s| s.mul(&square, &square))
+        .unwrap()
+        .unwrap();
     assert_eq!(fourth.trace.as_ref().unwrap().collect().len(), 1);
-    let loss = fourth.reduce_sum(Some(&[0])).unwrap();
+    let loss = ctx
+        .with_eager_session(|session| session.reduce_sum(&fourth, Some(&[0])))
+        .unwrap()
+        .unwrap();
     drop(square);
     drop(fourth);
     let gradient = ctx.grad(&loss, &x).unwrap();

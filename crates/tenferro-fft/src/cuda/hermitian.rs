@@ -1,4 +1,4 @@
-use tenferro_tensor::{DType, SliceConfig, Tensor, TensorElementwise, TensorIndexing};
+use tenferro_tensor::{DType, SliceConfig, Tensor, TensorElementwise, TensorIndexing, TensorRead};
 
 const OP: &str = "cuda_fft";
 
@@ -69,7 +69,7 @@ where
         },
     )?;
     let mirrored = <S as TensorIndexing>::reverse(session, &mirrored, &[last])?;
-    let mirrored = <S as TensorElementwise>::conj(session, &mirrored)?;
+    let mirrored = session.conj_read(TensorRead::from_tensor(&mirrored))?;
     let output = <S as TensorIndexing>::concatenate(session, &[&one_sided, &mirrored], last)?;
 
     let expected_len = if mirror_end == 0 {

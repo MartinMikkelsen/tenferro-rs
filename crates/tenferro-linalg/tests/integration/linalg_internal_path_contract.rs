@@ -73,22 +73,15 @@ fn matrix_norm_uses_singular_values_only_path() {
 #[test]
 fn norm_fro_and_p2_norm_use_fused_backend_hook_without_generic_pow() {
     let eager_source = crate_source("src/eager_composites.rs");
-    let eager_frobenius = source_section(
-        &eager_source,
-        "fn frobenius_norm(abs: &EagerTensor",
-        "fn p_norm(abs: &EagerTensor",
-    );
-    let eager_p_norm = source_section(
-        &eager_source,
-        "fn p_norm(abs: &EagerTensor",
-        "fn default_pinv_rtol",
-    );
+    let eager_frobenius = source_section(&eager_source, "fn frobenius_norm(", "fn p_norm(");
+    let eager_p_norm = source_section(&eager_source, "fn p_norm(", "fn default_pinv_rtol");
     assert!(
         eager_frobenius.contains(".reduce_sum_squares(") && !eager_frobenius.contains(".pow("),
         "eager Frobenius norm should use the fused backend hook, not generic pow"
     );
     assert!(
-        eager_p_norm.contains("p == 2.0") && eager_p_norm.contains("frobenius_norm(abs, axes)"),
+        eager_p_norm.contains("p == 2.0")
+            && eager_p_norm.contains("frobenius_norm(session, abs, axes)"),
         "eager p-norm should special-case p=2.0 through the Frobenius mul path"
     );
 
@@ -138,14 +131,10 @@ fn norm_fro_and_p2_norm_use_fused_backend_hook_without_generic_pow() {
 #[test]
 fn real_sum_of_squares_norm_skips_abs_materialization_before_square() {
     let eager_source = crate_source("src/eager_composites.rs");
-    let eager_norm = source_section(
-        &eager_source,
-        "pub(crate) fn norm",
-        "fn scalar_real(anchor: &EagerTensor",
-    );
+    let eager_norm = source_section(&eager_source, "pub(crate) fn norm", "fn scalar_real(");
     assert!(
         eager_norm.contains("can_square_without_abs(a.dtype(), axes.len(), ord)")
-            && eager_norm.contains("frobenius_norm(a, &axes)"),
+            && eager_norm.contains("frobenius_norm(session, a, &axes)"),
         "eager real Frobenius and p=2 norms should dispatch to the square path before abs"
     );
 
@@ -337,16 +326,21 @@ fn concrete_values_only_surfaces_use_backend_values_only_hooks() {
 
 #[test]
 fn eager_values_only_composites_emit_values_only_ops() {
-    let source = crate_source("src/eager_composites.rs");
-    let values_only = source_section(&source, "pub(crate) fn eigvalsh", "pub(crate) fn pinv");
+    let source = crate_source("src/eager_ext.rs");
+    let values_only = source_section(
+        &source,
+        "    fn eigvalsh(&mut self, input: &EagerTensor) -> Result<EagerTensor> {",
+        "pub(crate) fn apply_linalg_eager_in_session",
+    );
 
     assert!(
         values_only.contains("LinalgOp::EighVals") && values_only.contains("LinalgOp::EigVals"),
         "eager eigvalsh/eigvals should emit the values-only EighVals/EigVals ops"
     );
     assert!(
-        values_only.contains("one_output(") && values_only.contains("apply_linalg_eager("),
-        "eager eigvalsh/eigvals should use the apply_linalg_eager + one_output pattern"
+        values_only.contains("one_output(")
+            && values_only.contains("apply_linalg_eager_in_session("),
+        "eager eigvalsh/eigvals should use the borrowed-session values-only extension route"
     );
     assert!(
         !values_only.contains("eigh(a)?.0") && !values_only.contains("eig(a)?.0"),

@@ -2164,12 +2164,8 @@ pub(super) fn reduce_sum_squares_read(
         PrimitiveOpKind::ReduceSumSquares,
         op_descriptor::GpuLaunchKind::Reduction,
     )?;
-    let Some(input) = input.as_tensor() else {
-        return Err(crate::Error::unsupported(
-            op,
-            "CUDA sum-of-squares requires a resident tensor",
-        ));
-    };
+    let input = backend.read_input(input)?;
+    let input = input.as_tensor();
     // Dispatch on the tag and recover the typed tensor, which is what `as_typed` exists for.
     if axes.is_empty() {
         return match input.dtype() {

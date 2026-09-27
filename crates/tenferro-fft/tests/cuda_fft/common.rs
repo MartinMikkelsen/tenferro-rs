@@ -1,5 +1,5 @@
 use num_complex::{Complex32, Complex64};
-use tenferro_cpu::{with_cpu_exec_session, CpuBackend};
+use tenferro_cpu::CpuBackend;
 use tenferro_fft::{FftExecutor, FftNorm, TensorFftExt, TracedTensorFftExt};
 use tenferro_gpu::cuda::{cuda_runtime_engine_registration, CudaBackend};
 use tenferro_runtime::{DType, EngineId, GraphCompiler, Runtime, Tensor, TracedTensor};

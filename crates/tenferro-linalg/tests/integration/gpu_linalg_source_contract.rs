@@ -992,9 +992,10 @@ fn gpu_validate_nonsingular_synchronizes_before_host_download() {
     let source = linalg_source();
     let validate = source_section(
         &source,
-        "let min_val = backend.reduce_min(&flat, &[0])?;",
-        "let is_singular = match &host_min",
+        "fn validate_nonsingular_gpu",
+        "fn diagonal_magnitude",
     );
+    assert!(validate.contains("backend.reduce_min_read(TensorRead::from_tensor(&flat), &[0])?"));
 
     assert_before(
         validate,
@@ -1022,7 +1023,9 @@ fn gpu_validate_nonsingular_uses_complex_magnitude_and_tolerance() {
         "GPU singularity validation must not cast complex diagonals to real and discard imaginary parts"
     );
     assert!(
-        validate.contains("let max_val = backend.reduce_max(&flat, &[0])?;"),
+        validate.contains(
+            "let max_val = backend.reduce_max_read(TensorRead::from_tensor(&flat), &[0])?;"
+        ),
         "GPU singularity validation should compute max diagonal magnitude for a scaled tolerance"
     );
     assert!(

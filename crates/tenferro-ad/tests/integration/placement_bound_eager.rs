@@ -292,7 +292,7 @@ fn same_runtime_eager_reentry_panics_without_deadlock_and_then_recovers() {
 
     let panicked = catch_unwind(AssertUnwindSafe(|| {
         let _ = cpu.with_eager_session::<()>(|_| {
-            let _ = eager.add(&eager).unwrap();
+            let _ = runtime.with_eager_session(|session| session.add(&eager, &eager));
             Ok(())
         });
     }));

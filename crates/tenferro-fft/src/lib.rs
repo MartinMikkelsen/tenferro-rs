@@ -16,8 +16,9 @@
 //! domain-bound CPU RustFFT backend. Backend choice remains explicit, while
 //! matching managed tensors can be used without an intervening download.
 //! Concrete non-AD execution uses
-//! [`TensorFftExt`] and [`TensorReadFftExt`]. Eager execution uses
-//! `EagerTensorFftExt` when `autodiff` is enabled, and traced graph
+//! [`TensorFftExt`] and [`TensorReadFftExt`]. Eager FFTs use
+//! `EagerSessionFftExt` on a borrowed session when `autodiff` is enabled;
+//! consuming in-place transforms retain `EagerTensorFftExt`. Traced graph
 //! construction uses [`TracedTensorFftExt`].
 //!
 //! # Examples
@@ -153,7 +154,7 @@ pub use cache::{
     fft_plan_cache_selector, FftPlanCache, DEFAULT_FFT_PLAN_CACHE_CAPACITY, FFT_PLAN_CACHE_NAME,
 };
 #[cfg(feature = "autodiff")]
-pub use eager_ext::EagerTensorFftExt;
+pub use eager_ext::{EagerSessionFftExt, EagerTensorFftExt};
 #[cfg(feature = "autodiff")]
 pub use eager_in_place::EagerFftInPlaceError;
 pub use spec::{FftNorm, FftOperation, FftPlanSpec};

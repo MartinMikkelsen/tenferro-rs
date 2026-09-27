@@ -76,12 +76,18 @@ loss functions need:
 
 | Category | `EagerTensor` methods |
 | --- | --- |
-| Elementwise | `add`, `mul`, `neg`, `exp` |
-| Reduction | `reduce_sum`, `reduce_prod`, `reduce_max`, `reduce_min` |
-| Matrix products | `matmul`, `dot_general`, `dot_general_with_conj` |
-| Shape/layout | `reshape`, `transpose`, `broadcast_in_dim`, `slice`, `pad`, `reverse`, `concatenate` |
-| Indexing/diagonal | `gather`, `scatter`, `dynamic_slice`, `extract_diag`, `embed_diag`, `tril`, `triu` |
+| Elementwise | `add`, `mul`, `neg` |
+| Reduction | `reduce_sum`, `reduce_max`, `reduce_min` |
+| Matrix products | `dot_general` |
+| Shape/layout | `reshape`, `transpose`, `broadcast_in_dim` |
 | DType | checked `convert`, explicit lossy `cast` |
+
+For operations that have moved to an explicit boundary, borrow a runtime-bound
+session with `runtime.with_eager_session(|session| { ... })`. This includes
+`matmul`, `dot_general_with_conj`, `scatter`, `sign`, `exp`, `log`, `reduce_prod`,
+`slice`, `dynamic_slice`, `pad`, `reverse`, `tril`, `triu`, `concatenate`,
+`stack`, `gather`, and the borrowed index-selection/diagonal routes. Do not call a remaining implicit
+`EagerTensor` operation while holding a borrowed session.
 
 Operation-family crates add eager extension traits. For example,
 `tenferro_linalg::EagerTensorLinalgExt` owns linalg eager methods and
@@ -298,18 +304,22 @@ let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
 let x = EagerTensor::requires_grad_in(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap(), ctx.clone()).unwrap();
 let y = EagerTensor::requires_grad_in(Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]).unwrap(), ctx.clone()).unwrap();
 
-let loss = x.mul(&y).unwrap().reduce_sum(Some(&[0])).unwrap();
+let make_loss = || ctx.with_eager_session(|s| {
+    let product = s.mul(&x, &y)?;
+    s.reduce_sum(&product, Some(&[0]))
+}).unwrap().unwrap();
+let loss = make_loss();
 loss.backward().unwrap();
 assert_eq!(x.grad().unwrap().unwrap().as_slice::<f64>().unwrap(), &[3.0, 4.0]);
 
-let loss = x.mul(&y).unwrap().reduce_sum(Some(&[0])).unwrap();
+let loss = make_loss();
 loss.backward().unwrap();
 assert_eq!(x.grad().unwrap().unwrap().as_slice::<f64>().unwrap(), &[6.0, 8.0]);
 
 x.clear_grad().unwrap();
 assert!(x.grad().unwrap().is_none());
 
-let loss = x.mul(&y).unwrap().reduce_sum(Some(&[0])).unwrap();
+let loss = make_loss();
 loss.backward().unwrap();
 assert_eq!(x.grad().unwrap().unwrap().as_slice::<f64>().unwrap(), &[3.0, 4.0]);
 
@@ -340,7 +350,7 @@ let seed = EagerTensor::from_tensor_in(
     ctx,
 ).unwrap();
 
-let y = x.mul(&x).unwrap();
+let y = x.runtime().with_eager_session(|s| s.mul(&x, &x))??;
 y.backward_with(&seed).unwrap();
 assert_eq!(x.grad().unwrap().unwrap().as_slice::<f64>().unwrap(), &[4.0, 12.0]);
 Ok(())
@@ -361,7 +371,7 @@ let x = EagerTensor::requires_grad_in(
     Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0]).unwrap(),
     ctx.clone(),
 ).unwrap();
-let y = x.mul(&x).unwrap();
+let y = ctx.with_eager_session(|s| s.mul(&x, &x))??;
 let seed = EagerTensor::from_tensor_in(
     Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 1.0]).unwrap(),
     ctx.clone(),
@@ -402,7 +412,10 @@ let tangent = EagerTensor::from_tensor_in(
     ctx.clone(),
 ).unwrap();
 
-let loss = x.mul(&x).unwrap().mul(&x).unwrap();
+let loss = ctx.with_eager_session(|s| {
+    let square = s.mul(&x, &x)?;
+    s.mul(&square, &x)
+})??;
 let grad = ctx.grad(&loss, &x).unwrap();
 let hvp = ctx.jvp(&grad, &x, &tangent).unwrap();
 
@@ -429,10 +442,10 @@ let x = EagerTensor::requires_grad_in(
     Tensor::from_vec_col_major(vec![1], vec![3.0_f64]).unwrap(),
     ctx.clone(),
 ).unwrap();
-let y = {
+let y = ctx.with_eager_session(|s| {
     let _guard = ctx.no_grad();
-    x.mul(&x).unwrap()
-};
+    s.mul(&x, &x)
+})??;
 assert!(!y.tracks_grad());
 Ok(())
 }
@@ -457,11 +470,14 @@ let x = EagerTensor::requires_grad_in(
     ctx.clone(),
 ).unwrap();
 
-let y = a.matmul(&x).unwrap();
+let y = ctx.with_eager_session(|session| session.matmul(&a, &x))??;
 let y_tensor = y.to_tensor().unwrap();
 assert_eq!(y_tensor.as_slice::<f64>().unwrap(), &[23.0, 34.0]);
 
-let loss = y.mul(&y).unwrap().reduce_sum(Some(&[0, 1])).unwrap();
+let loss = ctx.with_eager_session(|s| {
+    let squared = s.mul(&y, &y)?;
+    s.reduce_sum(&squared, Some(&[0, 1]))
+})??;
 let loss_tensor = loss.to_tensor().unwrap();
 assert_eq!(loss_tensor.as_slice::<f64>().unwrap(), &[1685.0]);
 

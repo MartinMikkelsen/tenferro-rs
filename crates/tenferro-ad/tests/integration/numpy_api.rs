@@ -196,7 +196,11 @@ fn eager_add_uses_numpy_broadcasting_for_rank_padding_and_singletons() {
     )
     .unwrap();
 
-    let out = lhs.add(&rhs).unwrap();
+    let out = lhs
+        .runtime()
+        .with_eager_session(|s| s.add(&lhs, &rhs))
+        .unwrap()
+        .unwrap();
 
     assert_eq!(out.shape(), &[3, 4]);
     assert_eq!(
@@ -210,7 +214,7 @@ fn eager_add_uses_numpy_broadcasting_for_rank_padding_and_singletons() {
 }
 
 #[test]
-fn eager_tensor_methods_cover_core_elementwise_surface() {
+fn eager_session_methods_cover_core_elementwise_surface() {
     let ctx = EagerRuntime::new().unwrap();
     let x = EagerTensor::from_tensor_in(
         Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 4.0]).unwrap(),
@@ -219,32 +223,36 @@ fn eager_tensor_methods_cover_core_elementwise_surface() {
     .unwrap();
     let y = EagerTensor::from_tensor_in(
         Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 8.0]).unwrap(),
-        ctx,
+        ctx.clone(),
     )
     .unwrap();
-    let cond = x.compare(&y, CompareDir::Gt).unwrap();
-
-    let _ = x.sub(&y).unwrap();
-    let _ = x.mul(&y).unwrap();
-    let _ = x.div(&y).unwrap();
-    let _ = x.pow(&y).unwrap();
-    let _ = x.maximum(&y).unwrap();
-    let _ = x.minimum(&y).unwrap();
-    let _ = EagerTensor::where_select(&cond, &x, &y).unwrap();
-    let _ = x.clamp(&y, &x).unwrap();
-    let _ = x.neg().unwrap();
-    let _ = x.abs().unwrap();
-    let _ = x.sign().unwrap();
-    let _ = x.conj().unwrap();
-    let _ = x.exp().unwrap();
-    let _ = x.log().unwrap();
-    let _ = x.sin().unwrap();
-    let _ = x.cos().unwrap();
-    let _ = x.tanh().unwrap();
-    let _ = x.sqrt().unwrap();
-    let _ = x.rsqrt().unwrap();
-    let _ = x.expm1().unwrap();
-    let _ = x.log1p().unwrap();
+    ctx.with_eager_session(|session| {
+        let cond = session.compare(&x, &y, CompareDir::Gt)?;
+        let _ = session.sub(&x, &y)?;
+        let _ = session.mul(&x, &y)?;
+        let _ = session.div(&x, &y)?;
+        let _ = session.pow(&x, &y)?;
+        let _ = session.maximum(&x, &y)?;
+        let _ = session.minimum(&x, &y)?;
+        let _ = session.where_select(&cond, &x, &y)?;
+        let _ = session.clamp(&x, &y, &x)?;
+        let _ = session.neg(&x)?;
+        let _ = session.abs(&x)?;
+        let _ = session.sign(&x)?;
+        let _ = session.conj(&x)?;
+        let _ = session.exp(&x)?;
+        let _ = session.log(&x)?;
+        let _ = session.sin(&x)?;
+        let _ = session.cos(&x)?;
+        let _ = session.tanh(&x)?;
+        let _ = session.sqrt(&x)?;
+        let _ = session.rsqrt(&x)?;
+        let _ = session.expm1(&x)?;
+        let _ = session.log1p(&x)?;
+        Ok::<(), tenferro_ad::Error>(())
+    })
+    .unwrap()
+    .unwrap();
 }
 
 #[test]
@@ -256,7 +264,10 @@ fn eager_tensor_methods_cover_conversion_matmul_and_extension_standard_op() {
     )
     .unwrap();
 
-    let converted = x.convert(DType::C64).unwrap();
+    let converted = ctx
+        .with_eager_session(|s| s.convert(&x, DType::C64))
+        .unwrap()
+        .unwrap();
     assert_eq!(converted.dtype(), DType::C64);
     assert_eq!(
         converted
@@ -267,12 +278,18 @@ fn eager_tensor_methods_cover_conversion_matmul_and_extension_standard_op() {
         &[Complex64::new(1.0, 0.0), Complex64::new(2.0, 0.0)]
     );
 
-    let convert_err = x.convert(DType::I32).unwrap_err();
+    let convert_err = ctx
+        .with_eager_session(|s| s.convert(&x, DType::I32))
+        .unwrap()
+        .unwrap_err();
     assert!(convert_err
         .to_string()
         .contains("unsupported dtype conversion"));
 
-    let casted = x.cast(DType::I32).unwrap();
+    let casted = ctx
+        .with_eager_session(|s| s.cast(&x, DType::I32))
+        .unwrap()
+        .unwrap();
     assert_eq!(casted.value().unwrap().as_slice::<i32>().unwrap(), &[1, 2]);
 
     let negated = tenferro_ad::extension::apply_standard_op(StdTensorOp::Neg, &[&x]).unwrap();
@@ -306,7 +323,10 @@ fn eager_tensor_methods_cover_conversion_matmul_and_extension_standard_op() {
         ctx.clone(),
     )
     .unwrap();
-    let product = a.matmul(&b).unwrap();
+    let product = ctx
+        .with_eager_session(|session| session.matmul(&a, &b))
+        .unwrap()
+        .unwrap();
     assert_eq!(product.shape(), &[2, 2]);
     assert_eq!(
         product.value().unwrap().as_slice::<f64>().unwrap(),
@@ -319,7 +339,10 @@ fn eager_tensor_methods_cover_conversion_matmul_and_extension_standard_op() {
         other_ctx,
     )
     .unwrap();
-    let err = x.add(&other).err().unwrap();
+    let err = ctx
+        .with_eager_session(|s| s.add(&x, &other))
+        .unwrap()
+        .unwrap_err();
     assert!(matches!(err, tenferro_ad::Error::ContextMismatch { .. }));
 }
 
@@ -333,12 +356,18 @@ fn eager_compare_returns_bool_and_where_select_accepts_bool_condition() {
     .unwrap();
     let y = EagerTensor::from_tensor_in(
         Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 8.0]).unwrap(),
-        ctx,
+        ctx.clone(),
     )
     .unwrap();
 
-    let cond = x.compare(&y, CompareDir::Gt).unwrap();
-    let selected = EagerTensor::where_select(&cond, &x, &y).unwrap();
+    let (cond, selected) = ctx
+        .with_eager_session(|session| {
+            let cond = session.compare(&x, &y, CompareDir::Gt)?;
+            let selected = session.where_select(&cond, &x, &y)?;
+            Ok::<_, tenferro_ad::Error>((cond, selected))
+        })
+        .unwrap()
+        .unwrap();
 
     assert_eq!(cond.dtype(), DType::Bool);
     assert_eq!(

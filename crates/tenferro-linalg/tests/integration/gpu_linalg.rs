@@ -1773,6 +1773,22 @@ fn test_cubecl_solve_f64_matches_cpu() {
     assert_tensor_close(&actual, &expected, 1e-9);
 }
 
+#[test]
+#[ignore = "requires CUDA"]
+fn test_cubecl_solve_vector_rhs_uses_borrowed_session_reshape() {
+    let a = tensor_f64(vec![2, 2], vec![3.0, 1.0, 1.0, 2.0]);
+    let b = tensor_f64(vec![2], vec![5.0, 1.0]);
+    let mut cpu = cpu_backend();
+    let expected = with_cpu_linalg_session(&mut cpu, |session| session.solve(&a, &b)).unwrap();
+    let mut gpu = gpu_backend();
+    let gpu_a = upload(&gpu, &a);
+    let gpu_b = upload(&gpu, &b);
+    let gpu_out =
+        with_cuda_linalg_session(&mut gpu, |session| session.solve(&gpu_a, &gpu_b)).unwrap();
+    assert_eq!(gpu_out.shape(), &[2]);
+    assert_tensor_close(&download(&gpu, &gpu_out), &expected, 1e-9);
+}
+
 // ---------------------------------------------------------------------------
 // Full-matrices SVD on CUDA: `U` is `m x m` and `Vt` is `n x n`, so the
 // trailing columns and rows span the left and right nullspaces. The device

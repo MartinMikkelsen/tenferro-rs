@@ -21,9 +21,12 @@ fn prelude_calls_eager_fft_operation() {
     let runtime = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
     let input = EagerTensor::from_tensor_in(
         Tensor::from_vec_col_major([4], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap(),
-        runtime,
+        runtime.clone(),
     )
     .unwrap();
-    let spectrum = input.rfft(None, -1, FftNorm::Backward).unwrap();
+    let spectrum = runtime
+        .with_eager_session(|session| session.rfft(&input, None, -1, FftNorm::Backward))
+        .unwrap()
+        .unwrap();
     assert_eq!(spectrum.shape(), &[3]);
 }

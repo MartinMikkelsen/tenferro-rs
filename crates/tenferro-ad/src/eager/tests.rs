@@ -29,11 +29,9 @@ use tenferro_runtime::{
 };
 use tenferro_tensor::TypedTensorView;
 use tenferro_tensor::{AllocationGroup, DescriptorSlot, GroupError, Tensor};
-use tenferro_tensor::{
-    BackendSession, BackendSessionHost, DType, DotGeneralConfig, TensorElementwise,
-};
+use tenferro_tensor::{BackendSession, BackendSessionHost, DType, DotGeneralConfig};
 use tenferro_tensor::{ErrorKind, ValidationKind};
-use tenferro_tensor::{TensorFusion, TensorRead, TensorStructural, TensorView, TensorWrite};
+use tenferro_tensor::{TensorRead, TensorStructural, TensorView, TensorWrite};
 
 use crate::eager_backend::EagerBackend;
 use crate::eager_exec::exec_op_on_tensor_reads_with_runtime;
@@ -133,13 +131,14 @@ fn eager_runtime_execution_session_runs_cpu_operation() {
 }
 
 #[test]
-fn eager_backend_session_identity_projects_to_owner() {
+fn eager_backend_session_identity_belongs_to_the_concrete_backend() {
     let mut backend = EagerBackend::cpu(CpuBackend::new());
-    let owner = (&mut backend as *mut EagerBackend).cast::<()>();
-    let identity = backend.session_type_id();
-    let projected = unsafe { backend.session_data_mut() };
-    assert_eq!(identity, backend.session_type_id());
-    assert_eq!(projected, owner);
+    let identity = backend.with_backend_session(|session| session.session_type_id());
+    assert_ne!(identity, std::any::TypeId::of::<EagerBackend>());
+    assert_eq!(
+        identity,
+        backend.with_backend_session(|session| session.session_type_id())
+    );
 
     let materializations = Arc::new(AtomicUsize::new(0));
     let mut recording = EagerBackend::recording_cpu(materializations);
@@ -187,18 +186,21 @@ fn eager_materialization_uses_backend() {
             .transpose_view([1, 0])
             .unwrap(),
     );
-    let direct =
-        TensorStructural::to_contiguous_read(&mut backend, TensorRead::from_view(view)).unwrap();
+    let direct = backend
+        .with_backend_session(|session| session.to_contiguous_read(TensorRead::from_view(view)))
+        .unwrap();
     assert_eq!(direct.as_slice::<f64>().unwrap(), &[1.0, 3.0, 2.0, 4.0]);
     assert_eq!(materializations.swap(0, Ordering::Relaxed), 1);
 
     let mut destination = Tensor::from_vec_col_major(vec![1], vec![0.0_f64]).unwrap();
-    TensorStructural::copy_read_into(
-        &mut backend,
-        TensorRead::from_tensor(&probe),
-        TensorWrite::from_tensor(&mut destination),
-    )
-    .unwrap();
+    backend
+        .with_backend_session(|session| {
+            session.copy_read_into(
+                TensorRead::from_tensor(&probe),
+                TensorWrite::from_tensor(&mut destination),
+            )
+        })
+        .unwrap();
     assert_eq!(destination.as_slice::<f64>().unwrap(), &[2.0]);
     let ctx = Arc::new(EagerRuntime::from_backend(backend).unwrap());
     let x = EagerTensor::from_tensor_in(
@@ -214,7 +216,10 @@ fn eager_materialization_uses_backend() {
     assert_eq!(compact.as_slice::<f64>().unwrap(), &[1.0, 2.0, 3.0, 4.0]);
     assert_eq!(materializations.load(Ordering::Relaxed), 0);
 
-    let view = x.transpose(&[1, 0]).unwrap();
+    let view = ctx
+        .with_eager_session(|s| s.transpose(&x, &[1, 0]))
+        .unwrap()
+        .unwrap();
     let compact = view.to_tensor().unwrap();
     assert_eq!(compact.as_slice::<f64>().unwrap(), &[1.0, 3.0, 2.0, 4.0]);
     assert_eq!(materializations.load(Ordering::Relaxed), 1);
@@ -235,16 +240,20 @@ fn untracked_standard_op_results_do_not_enter_value_record_registry() {
     .unwrap();
     let records_before = ctx.value_records.lock().unwrap().len();
 
-    let output = lhs
-        .dot_general(
-            &rhs,
-            DotGeneralConfig {
-                lhs_contracting_dims: [1].as_slice().into(),
-                rhs_contracting_dims: [0].as_slice().into(),
-                lhs_batch_dims: [].as_slice().into(),
-                rhs_batch_dims: [].as_slice().into(),
-            },
-        )
+    let output = ctx
+        .with_eager_session(|s| {
+            s.dot_general(
+                &lhs,
+                &rhs,
+                DotGeneralConfig {
+                    lhs_contracting_dims: [1].as_slice().into(),
+                    rhs_contracting_dims: [0].as_slice().into(),
+                    lhs_batch_dims: [].as_slice().into(),
+                    rhs_batch_dims: [].as_slice().into(),
+                },
+            )
+        })
+        .unwrap()
         .unwrap();
 
     assert!(!output.tracks_grad());
@@ -311,7 +320,9 @@ fn eager_index_select_reports_poisoned_backend_lock() {
     }));
     assert!(poisoned.is_err());
 
-    let err = x.index_select(0, &[0]).unwrap_err();
+    let err = ctx
+        .with_eager_session(|session| session.index_select(&x, 0, &[0]))
+        .unwrap_err();
 
     assert_eq!(err.kind(), ErrorKind::RuntimeState);
     assert!(matches!(
@@ -604,7 +615,11 @@ fn eager_extension_dispatch_does_not_initialize_lazy_view_materialization_cache(
         ctx,
     )
     .unwrap();
-    let x_t = x.transpose(&[1, 0]).unwrap();
+    let x_t = x
+        .runtime()
+        .with_eager_session(|s| s.transpose(&x, &[1, 0]))
+        .unwrap()
+        .unwrap();
     assert!(matches!(x_t.tensor_read(), TensorRead::View(_)));
 
     let outputs = crate::extension::apply_eager_with_extension_session(
@@ -718,7 +733,11 @@ fn eager_recording_retains_symbolic_semantic_trace_for_shape_churn() {
             ctx,
         )
         .unwrap();
-        let y = x.mul(&x).unwrap();
+        let y = x
+            .runtime()
+            .with_eager_session(|s| s.mul(&x, &x))
+            .unwrap()
+            .unwrap();
         let semantic_trace = y
             .semantic_trace
             .as_ref()
@@ -766,7 +785,7 @@ fn deferred_eager_semantic_analysis_seeds_symbolic_leaf_metadata() {
         Arc::clone(&ctx),
     )
     .unwrap();
-    let y = x.mul(&x).unwrap();
+    let y = ctx.with_eager_session(|s| s.mul(&x, &x)).unwrap().unwrap();
     let raw = y
         .semantic_trace
         .as_ref()
@@ -807,7 +826,7 @@ fn eager_runtime_vjp_can_use_semantic_trace_when_gate_enabled() {
         Arc::clone(&ctx),
     )
     .unwrap();
-    let y = x.mul(&x).unwrap();
+    let y = ctx.with_eager_session(|s| s.mul(&x, &x)).unwrap().unwrap();
 
     let vjp = ctx.vjp(&y, &x, &seed).unwrap();
 
@@ -835,7 +854,7 @@ fn eager_runtime_vjp_uses_semantic_trace_for_multi_input_graph_when_gate_enabled
         Arc::clone(&ctx),
     )
     .unwrap();
-    let output = x.mul(&y).unwrap();
+    let output = ctx.with_eager_session(|s| s.mul(&x, &y)).unwrap().unwrap();
 
     let dx = ctx.vjp(&output, &x, &seed).unwrap();
     let dy = ctx.vjp(&output, &y, &seed).unwrap();
@@ -857,7 +876,7 @@ fn eager_backward_with_accepts_vector_cotangent_seed() {
         Arc::clone(&ctx),
     )
     .unwrap();
-    let y = x.mul(&x).unwrap();
+    let y = ctx.with_eager_session(|s| s.mul(&x, &x)).unwrap().unwrap();
 
     y.backward_with(&seed).unwrap();
 
@@ -880,7 +899,7 @@ fn eager_backward_with_rejects_mismatched_seed_shape() {
         Arc::clone(&ctx),
     )
     .unwrap();
-    let y = x.mul(&x).unwrap();
+    let y = ctx.with_eager_session(|s| s.mul(&x, &x)).unwrap().unwrap();
 
     let err = y.backward_with(&seed).unwrap_err();
 
@@ -911,7 +930,7 @@ fn eager_runtime_vjp_returns_composable_tensor_without_touching_grad_slot() {
         Arc::clone(&ctx),
     )
     .unwrap();
-    let y = x.mul(&x).unwrap();
+    let y = ctx.with_eager_session(|s| s.mul(&x, &x)).unwrap().unwrap();
 
     let dx = ctx.vjp(&y, &x, &seed).unwrap();
 
@@ -939,7 +958,10 @@ fn eager_functional_ad_reports_inactive_inputs_and_accepts_explicit_rule_context
         Arc::clone(&ctx),
     )
     .unwrap();
-    let loss = active.mul(&active).unwrap();
+    let loss = ctx
+        .with_eager_session(|s| s.mul(&active, &active))
+        .unwrap()
+        .unwrap();
 
     let inactive_vjp = ctx.vjp_optional(&loss, &inactive, &seed).unwrap();
     let inactive_jvp = ctx.jvp_optional(&loss, &inactive, &seed).unwrap();
@@ -971,7 +993,7 @@ fn eager_runtime_jvp_returns_composable_semantic_trace() {
         Arc::clone(&ctx),
     )
     .unwrap();
-    let y = x.mul(&x).unwrap();
+    let y = ctx.with_eager_session(|s| s.mul(&x, &x)).unwrap().unwrap();
 
     let dy = ctx.jvp(&y, &x, &tangent).unwrap();
 
@@ -992,7 +1014,7 @@ fn eager_runtime_ad_transform_cache_reuses_recorded_graph_linearization() {
         Arc::clone(&ctx),
     )
     .unwrap();
-    let y = x.mul(&x).unwrap();
+    let y = ctx.with_eager_session(|s| s.mul(&x, &x)).unwrap().unwrap();
 
     assert_eq!(ctx.cache_stats().unwrap().ad_transforms.entries, 0);
 
@@ -1039,7 +1061,7 @@ fn eager_prepared_derivative_cache_reuses_runtime_preparation() {
         Arc::clone(&ctx),
     )
     .unwrap();
-    let y = x.mul(&x).unwrap();
+    let y = ctx.with_eager_session(|s| s.mul(&x, &x)).unwrap().unwrap();
 
     assert_eq!(ctx.runtime.cache_stats().unwrap().prepared_plans.entries, 0);
 
@@ -1076,7 +1098,7 @@ fn eager_prepared_derivative_cache_is_visible_and_clearable() {
         Arc::clone(&ctx),
     )
     .unwrap();
-    let y = x.mul(&x).unwrap();
+    let y = ctx.with_eager_session(|s| s.mul(&x, &x)).unwrap().unwrap();
 
     assert_eq!(ctx.cache_stats().unwrap().prepared_derivatives.entries, 0);
 
@@ -1116,7 +1138,7 @@ fn eager_prepared_derivative_cache_limit_evicts_lru_entries() {
         Arc::clone(&ctx),
     )
     .unwrap();
-    let y = x.mul(&x).unwrap();
+    let y = ctx.with_eager_session(|s| s.mul(&x, &x)).unwrap().unwrap();
     let seed = EagerTensor::from_tensor_in(
         Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 1.0]).unwrap(),
         Arc::clone(&ctx),
@@ -1125,7 +1147,7 @@ fn eager_prepared_derivative_cache_limit_evicts_lru_entries() {
     let _ = ctx.vjp(&y, &x, &seed).unwrap();
     assert_eq!(ctx.cache_stats().unwrap().prepared_derivatives.entries, 1);
 
-    let z = x.add(&x).unwrap();
+    let z = ctx.with_eager_session(|s| s.add(&x, &x)).unwrap().unwrap();
     let _ = ctx.vjp(&z, &x, &seed).unwrap();
     let stats = ctx.cache_stats().unwrap().prepared_derivatives;
     assert_eq!(stats.entries, 1);
@@ -1145,7 +1167,7 @@ fn eager_functional_grad_can_feed_jvp() {
         Arc::clone(&ctx),
     )
     .unwrap();
-    let loss = x.mul(&x).unwrap();
+    let loss = ctx.with_eager_session(|s| s.mul(&x, &x)).unwrap().unwrap();
 
     let grad = ctx.grad(&loss, &x).unwrap();
     let hvp = ctx.jvp(&grad, &x, &tangent).unwrap();
@@ -1168,8 +1190,13 @@ fn eager_jvp_of_functional_grad_matches_cubic_hvp() {
         Arc::clone(&ctx),
     )
     .unwrap();
-    let x2 = x.mul(&x).unwrap();
-    let loss = x2.mul(&x).unwrap();
+    let loss = ctx
+        .with_eager_session(|s| {
+            let x2 = s.mul(&x, &x)?;
+            s.mul(&x2, &x)
+        })
+        .unwrap()
+        .unwrap();
 
     let grad = ctx.grad(&loss, &x).unwrap();
     let hvp = ctx.jvp(&grad, &x, &tangent).unwrap();
@@ -1187,11 +1214,14 @@ fn eager_no_grad_scope_suppresses_operation_recording() {
     )
     .unwrap();
 
-    let y = {
-        let _guard = ctx.no_grad();
-        x.mul(&x).unwrap()
-    };
-    let z = x.mul(&x).unwrap();
+    let y = ctx
+        .with_eager_session(|s| {
+            let _guard = ctx.no_grad();
+            s.mul(&x, &x)
+        })
+        .unwrap()
+        .unwrap();
+    let z = ctx.with_eager_session(|s| s.mul(&x, &x)).unwrap().unwrap();
 
     assert!(!y.tracks_grad());
     assert!(z.tracks_grad());
@@ -1261,29 +1291,33 @@ fn one_like_tensor_covers_integer_and_bool_dtypes_without_analytic_backend_ops()
     ];
 
     for input in cases {
-        let one = one_like_tensor(&input, &mut backend).unwrap();
+        let one = backend
+            .with_backend_session(|session| one_like_tensor(&input, session))
+            .unwrap();
         assert_eq!(one.shape(), input.shape());
         assert_eq!(one.dtype(), input.dtype());
     }
 }
 
 #[test]
-fn eager_backend_delegates_broadcast_multiply_fusion_to_cpu_backend() {
+fn eager_backend_session_dispatches_broadcast_multiply_fusion_to_cpu() {
     let mut backend = EagerBackend::cpu(CpuBackend::new());
     let lhs = Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0]).unwrap();
     let rhs = Tensor::from_vec_col_major(vec![3], vec![5.0_f64, 7.0, 11.0]).unwrap();
 
     let out = backend
-        .execute_broadcast_multiply(
-            TensorRead::from_tensor(&lhs),
-            &[2, 3],
-            &[0],
-            TensorRead::from_tensor(&rhs),
-            &[2, 3],
-            &[1],
-        )
+        .with_backend_session(|session| {
+            session.execute_broadcast_multiply(
+                TensorRead::from_tensor(&lhs),
+                &[2, 3],
+                &[0],
+                TensorRead::from_tensor(&rhs),
+                &[2, 3],
+                &[1],
+            )
+        })
         .unwrap()
-        .expect("eager backend should delegate CPU broadcast multiply fusion");
+        .expect("eager backend session should dispatch CPU broadcast multiply fusion");
 
     assert_eq!(out.shape(), &[2, 3]);
     assert_eq!(
@@ -1293,7 +1327,7 @@ fn eager_backend_delegates_broadcast_multiply_fusion_to_cpu_backend() {
 }
 
 #[test]
-fn eager_backend_delegates_elementwise_into_hook_to_cpu_variants() {
+fn eager_backend_session_dispatches_elementwise_into_hook_to_cpu_variants() {
     let materializations = Arc::new(AtomicUsize::new(0));
     let backends = [
         EagerBackend::cpu(CpuBackend::new()),
@@ -1306,11 +1340,13 @@ fn eager_backend_delegates_elementwise_into_hook_to_cpu_variants() {
         let mut out = Tensor::from_vec_col_major(vec![3], vec![0.0_f64; 3]).unwrap();
 
         backend
-            .add_read_into(
-                TensorRead::from_tensor(&lhs),
-                TensorRead::from_tensor(&rhs),
-                TensorWrite::from_tensor(&mut out),
-            )
+            .with_backend_session(|session| {
+                session.add_read_into(
+                    TensorRead::from_tensor(&lhs),
+                    TensorRead::from_tensor(&rhs),
+                    TensorWrite::from_tensor(&mut out),
+                )
+            })
             .unwrap();
 
         assert_eq!(out.as_slice::<f64>().unwrap(), &[9.0, 14.0, 18.0]);
@@ -1325,31 +1361,48 @@ fn untracked_nary_ops_consume_lazy_views_without_materializing_inputs() {
         ctx,
     )
     .unwrap();
-    let x_t = x.transpose(&[1, 0]).unwrap();
+    let x_t = x
+        .runtime()
+        .with_eager_session(|s| s.transpose(&x, &[1, 0]))
+        .unwrap()
+        .unwrap();
     assert!(matches!(x_t.tensor_read(), TensorRead::View(_)));
 
-    let doubled = x_t.add(&x_t).unwrap();
+    let doubled = x_t
+        .runtime()
+        .with_eager_session(|s| s.add(&x_t, &x_t))
+        .unwrap()
+        .unwrap();
     assert_eq!(
         doubled.value().unwrap().as_slice::<f64>().unwrap(),
         &[2.0, 6.0, 10.0, 4.0, 8.0, 12.0]
     );
 
-    let reduced = x_t.reduce_sum(Some(&[0])).unwrap();
+    let reduced = x_t
+        .runtime()
+        .with_eager_session(|s| s.reduce_sum(&x_t, Some(&[0])))
+        .unwrap()
+        .unwrap();
     assert_eq!(
         reduced.value().unwrap().as_slice::<f64>().unwrap(),
         &[9.0, 12.0]
     );
 
     let dot = x_t
-        .dot_general(
-            &x,
-            DotGeneralConfig {
-                lhs_contracting_dims: [1].as_slice().into(),
-                rhs_contracting_dims: [0].as_slice().into(),
-                lhs_batch_dims: [].as_slice().into(),
-                rhs_batch_dims: [].as_slice().into(),
-            },
-        )
+        .runtime()
+        .with_eager_session(|s| {
+            s.dot_general(
+                &x_t,
+                &x,
+                DotGeneralConfig {
+                    lhs_contracting_dims: [1].as_slice().into(),
+                    rhs_contracting_dims: [0].as_slice().into(),
+                    lhs_batch_dims: [].as_slice().into(),
+                    rhs_batch_dims: [].as_slice().into(),
+                },
+            )
+        })
+        .unwrap()
         .unwrap();
     assert_eq!(
         dot.value().unwrap().as_slice::<f64>().unwrap(),
@@ -1365,7 +1418,14 @@ fn eager_gradients_bundle_borrows_and_extracts_one_owner() {
         ctx,
     )
     .unwrap();
-    let loss = x.mul(&x).unwrap().reduce_sum(Some(&[0])).unwrap();
+    let loss = x
+        .runtime()
+        .with_eager_session(|s| {
+            let squared = s.mul(&x, &x)?;
+            s.reduce_sum(&squared, Some(&[0]))
+        })
+        .unwrap()
+        .unwrap();
     let mut gradients = loss.backward().unwrap();
 
     let view = gradients.grad(&x.key).unwrap();

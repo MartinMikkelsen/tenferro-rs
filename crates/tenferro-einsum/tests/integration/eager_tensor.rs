@@ -265,7 +265,10 @@ fn eager_tensor_einsum_ellipsis_backward_matches_expected_values() {
     .unwrap();
 
     let c = [&a, &b].einsum("...ij,...jk->...ik").unwrap();
-    let loss = c.reduce_sum(Some(&[0, 1, 2])).unwrap();
+    let loss = ctx
+        .with_eager_session(|s| s.reduce_sum(&c, Some(&[0, 1, 2])))
+        .unwrap()
+        .unwrap();
     let _ = loss.backward().unwrap();
 
     assert_eq!(
@@ -293,7 +296,10 @@ fn eager_tensor_einsum_backward_populates_input_grads() {
     .unwrap();
 
     let c = [&a, &b].einsum("ij,jk->ik").unwrap();
-    let loss = c.reduce_sum(Some(&[0, 1])).unwrap();
+    let loss = ctx
+        .with_eager_session(|s| s.reduce_sum(&c, Some(&[0, 1])))
+        .unwrap()
+        .unwrap();
     let _cotangents = loss.backward().unwrap();
 
     let grad_a = a.grad().unwrap().unwrap();
@@ -326,7 +332,10 @@ fn eager_tensor_einsum_repeated_backward_accumulates_across_calls() {
     .unwrap();
 
     let c = [&a, &b].einsum("ij,jk->ik").unwrap();
-    let loss = c.reduce_sum(Some(&[0, 1])).unwrap();
+    let loss = ctx
+        .with_eager_session(|s| s.reduce_sum(&c, Some(&[0, 1])))
+        .unwrap()
+        .unwrap();
     let _ = loss.backward().unwrap();
     assert_eq!(
         f64_data(&a.grad().unwrap().unwrap().to_tensor().unwrap()),
@@ -338,7 +347,10 @@ fn eager_tensor_einsum_repeated_backward_accumulates_across_calls() {
     );
 
     let c = [&a, &b].einsum("ij,jk->ik").unwrap();
-    let loss = c.reduce_sum(Some(&[0, 1])).unwrap();
+    let loss = ctx
+        .with_eager_session(|s| s.reduce_sum(&c, Some(&[0, 1])))
+        .unwrap()
+        .unwrap();
     let _ = loss.backward().unwrap();
     assert_eq!(
         f64_data(&a.grad().unwrap().unwrap().to_tensor().unwrap()),
@@ -365,7 +377,10 @@ fn eager_tensor_einsum_context_clear_grads_resets_all_live_leaves() {
     .unwrap();
 
     let c = [&a, &b].einsum("ij,jk->ik").unwrap();
-    let loss = c.reduce_sum(Some(&[0, 1])).unwrap();
+    let loss = ctx
+        .with_eager_session(|s| s.reduce_sum(&c, Some(&[0, 1])))
+        .unwrap()
+        .unwrap();
     let _ = loss.backward().unwrap();
 
     ctx.clear_grads().unwrap();
@@ -374,7 +389,10 @@ fn eager_tensor_einsum_context_clear_grads_resets_all_live_leaves() {
     assert!(b.grad().unwrap().is_none());
 
     let c = [&a, &b].einsum("ij,jk->ik").unwrap();
-    let loss = c.reduce_sum(Some(&[0, 1])).unwrap();
+    let loss = ctx
+        .with_eager_session(|s| s.reduce_sum(&c, Some(&[0, 1])))
+        .unwrap()
+        .unwrap();
     let _ = loss.backward().unwrap();
 
     assert_eq!(

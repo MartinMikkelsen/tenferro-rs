@@ -4,7 +4,7 @@ use std::sync::Arc;
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use tenferro_ad::{AdContext, EagerRuntime, EagerTensor, Tensor};
 use tenferro_cpu::CpuBackend;
-use tenferro_linalg::EagerTensorLinalgExt;
+use tenferro_linalg::EagerSessionLinalgExt;
 use tenferro_runtime::DotGeneralConfig;
 
 const DEFAULT_SIZES: &[usize] = &[256, 512];
@@ -111,11 +111,6 @@ fn upper_matrix(n: usize) -> Vec<f64> {
     data
 }
 
-fn reduce_all(tensor: &EagerTensor) -> EagerTensor {
-    let axes: Vec<usize> = (0..tensor.shape().len()).collect();
-    tensor.reduce_sum(Some(&axes)).unwrap()
-}
-
 fn fixture(n: usize, threads: usize) -> Fixture {
     let ctx = ad_ctx(threads);
     let matrix = variable(&ctx, vec![n, n], dense_matrix(n, 1));
@@ -125,8 +120,17 @@ fn fixture(n: usize, threads: usize) -> Fixture {
     let rhs = eager(&ctx, vec![n, n], dense_matrix(n, 3));
     let scalar_one = eager(&ctx, vec![], vec![1.0]);
 
-    let (_p, l, u, _parity) = matrix.lu().unwrap();
-    let lu_loss = reduce_all(&l).add(&reduce_all(&u)).unwrap();
+    let (_p, l, u, _parity) = ctx.with_eager_session(|s| s.lu(&matrix)).unwrap().unwrap();
+    let lu_loss = ctx
+        .with_eager_session(|s| {
+            let l_axes: Vec<usize> = (0..l.shape().len()).collect();
+            let u_axes: Vec<usize> = (0..u.shape().len()).collect();
+            let l_sum = s.reduce_sum(&l, Some(&l_axes))?;
+            let u_sum = s.reduce_sum(&u, Some(&u_axes))?;
+            s.add(&l_sum, &u_sum)
+        })
+        .unwrap()
+        .unwrap();
     let warm = ctx.jvp(&lu_loss, &matrix, &tangent).unwrap();
     consume_f64(&warm);
 
@@ -177,7 +181,11 @@ fn bench_lu_ad_breakdown(c: &mut Criterion) {
 
         group.bench_function(BenchmarkId::new("lu_forward_unpack", n), |bench| {
             bench.iter(|| {
-                let (p, l, u, parity) = black_box(&fixture.matrix).lu().unwrap();
+                let (p, l, u, parity) = fixture
+                    .ctx
+                    .with_eager_session(|s| s.lu(black_box(&fixture.matrix)))
+                    .unwrap()
+                    .unwrap();
                 consume_many(&[p, l, u, parity]);
             });
         });
@@ -186,8 +194,19 @@ fn bench_lu_ad_breakdown(c: &mut Criterion) {
             BenchmarkId::new("triangular_solve_left_unit_lower", n),
             |bench| {
                 bench.iter(|| {
-                    let out = black_box(&fixture.lower_unit)
-                        .triangular_solve(black_box(&fixture.rhs), true, true, false, true)
+                    let out = fixture
+                        .ctx
+                        .with_eager_session(|s| {
+                            s.triangular_solve(
+                                black_box(&fixture.lower_unit),
+                                black_box(&fixture.rhs),
+                                true,
+                                true,
+                                false,
+                                true,
+                            )
+                        })
+                        .unwrap()
                         .unwrap();
                     consume_f64(&out);
                 });
@@ -198,8 +217,19 @@ fn bench_lu_ad_breakdown(c: &mut Criterion) {
             BenchmarkId::new("triangular_solve_right_upper", n),
             |bench| {
                 bench.iter(|| {
-                    let out = black_box(&fixture.upper)
-                        .triangular_solve(black_box(&fixture.rhs), false, false, false, false)
+                    let out = fixture
+                        .ctx
+                        .with_eager_session(|s| {
+                            s.triangular_solve(
+                                black_box(&fixture.upper),
+                                black_box(&fixture.rhs),
+                                false,
+                                false,
+                                false,
+                                false,
+                            )
+                        })
+                        .unwrap()
                         .unwrap();
                     consume_f64(&out);
                 });
@@ -210,13 +240,20 @@ fn bench_lu_ad_breakdown(c: &mut Criterion) {
             BenchmarkId::new("structural_lower_plus_identity", n),
             |bench| {
                 bench.iter(|| {
-                    let strict_lower = black_box(&fixture.lower_unit).tril(-1).unwrap();
-                    let diagonal = fixture
-                        .scalar_one
-                        .broadcast_in_dim(black_box(&[n]), black_box(&[]))
+                    let out = fixture
+                        .ctx
+                        .with_eager_session(|session| {
+                            let strict_lower = session.tril(black_box(&fixture.lower_unit), -1)?;
+                            let diagonal = session.broadcast_in_dim(
+                                &fixture.scalar_one,
+                                black_box(&[n]),
+                                black_box(&[]),
+                            )?;
+                            let eye = session.embed_diag(&diagonal, 0, 1)?;
+                            session.add(&strict_lower, &eye)
+                        })
+                        .unwrap()
                         .unwrap();
-                    let eye = diagonal.embed_diag(0, 1).unwrap();
-                    let out = strict_lower.add(&eye).unwrap();
                     consume_f64(&out);
                 });
             },
@@ -224,7 +261,11 @@ fn bench_lu_ad_breakdown(c: &mut Criterion) {
 
         group.bench_function(BenchmarkId::new("structural_upper_mask", n), |bench| {
             bench.iter(|| {
-                let out = black_box(&fixture.upper).triu(0).unwrap();
+                let out = fixture
+                    .ctx
+                    .with_eager_session(|session| session.triu(black_box(&fixture.upper), 0))
+                    .unwrap()
+                    .unwrap();
                 consume_f64(&out);
             });
         });
@@ -237,8 +278,16 @@ fn bench_lu_ad_breakdown(c: &mut Criterion) {
                 rhs_batch_dims: [].as_slice().into(),
             };
             bench.iter(|| {
-                let out = black_box(&fixture.matrix)
-                    .dot_general(black_box(&fixture.rhs), black_box(config.clone()))
+                let out = fixture
+                    .ctx
+                    .with_eager_session(|s| {
+                        s.dot_general(
+                            black_box(&fixture.matrix),
+                            black_box(&fixture.rhs),
+                            black_box(config.clone()),
+                        )
+                    })
+                    .unwrap()
                     .unwrap();
                 consume_f64(&out);
             });

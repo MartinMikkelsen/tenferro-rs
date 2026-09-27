@@ -1,11 +1,12 @@
 # Explicit Backend Session Boundary
 
-Status: design (pre-implementation). This document records the target contract,
-the verified source inventory at the stated baseline, and the migration and
-enforcement plan for issue
-[#1926](https://github.com/tensor4all/tenferro-rs/issues/1926), the session
-workstream of the [#1929](https://github.com/tensor4all/tenferro-rs/issues/1929)
-umbrella.
+Status: implemented for #1929's reduced 2026-09-27 delivery contract. This
+record includes a **historical** source inventory and step-by-step design at the
+stated baseline; its line numbers, provisional statuses and measurement runbook
+do not describe the current source. See the current-state summary below and the
+[handoff](../worklogs/2026-09-27-1929-reduced-contract-handoff.md). The work
+belongs to [#1926](https://github.com/tensor4all/tenferro-rs/issues/1926) under
+[#1929](https://github.com/tensor4all/tenferro-rs/issues/1929).
 
 Inventory baseline: `a45833d4f` (`origin/main` at the time of writing, the
 revision named by #1926).
@@ -24,6 +25,29 @@ Related authorities and records:
   execution-owner/reentrancy contract.
 - [`api-and-convention-freeze.md`](./api-and-convention-freeze.md) — why
   removing implicit entry points is in scope before the release freeze closes.
+
+## Current delivery boundary
+
+Phase B removed the 31 paired owner one-shots and moved CPU, CUDA and WebGPU
+operation bodies to session types. Runtime and extension helpers use borrowed
+sessions, and compiled instructions share a session across their terminal-value
+probe, execution and last-use reclaim. `EagerRuntime::with_eager_session` now
+lends a runtime-bound `EagerSession` for forward operations. The former
+`EagerTensor` operation methods and arithmetic overloads were removed, not
+replaced with implicit-entry shims; value/trace handles remain, as do named
+backward and runtime boundaries. Gradient-slot accumulation uses one borrowed
+session at the backward boundary. Ordinary eager linalg and FFT operations use
+borrowed extension traits. Tensor-owned linalg `solve` is intentionally kept
+for its calling-thread `no_grad` behavior, and consuming in-place FFT preserves
+its exclusive-ownership contract. Native-context or owned-only extension
+fallback runs in a separate top-level region, never inside a borrowed session.
+
+A2 (`with_evaluation_scope` plus AD wiring) is **deferred**, not blocked: the
+2026-09-27 contract leaves its backend ownership decision and performance
+assessment to #1938 / #1927 / #1904. The session-entry audit keeps its A2
+allowlist at zero. No new benchmark campaign or published improvement is a
+#1929 closure requirement. See the handoff for exact artifact revisions,
+focused validation and remaining CPU/GPU capabilities.
 
 ## Problem
 
@@ -189,6 +213,61 @@ per slot. If a single boundary for a forward/backward group cannot be expressed
 without changing AD value lifetime, that is a scope change and goes back to the
 issue — it is not silently exempted.
 
+**Eager migration contract (delivered; historical implementation notes follow).** An eager
+operation must receive a runtime-bound, borrowed session created by the owning
+`EagerRuntime` at an explicit caller boundary. A plain `&mut dyn BackendSession`
+is insufficient: two eager runtimes may select the same backend type but own
+different provider/device state, while the eager value and trace are tied to one
+runtime. The boundary therefore carries both the originating runtime identity
+and the concrete borrowed session, and operations reject foreign eager values
+before dispatch. The public eager operation spelling moves to methods on this
+runtime-bound `EagerSession` (for example, `session.neg(&tensor)`), while
+`EagerTensor` remains the value/trace handle; remove the old implicit operation
+methods rather than forwarding them through a new entry. The session holds the
+backend lock in the existing lock/permit order; operation helpers receive it and
+do not lock the backend or enter again. `EagerBackend` is now only a session
+host/owner, not a composite `Tensor*` operation delegate: its former callers
+use the concrete borrowed backend session. CUDA/WebGPU owners no longer provide
+the deleted one-shot methods, and the `tenferro-ad` feature check now compiles.
+The former implicit `EagerTensor` operation methods were migrated and deleted;
+do not replace them with per-operation entry.
+Session-aware materialization must preserve placement, errors and retained-value
+lifetime; do not call the current `duplicate_value` from inside the session,
+because its fallback re-enters `with_execution_session`. Semantic recording also
+materializes untracked operands when a tracked operation consumes them: that
+copy must use the active session for core, view, and extension ops, rather than
+re-entering the backend during trace construction. CPU callbacks may run on a
+worker thread; thread-local `no_grad` / `capture_trace` guards needed by a
+borrowed session must be started inside its callback, not assumed to transfer
+from the calling thread. This does not implement A2's deferred AD wiring.
+Host-only leaf import
+can remain session-free, but a leaf constructor, copy, or retained-value
+materialization that actually executes on a backend also receives the borrowed
+session instead of hiding an entry.
+
+The eager forward op surface (including non-AD use) migrates together; do not
+leave an old one-shot wrapper that secretly opens a session. Operation-family
+crates use traits or functions taking the borrowed eager session rather than
+adding another owner-entry method to `EagerTensor`. Eager backward's
+compiled-program execution retains its named top-level runtime region, then
+accumulates gradient slots under one borrowed session opened at the backward
+boundary (the `store_grads` slice now does this). A prepared extension with a
+session executor uses that borrowed session and the runtime's extension cache;
+its implementation must not lock the eager backend again. FFT's
+`EagerSessionFftExt` implements the FFT operation-family borrowed route
+(`fft`/`ifft`/`rfft`/`irfft`); tensor-owned `EagerTensorFftExt` retains only the
+consuming in-place operations that require exclusive ownership and cannot use
+an ordinary borrowed input. A legacy native-context
+executor cannot be called while a session already holds that backend: it stays
+behind an explicitly named top-level runtime execution region invoked *after*
+releasing the eager session. No `EagerTensor` convenience operation may silently
+open that fallback region. Preserve the existing fallback's errors and output
+semantics until #1938 makes a separate SPI decision. Acceptance requires
+numeric/error parity, same-runtime and foreign-runtime cases, nested-entry and
+provider-exclusion coverage, and CUDA / WebGPU feature builds with device tests
+where available. A2's evaluation-scope
+hook is not a substitute for this API migration and remains deferred.
+
 ### D. Extension owner routes
 
 Each `*_owner` route has a borrowed-session sibling already. The `_owner`
@@ -266,8 +345,10 @@ entry below is excluded because it is *not* an operation entry at all.
 
 ## Migration slices
 
-Ordered so each slice is independently reviewable and revertible, and so the
-gate can land after the last hidden entry is gone.
+This is the original implementation ordering, not a claim that every slice has
+landed: eager threading (slice 2) remains unresolved, and measurement (slice 7)
+is no longer a #1929 closure gate. The slices were ordered so each could be
+reviewed and reverted independently.
 
 1. **Design + inventory** (this document). No behavior change.
 2. **Eager threading.** Convert `eager_exec` helpers to session-taking
@@ -777,8 +858,9 @@ optimization input, recorded in
 `docs/worklogs/2026-09-26-session-route-recapture-and-matched-comparison.md`; this
 document keeps it as a Phase-C finding rather than a Phase-B correctness issue.
 
-The three-pair certification is still owed, and it must use one free core
-consistently, since `cpu=0` is unavailable on this host.
+Under the original measurement contract, three-pair certification would have
+needed a consistently free core (`cpu=0` is unavailable on this host). The
+2026-09-27 revision removed that certificate as a #1929 closure gate.
 
 #### The compiled-path share of that regression is fixed
 
@@ -862,6 +944,15 @@ questions are in
 `docs/worklogs/2026-09-27-scope-intervention-experiment.md`.
 
 #### Execution scopes as an evaluation boundary: ownership protocol
+
+> **Status (2026-09-27 revision).** This section is a **deferred design**, not part of
+> the #1929 completion contract. The maintainer's 2026-09-27 revision removed the
+> benchmark-first order, the exhaustive completion checklist and the per-step
+> performance gates; the evaluation-scope hook and its AD wiring are performance
+> optimization and move to the post-integration work in #1938, tracked by #1927 and
+> #1904. Everything below is retained as the ownership analysis and fallback contract
+> that work will need. Nothing here is implemented, and `with_evaluation_scope` stays
+> at **zero** allowlisted entries in the session-entry audit.
 
 Both intervention halves confirm the direction, so the next artefact is the protocol
 that a scope-as-evaluation-boundary must satisfy. This is the design to agree on
@@ -951,10 +1042,11 @@ crates/tenferro-ad/src/eager_exec.rs::<fn>` (exit 1), and the reverted tree pass
 again. The audit's own negative tests now cover both scope mechanisms, so the check
 cannot silently degrade into name matching.
 
-**The public benchmark harness has to migrate with this change (B).** The umbrella
-requires `tenferro-benchmark` and `strided-rs-benchmark-suite` to publish results at
-exact library revisions. In an isolated worktree of `tenferro-benchmark` at
-`origin/main` (`2a8469f`), pointed at this branch:
+**Public benchmark harness compatibility is follow-up work, not a #1929 gate.**
+The two repositories retain their own issues (#107 and #41). The maintainer's
+2026-09-27 revision removed their completion and publication from #1929. In an
+isolated worktree of `tenferro-benchmark` at `origin/main` (`2a8469f`), pointed
+at this branch:
 
 * `cargo build --release --features cpu-faer --bins` fails in four binaries with
   deleted owner spellings on `CpuBackend` (`reduce_sum`, `mul`, `exp`, etc.) and
@@ -973,16 +1065,16 @@ exact library revisions. In an isolated worktree of `tenferro-benchmark` at
   selection filtering, **not** evidence that the faer provider cannot run the
   case. The invocation is not a publishable Linux result: the benchmark repo
   requires Linux collection inside its devcontainer.
-* what remains against `tenferro-benchmark` #107: explicit expected/selected/
-  executed/unsupported/failed/noisy case identities in run metadata, nonempty
-  matching samples, versioned `quick`/`full` manifests with measured wall times,
-  and the session/public-route latency lane.
+* what remains under `tenferro-benchmark` #107 (not #1929 closure): explicit
+  expected/selected/executed/unsupported/failed/noisy case identities in run
+  metadata, nonempty matching samples, versioned `quick`/`full` manifests with
+  measured wall times, and the session/public-route latency lane.
 * `TENFERRO_CPU_FEATURES=cpu-faer` avoids the OpenBLAS prefix requirement that the
   Linux runner defaults to; this is useful for compilation diagnostics, not a
   substitute for the repository's Linux publication provider policy.
 
-**A2 is blocked by the eager backend's ownership shape (verified in code, hook
-reverted).** A first implementation of the hook landed and compiled — a defaulted
+**Deferred: the eager backend's ownership shape (verified in code, hook reverted).**
+A first implementation of the hook landed and compiled — a defaulted
 `with_evaluation_scope(&self, f: impl FnOnce() -> R + Send) -> R` on
 `BackendSessionHost`, the CPU override built on a split of the existing scope
 machinery (`open_evaluation_scope` acquiring the permit/entry/resources, and a `run`
@@ -1007,25 +1099,39 @@ the current eager runtime:
 * a thread-bound (`!Send`) scope entry does not help either: the outermost scope's
   callback *is* the eager body, and `enter` may still need to install it.
 
-So A2 needs a decision, with one viable path: **evaluate an eager operation (or a
+So the hook needs an ownership decision before it can be implemented, with one viable
+path: **evaluate an eager operation (or a
 backward pass) on a concrete handle instead of the composite enum**, so no mutex
 guard crosses the scope and today's lock and permit ordering is preserved. That
 changes how the eager runtime owns its backend, which is why it is not an
 unattended edit. The measured win awaiting it is the linalg 2.0–2.1× and the eager
-small-op −14…−18% from the intervention experiment, and the audit freeze keeps
-`with_evaluation_scope` at zero allowlisted entries so the implementation cannot
-appear unreviewed.
+small-op −14…−18% from the intervention experiment. Under the 2026-09-27 revision the
+hook is deferred rather than decided: the audit freeze keeps
+`with_evaluation_scope` at zero allowlisted entries, so the implementation cannot
+appear unreviewed, and the ownership question moves to #1938 together with the rest of
+the post-integration performance work.
 
-**Deliverable boundary and the decisions taken.** The remaining work for this
-workstream is A, everything that lands in `tenferro-rs` (the hook, its AD call
-sites, the re-verification and the certification campaign), plus B, the two external
-benchmark repositories (`tenferro-benchmark` #107 and `strided-rs-benchmark-suite`
-#41) publishing representative results with `quick`/`full` manifests. The per-issue
-CPU/GPU optimization workstreams (#1927, #1928 and their focused issues) are outside
-this boundary.
+**Deliverable boundary after the 2026-09-27 revision.** The active #1929 assignment is
+reduced to: deliver the #1926 explicit-session and route/API migration for its agreed
+scope, run the required CI and focused tests for the changed behaviour, and leave a
+short handoff. Phase B landed the backend owner/session route migration; the
+maintainer subsequently approved migrating eager entry too. That migration
+now exposes borrowed `EagerSession` operations and removes the ordinary
+per-operation eager entry surface. `store_grads` borrows one session opened at
+the backward boundary instead of entering separately for each slot. Owned-only
+extension fallback remains a separate named top-level boundary. This is
+independent of the deferred evaluation-scope hook. The hook, its AD wiring,
+the re-verification campaign and the three alternating pairs are **not**
+performance closure gates.
+Neither is completing `tenferro-benchmark` (#107) or `strided-rs-benchmark-suite`
+(#41): their manifests, full coverage and publication move to the post-integration
+work in #1938, and the per-issue CPU/GPU optimization workstreams (#1927, #1928 and
+their focused issues) keep their own ownership. The kept harness work is recorded in
+the handoff, and unbounded measurement is explicitly out of scope.
 
-Decided here, so the implementation does not stall on open questions (each remains
-reviewable and reversible):
+The following was the pre-revision hook proposal, **not** an implemented or
+approved ownership decision; #1938 must re-evaluate it against the current eager
+runtime before proceeding:
 
 1. **Hook home and shape.** A defaulted method on the existing
    `BackendSessionHost` trait in `tenferro-tensor`, named `with_evaluation_scope`,
@@ -1041,7 +1147,9 @@ reviewable and reversible):
    runs, direct session use) keep today's behaviour. Any residue that survives the
    hook is recorded per case with a bound rather than silently accepted.
 
-**Rollout, and what remains open.**
+**Deferred plan (recorded, not a closure gate).** The steps below are what the
+post-integration work in #1938 would follow; the 2026-09-27 revision removed them as
+#1929 requirements.
 
 1. The API is tracked under the existing issue #1926 / umbrella #1929; no new
    intake. The audit freeze above is already in place.
@@ -1052,12 +1160,13 @@ reviewable and reversible):
    normal, `Err` and panic paths, with a following scope opening normally; joining a
    caller's open scope; externally managed domain falls back silently; other backends
    keep the default; contention/latency bound; the compiled-path and GPU
-   non-regression rows; then the repository's three alternating pairs for the claim.
-4. Open decisions for the maintainer: the hook's trait and name, the AD granularity
-   (per evaluation, per backward, or both), and whether the residue that a scope does
-   not cover (ops executed outside an evaluation) is accepted with a recorded bound.
-   The allowlist question is settled: the hook's call sites enter the audit as
-   reviewed allowlist entries.
+   non-regression rows.
+4. Open questions that must be settled before any public hook is frozen: the hook's
+   trait and name, the AD granularity (per evaluation, per backward, or both), whether
+   the residue that a scope does not cover (ops executed outside an evaluation) is
+   accepted with a recorded bound, and the ownership decision above. The allowlist
+   question is settled: the hook's call sites enter the audit as reviewed allowlist
+   entries, and the freeze stays at zero until then.
 
 Consequences for the design decision: the direction is worth adopting, and Astra's
 ordering stands — the execution-ownership protocol (who holds the permit and the
@@ -1068,17 +1177,21 @@ any public hook is frozen or shipped. The `eager_dispatch_baseline` small-op cas
 are the other half of the residue and were not re-measured under a scope; they
 belong in the same follow-up.
 
-The criterion settings stay at the pinned defaults for certification; cheaper
-settings are acceptable for a diagnostic pass only, because they change the
+The criterion settings stay at the pinned defaults if the campaign is ever run;
+cheaper settings are acceptable for a diagnostic pass only, because they change the
 confidence intervals the comparator uses to separate `NOISY` from `REGRESSION`.
 
-#### Certification runbook
+#### Certification runbook (not required under the reduced contract)
 
-The pieces below exist and were verified to the point this host allows; only the
-quiet window and a free core are missing (`cpu=0` is occupied here). Every run goes
-through the campaign
-script, which pins the criterion settings, the 1T thread environment and the CPU
-affinity:
+The campaign below is the full seven-target, three-alternating-pair certificate the
+old contract asked for. The 2026-09-27 revision removed it as a #1929 closure gate and
+moved broad performance assessment to #1938; it is kept here because the scripts and
+the frozen baseline still exist and a later bounded pass can reuse them.
+
+The pieces below exist and were verified to the point this host allows. No quiet
+window, free `cpu=0` or full campaign is required to close #1929. If a later
+bounded assessment reuses the campaign script, it pins the criterion settings, the
+1T thread environment and the CPU affinity:
 
 1. **Baseline side.** In the baseline worktree (`bench/1929-route-baseline`, which
    holds `25da8d431`), apply the current harness source — the seven campaign
@@ -1113,6 +1226,10 @@ The recorded baseline keeps the before-only rows: re-capturing produces
 captured while the deleted spellings still existed.
 
 ## Measurement protocol
+
+This protocol is guidance for the **deferred** performance work (above), not a #1929
+closure gate. Under the 2026-09-27 revision the bounded post-integration assessment in
+#1938 chooses the decisive metrics instead of running this per-case matrix.
 
 Removing syntax does not by itself save time; #1926 requires measurement
 separately. The comparison must hold kernel, cache state, thread count, and
@@ -1150,16 +1267,23 @@ change that added this document.
 
 ## Non-goals
 
-- No new public API, backend, dependency, feature flag, or cache.
+- No unrelated public API, backend, dependency, feature flag, or cache beyond
+  the runtime-bound eager session surface required by #1926.
 - No universal execution pipeline and no second operation registry.
 - No claim that the migration improves performance without the measurement
   above.
+- No frame that the deferred scope hook, the certification campaign or the benchmark
+  repositories' completion is required to close #1929; the 2026-09-27 revision moved
+  that work to #1938 and left it with its own owners.
 - No change to `Runtime::run_compiled` region formation, GPU device ordering,
   AD semantics, or numerical behavior.
 - No removal of the session surface itself, and no session handle inside
   `Tensor`/`TypedTensor`/`EagerTensor` values.
 
 ## Residual risks
+
+The first two bullets below recorded risks **before** implementation; the
+current outcome and remaining capabilities are in the handoff.
 
 - **Scope.** Slices 2–5 touch the hottest execution paths in three crates. Each
   slice must be independently revertible; a combined multi-crate rewrite would

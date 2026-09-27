@@ -2,9 +2,10 @@
 
 tenferro exposes linear algebra through the `tenferro-linalg` operation crate.
 Use `TensorLinalgExt`, `TensorReadLinalgExt`, or `TypedTensorLinalgExt` for direct
-execution without autodiff, `EagerTensorLinalgExt`
-for immediate forward execution and eager `backward()` / functional transform
-workflows under an `EagerRuntime`, and `TracedTensorLinalgExt` when the
+execution without autodiff, `EagerSessionLinalgExt` inside
+`EagerRuntime::with_eager_session` for eager `backward()` / functional transform
+workflows (with `EagerTensorLinalgExt::solve` as a calling-thread `no_grad`
+exception), and `TracedTensorLinalgExt` when the
 operation should be part of a graph, `grad`/`vjp`/`jvp`, or repeated compile/run
 workflow.
 
@@ -48,7 +49,7 @@ Box<dyn std::error::Error>>` for a standalone binary.
 | Layer | Linear algebra style |
 | --- | --- |
 | Concrete `Tensor` / `TensorRead` / `TypedTensor<T>` | crate-root linalg extension traits; methods take `&mut dyn BackendSession` obtained via `BackendSessionHost::with_backend_session` |
-| `EagerTensor` | `EagerTensorLinalgExt` methods behind `autodiff`; tracked variables support `backward()` and `EagerRuntime` functional transforms where AD rules support the operation |
+| `EagerTensor` | `EagerSessionLinalgExt` methods on a borrowed `EagerSession` behind `autodiff`, except tensor-owned `EagerTensorLinalgExt::solve`; tracked variables support `backward()` and functional transforms where AD rules support the operation |
 | `TracedTensor` | `TracedTensorLinalgExt` methods for graph execution and `grad`/`vjp`/`jvp` workflows |
 
 CUDA is a backend/device choice for supported `Tensor`, `EagerTensor`, and
@@ -64,7 +65,7 @@ CUDA is a backend/device choice for supported `Tensor`, `EagerTensor`, and
 | Cholesky | `cholesky` | `cholesky` | `cholesky` |
 | SVD | `svd`, `svdvals`, `svd_with_options` | `svd`, `svd_with_options` | `svd`, `svd_with_options` |
 | QR | `qr`, `qr_with_options` | `qr`, `qr_with_options` | `qr`, `qr_with_options` |
-| Incremental compact QR | `householder_qr`, `HouseholderQr::from_factors`, `append_columns`, `r`, `q_columns` | same state operations on `EagerTensor` | same state operations on `TracedTensor` |
+| Incremental compact QR | `householder_qr`, `HouseholderQr::from_factors`, `append_columns`, `r`, `q_columns` | `EagerSessionLinalgExt::householder_qr` and state operations with `&mut EagerSession` | same state operations on `TracedTensor` |
 | Hermitian eigen | `eigh`, `eigh_with_options` | `eigh`, `eigh_with_options`, `eigvalsh` | `eigh`, `eigh_with_options`, `eigvalsh` |
 | General eigen | `eig` | `eig`, `eigvals` | `eig`, `eigvals` |
 | LU | `lu` | `lu` | `lu` |
@@ -74,8 +75,10 @@ CUDA is a backend/device choice for supported `Tensor`, `EagerTensor`, and
 | Matrix inverse | `inv` | `inv` | `inv` |
 | Norms | `norm` | `norm` | `norm` |
 
-Concrete, read, typed, eager, and traced tensor APIs are crate-root extension
-traits. Concrete methods take `&mut dyn BackendSession` obtained through
+Concrete, read, typed, eager-session, and traced tensor APIs are crate-root
+extension traits. Eager decompositions take `&mut EagerSession` from
+`EagerRuntime::with_eager_session`; do not call the tensor-owned `solve` entry
+inside an active borrowed session. Concrete methods take `&mut dyn BackendSession` obtained through
 `BackendSessionHost::with_backend_session`. `TensorReadLinalgExt::svdvals_read`
 and `eigvalsh_read` accept borrowed inputs; eligible faer host views avoid a
 full input copy, while providers that need owned compact storage materialize at

@@ -702,7 +702,8 @@ fn validate_upper_trapezoidal_gpu(
         }
         DType::External(_) => return Err(unsupported_linalg_dtype(op, r)),
     };
-    let maximum = backend.reduce_max(&Tensor::from_typed::<i32>(flags), &[0, 1])?;
+    let flags = Tensor::from_typed::<i32>(flags);
+    let maximum = backend.reduce_max_read(TensorRead::from_tensor(&flags), &[0, 1])?;
     backend.runtime().synchronize()?;
     let host = download_tensor(backend.runtime(), &maximum)?;
     let value = host.into_typed::<i32>().map_err(|_| {
@@ -1126,7 +1127,7 @@ pub(super) fn solve(backend: &mut CudaExecSession<'_>, a: &Tensor, b: &Tensor) -
 
     let (rhs, restore_shape) = if let Some(matrix_rhs_shape) = batched_vector_rhs_shape(a, b) {
         (
-            backend.reshape(b, &matrix_rhs_shape)?,
+            backend.reshape_read(TensorRead::from_tensor(b), &matrix_rhs_shape)?,
             Some(b.shape().to_vec()),
         )
     } else {
@@ -1144,7 +1145,7 @@ pub(super) fn solve(backend: &mut CudaExecSession<'_>, a: &Tensor, b: &Tensor) -
     };
     let x = lu_solve_prepared(backend, a, packed_lu, pivots, &rhs, false, false)?;
     if let Some(shape) = restore_shape {
-        backend.reshape(&x, &shape)
+        backend.reshape_read(TensorRead::from_tensor(&x), &shape)
     } else {
         Ok(x)
     }
@@ -1192,7 +1193,7 @@ pub(super) fn lu_solve_prepared(
 
     let (rhs, restore_shape) = if let Some(matrix_rhs_shape) = batched_vector_rhs_shape(a, b) {
         (
-            backend.reshape(b, &matrix_rhs_shape)?,
+            backend.reshape_read(TensorRead::from_tensor(b), &matrix_rhs_shape)?,
             Some(b.shape().to_vec()),
         )
     } else {
@@ -1232,7 +1233,7 @@ pub(super) fn lu_solve_prepared(
     }?;
 
     if let Some(shape) = restore_shape {
-        backend.reshape(&result, &shape)
+        backend.reshape_read(TensorRead::from_tensor(&result), &shape)
     } else {
         Ok(result)
     }
@@ -4146,9 +4147,9 @@ fn validate_nonsingular_gpu(backend: &mut CudaExecSession<'_>, u: &Tensor) -> Re
 
     // Flatten to 1D then reduce_min on axis 0 to get a single scalar.
     let total = checked_shape_product("validate_nonsingular_gpu", "diagonal", abs_diag.shape())?;
-    let flat = backend.reshape(&abs_diag, &[total])?;
-    let min_val = backend.reduce_min(&flat, &[0])?;
-    let max_val = backend.reduce_max(&flat, &[0])?;
+    let flat = backend.reshape_read(TensorRead::from_tensor(&abs_diag), &[total])?;
+    let min_val = backend.reduce_min_read(TensorRead::from_tensor(&flat), &[0])?;
+    let max_val = backend.reduce_max_read(TensorRead::from_tensor(&flat), &[0])?;
 
     // Host reads must observe the queued GPU reduction result.
     backend.runtime().synchronize()?;
@@ -4170,7 +4171,7 @@ fn validate_nonsingular_gpu(backend: &mut CudaExecSession<'_>, u: &Tensor) -> Re
 
 fn diagonal_magnitude(backend: &mut CudaExecSession<'_>, diag: &Tensor) -> Result<Tensor> {
     match diag.dtype() {
-        DType::F32 | DType::F64 => backend.abs(diag),
+        DType::F32 | DType::F64 => backend.abs_read(TensorRead::from_tensor(diag)),
         DType::C32 => complex32_magnitude(
             backend,
             typed_host::<Complex32>("validate_nonsingular_gpu", diag)?,

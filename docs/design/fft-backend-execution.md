@@ -163,8 +163,10 @@ The initial CubeK Metal adapter is deliberately narrower:
 and device-local WebGPU buffers return typed errors. They never trigger CPU
 fallback or an implicit transfer.
 
-`EagerTensorFftExt` registers the same FFT runtime against `EagerBackend`.
-The adapter uses the runtime owner's selected CPU, CUDA, or WebGPU capability;
+`EagerSessionFftExt` installs the same FFT runtime against the active borrowed
+`EagerSession`. Consuming CPU-host in-place FFT alone remains tensor-owned via
+`EagerTensorFftExt`. The adapter uses the runtime owner's selected CPU, CUDA,
+or WebGPU capability;
 it does not inspect placement to choose a backend and does not download,
 upload, or select a CPU backend on behalf of a GPU operation. Traced CUDA use
 likewise requires explicit engine registration and
