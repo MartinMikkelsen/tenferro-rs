@@ -3,7 +3,7 @@ use std::cell::Cell;
 use std::hint::black_box;
 
 use num_complex::Complex64;
-use tenferro_tensor::{Rank, TypedTensor, TypedTensorView, TypedTensorViewMut};
+use tenferro_tensor::{Rank, Tensor, TensorRead, TypedTensor, TypedTensorView, TypedTensorViewMut};
 
 struct CountingAllocator;
 
@@ -62,6 +62,48 @@ fn small_dynamic_borrowed_view_metadata_stays_inline() {
 
     assert_eq!(read_allocations, 0);
     assert_eq!(write_allocations, 0);
+}
+
+#[test]
+fn plain_static_rank_owner_adopts_vec_without_metadata_allocation() {
+    let data = vec![String::from("a"), String::from("b")];
+    let pointer = data.as_ptr();
+    let mut owner = None;
+    let ctor_allocations = count_allocations(|| {
+        owner = Some(TypedTensor::<String, Rank<1>>::from_vec_col_major([2], data).unwrap());
+    });
+    let owner = owner.unwrap();
+    let view_allocations = count_allocations(|| {
+        assert_eq!(owner.host_data().unwrap().as_ptr(), pointer);
+        assert_eq!(owner.as_view().get(&[1]).unwrap(), "b");
+    });
+    assert_eq!(ctor_allocations, 0);
+    assert_eq!(view_allocations, 0);
+    let original = owner.into_host_vec().unwrap();
+    assert_eq!(original.as_ptr(), pointer);
+}
+
+#[test]
+fn erased_plain_owner_and_read_borrow_keep_original_allocation() {
+    let data = vec![1.0_f64, 2.0];
+    let pointer = data.as_ptr();
+    let allocations = count_allocations(|| {
+        let owner = TypedTensor::<f64>::from_vec_col_major([2], data).unwrap();
+        let tensor = Tensor::from_typed(owner);
+        let read = TensorRead::from_tensor(&tensor);
+        assert_eq!(read.as_slice::<f64>().unwrap().as_ptr(), pointer);
+        assert_eq!(
+            tensor
+                .as_typed::<f64>()
+                .unwrap()
+                .host_data()
+                .unwrap()
+                .as_ptr(),
+            pointer
+        );
+        black_box(tensor);
+    });
+    assert_eq!(allocations, 0);
 }
 
 #[test]

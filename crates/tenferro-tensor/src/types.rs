@@ -1032,10 +1032,65 @@ pub(crate) struct TensorCore<R: TensorRank = DynRank> {
 }
 
 #[derive(Debug)]
-#[repr(transparent)]
 pub struct TypedTensor<T, R: TensorRank = DynRank> {
-    pub(crate) core: TensorCore<R>,
-    _scalar: PhantomData<T>,
+    core: TypedTensorCore<T, R>,
+}
+
+#[derive(Debug)]
+enum TypedTensorCore<T, R: TensorRank> {
+    Host {
+        data: HostData<T>,
+        shape: R::Shape,
+        placement: Placement,
+    },
+    Managed(Box<TensorCore<R>>),
+}
+
+#[derive(Debug)]
+struct HostData<T> {
+    buffer: StorageBuffer<T>,
+    recycler: Option<std::sync::Weak<dyn crate::HostBufferRecycler<T>>>,
+}
+
+impl<T> HostData<T> {
+    fn new(data: Vec<T>) -> Self {
+        Self {
+            buffer: StorageBuffer::Host(data),
+            recycler: None,
+        }
+    }
+
+    fn into_vec(mut self) -> Vec<T> {
+        self.recycler = None;
+        match std::mem::replace(&mut self.buffer, StorageBuffer::Host(Vec::new())) {
+            StorageBuffer::Host(data) => data,
+            StorageBuffer::Backend(_) => unreachable!("plain host storage is host-owned"),
+        }
+    }
+
+    fn as_slice(&self) -> &[T] {
+        match &self.buffer {
+            StorageBuffer::Host(data) => data,
+            StorageBuffer::Backend(_) => unreachable!("plain host storage is host-owned"),
+        }
+    }
+
+    fn as_mut_slice(&mut self) -> &mut [T] {
+        match &mut self.buffer {
+            StorageBuffer::Host(data) => data,
+            StorageBuffer::Backend(_) => unreachable!("plain host storage is host-owned"),
+        }
+    }
+}
+
+impl<T> Drop for HostData<T> {
+    fn drop(&mut self) {
+        if let Some(recycler) = self.recycler.take().and_then(|weak| weak.upgrade()) {
+            if let StorageBuffer::Host(data) = &mut self.buffer {
+                recycler.recycle(std::mem::take(data));
+            }
+        }
+    }
 }
 
 /// The sole owner handle for host tensors. The allocation group owns the
@@ -1064,17 +1119,6 @@ impl<R: TensorRank> Debug for OwnedTensorGroup<R> {
 }
 
 impl<R: TensorRank> OwnedTensorGroup<R> {
-    /// The element dtype this owner's descriptor records.
-    ///
-    /// INVARIANT: an owned group is constructed together with its descriptor, so the slot
-    /// always resolves; the erased `Tensor` reads its dtype from here rather than carrying a
-    /// duplicate tag.
-    fn dtype(&self) -> DType {
-        self.group
-            .descriptor_dtype(self.slot)
-            .unwrap_or_else(|| unreachable!("an owned group always carries its descriptor"))
-    }
-
     fn from_host_vec<T: TensorScalar>(shape: R::Shape, data: Vec<T>) -> crate::Result<Self> {
         let (group, slot) = AllocationGroup::from_host_vec::<T, R>(shape, data)
             .map_err(|error| group_error("TypedTensor::from_host_vec", error))?;
@@ -1166,7 +1210,7 @@ impl<R: TensorRank> OwnedTensorGroup<R> {
         self.group.host_buffer_at::<T>(self.allocation_index)
     }
 
-    fn host_slice<T: 'static>(&self) -> crate::Result<&[T]> {
+    fn host_slice<T>(&self) -> crate::Result<&[T]> {
         let Some(pointer) = self.host_ptr else {
             return Err(crate::Error::runtime_state(
                 "TypedTensor::host_data",
@@ -1185,7 +1229,7 @@ impl<R: TensorRank> OwnedTensorGroup<R> {
         Ok(unsafe { std::slice::from_raw_parts(pointer.get() as *const T, element_count) })
     }
 
-    fn host_slice_mut<T: 'static>(&mut self) -> crate::Result<&mut [T]> {
+    fn host_slice_mut<T>(&mut self) -> crate::Result<&mut [T]> {
         let Some(pointer) = self.host_ptr else {
             return Err(crate::Error::runtime_state(
                 "TypedTensor::host_data_mut",
@@ -1212,7 +1256,7 @@ impl<R: TensorRank> OwnedTensorGroup<R> {
         self.group.backend_buffer_mut::<T>(self.slot)
     }
 
-    fn into_host_vec<T: TensorScalar>(self) -> crate::Result<Vec<T>> {
+    fn into_host_vec<T: 'static>(self) -> crate::Result<Vec<T>> {
         self.group
             .into_host_vec::<T>(self.slot)
             .map_err(|error| crate::Error::runtime_state("TypedTensor::into_vec_col_major", error))
@@ -1819,9 +1863,12 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorView<'a, T, R> {
                 .prepare_device_read_for_layout(&self.layout)
                 .map_err(|error| crate::Error::runtime_state_source(op, error));
         }
-        let buffer = self
-            .backend_buffer()
-            .ok_or_else(|| crate::Error::runtime_state(op, "expected a backend tensor view"))?;
+        let buffer = self.backend_buffer().ok_or_else(|| {
+            crate::Error::runtime_state_source(
+                op,
+                crate::AccessError::Unsupported { backend: "host" },
+            )
+        })?;
         prepare_backend_access(buffer, &self.layout, op)
     }
 
@@ -2072,7 +2119,7 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorView<'a, T, R> {
         let shape = R::shape_from_vec(shape_vec(self.shape()))
             .map_err(|err| tensor_layout_error("TypedTensorView::duplicate", err))?;
         let mut tensor = TypedTensor::from_vec_col_major(shape, data)?;
-        tensor.core.placement = self.placement.clone();
+        tensor.set_placement(self.placement.clone());
         Ok(tensor)
     }
 
@@ -2745,9 +2792,12 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorViewMut<'a, T, R> {
     {
         let layout = self.layout.clone();
         if self.root.is_none() {
-            let buffer = self
-                .backend_buffer()
-                .ok_or_else(|| crate::Error::runtime_state(op, "expected a backend tensor view"))?;
+            let buffer = self.backend_buffer().ok_or_else(|| {
+                crate::Error::runtime_state_source(
+                    op,
+                    crate::AccessError::Unsupported { backend: "host" },
+                )
+            })?;
             return prepare_backend_access(buffer, &self.layout, op);
         }
         let root = self
@@ -3724,12 +3774,13 @@ macro_rules! impl_tensor_scalar {
             }
 
             fn into_tensor(shape: Vec<usize>, data: Vec<Self>) -> crate::Result<Tensor> {
-                TypedTensor::from_vec_col_major(shape, data)
-                    .map(|tensor| Tensor::from_core(tensor.core))
+                TypedTensor::from_vec_col_major(shape, data).map(Self::typed_tensor_into_tensor)
             }
 
             fn typed_tensor_into_tensor(tensor: TypedTensor<Self>) -> Tensor {
-                Tensor::from_core(tensor.core)
+                Tensor {
+                    payload: TensorPayload::Native(PresetTensor::$variant(tensor)),
+                }
             }
 
             fn tensor_read(tensor: &TypedTensor<Self>) -> TensorRead<'_> {
@@ -3780,7 +3831,17 @@ macro_rules! impl_tensor_scalar {
             }
 
             fn into_typed(tensor: Tensor) -> crate::Result<TypedTensor<Self>> {
-                tensor.into_preset::<Self>()
+                let actual = tensor.dtype();
+                match tensor.payload {
+                    TensorPayload::Native(PresetTensor::$variant(typed)) => Ok(typed),
+                    _ => Err(crate::Error::validation(
+                        "TensorScalar::into_typed",
+                        ValidationError::DTypeMismatch {
+                            expected: Self::dtype(),
+                            actual,
+                        },
+                    )),
+                }
             }
         }
     };
@@ -3813,30 +3874,44 @@ impl_tensor_scalar!(Complex32, f32, C32, C32);
 /// ```
 /// The owning payload behind the erased [`Tensor`].
 ///
-/// `Native` holds the scalar-independent core of a preset tensor: the element type is the
-/// descriptor's dtype, so no second tag is stored. `External` holds a caller-owned host
-/// payload beside the placement it lives in, and is recovered by its own element type
-/// without reinterpreting any bytes.
-// The inline `Native` payload is the point of the representation: it keeps the erased
-// tensor at 776 B with no per-tensor allocation, so the size gap against `External` is
-// deliberate rather than an accident. #1823 sliced the metadata duplication that made it
-// 1464 B; `erased_tensor_size_stays_within_the_documented_bound` in `types/tests.rs`
-// holds the current bound.
-// No cast depends on the payload layout: the only pointer casts are
-// `TensorCore` <-> `TypedTensor`, and they cast the `TensorCore` field, not
-// `TensorPayload`. The default repr keeps the tag in a niche and is 8 B smaller.
-#[allow(clippy::large_enum_variant)]
+/// `Native` stores a preset scalar owner directly; `External` retains its
+/// existing explicit caller-owned host payload.
 #[derive(Debug)]
 enum TensorPayload {
-    Native(TensorCore<DynRank>),
+    Native(PresetTensor),
     External(tenferro_tensor_core::ErasedHostTensor, Placement),
+}
+
+#[derive(Debug)]
+enum PresetTensor {
+    F32(TypedTensor<f32>),
+    F64(TypedTensor<f64>),
+    I32(TypedTensor<i32>),
+    I64(TypedTensor<i64>),
+    Bool(TypedTensor<bool>),
+    C32(TypedTensor<Complex32>),
+    C64(TypedTensor<Complex64>),
+}
+
+macro_rules! with_preset {
+    ($preset:expr, |$value:ident| $body:expr) => {
+        match $preset {
+            PresetTensor::F32($value) => $body,
+            PresetTensor::F64($value) => $body,
+            PresetTensor::I32($value) => $body,
+            PresetTensor::I64($value) => $body,
+            PresetTensor::Bool($value) => $body,
+            PresetTensor::C32($value) => $body,
+            PresetTensor::C64($value) => $body,
+        }
+    };
 }
 
 /// Dynamic tensor over the supported scalar types.
 ///
-/// The erased tensor keeps dtype dynamic and rank dynamic: the preset scalars share one
-/// `Native` core whose descriptor records the element type, and a caller-owned scalar is an
-/// `External` payload recovered by its own type. Use [`TypedTensor<T, R>`](TypedTensor)
+/// The erased tensor keeps dtype and rank dynamic: each preset scalar retains its
+/// typed owner without constructing a group, while caller-owned scalars remain
+/// `External` payloads recovered by their own type. Use [`TypedTensor<T, R>`](TypedTensor)
 /// directly when the scalar type or rank should be represented in Rust's type system.
 ///
 /// # Examples
@@ -3853,35 +3928,6 @@ pub struct Tensor {
     payload: TensorPayload,
 }
 
-impl Tensor {
-    /// Build a tensor from a typed tensor's core; the descriptor carries the element dtype.
-    pub(crate) fn from_core(core: TensorCore<DynRank>) -> Self {
-        Self {
-            payload: TensorPayload::Native(core),
-        }
-    }
-
-    /// The preset tensor's core, when this holds a preset scalar.
-    /// The preset tensor's core, when this holds a preset scalar.
-    /// Move the preset core out as a typed tensor, or report the dtype mismatch.
-    fn into_preset<T: TensorScalar>(self) -> crate::Result<TypedTensor<T>> {
-        let actual = self.dtype();
-        match self.payload {
-            TensorPayload::Native(core) if actual == T::dtype() => Ok(TypedTensor {
-                core,
-                _scalar: PhantomData,
-            }),
-            _ => Err(crate::Error::validation(
-                "TensorScalar::into_typed",
-                ValidationError::DTypeMismatch {
-                    expected: T::dtype(),
-                    actual,
-                },
-            )),
-        }
-    }
-}
-
 impl TensorCore<DynRank> {
     /// Whether this core's descriptor names a non-CPU provider.
     fn is_backend_buffer(&self) -> bool {
@@ -3889,37 +3935,6 @@ impl TensorCore<DynRank> {
             self.group.group.provider_kind(self.group.slot),
             None | Some(crate::storage::ProviderKind::Cpu)
         )
-    }
-
-    /// The storage length this core's descriptor records.
-    pub(crate) fn buffer_len(&self) -> usize {
-        self.group
-            .group
-            .descriptor_len(self.group.slot)
-            .unwrap_or_else(|| unreachable!("typed tensor group descriptor mismatch"))
-    }
-
-    /// Reborrow this core as a typed tensor.
-    ///
-    /// # Safety
-    ///
-    /// `T::dtype()` must equal the dtype this core's descriptor records.
-    unsafe fn as_typed<T: TensorScalar>(&self) -> &TypedTensor<T> {
-        // SAFETY: `TypedTensor<T, DynRank>` is `#[repr(transparent)]` over
-        // `TensorCore<DynRank>` with a zero-sized `PhantomData<T>`, so both share an address,
-        // size and alignment; the caller proves the element type.
-        unsafe { &*(self as *const TensorCore<DynRank> as *const TypedTensor<T>) }
-    }
-
-    /// Reborrow this core as a mutable typed tensor.
-    ///
-    /// # Safety
-    ///
-    /// `T::dtype()` must equal the dtype this core's descriptor records, and the borrow must
-    /// be exclusive.
-    unsafe fn as_typed_mut<T: TensorScalar>(&mut self) -> &mut TypedTensor<T> {
-        // SAFETY: as in `as_typed`, with an exclusive borrow of the same address.
-        unsafe { &mut *(self as *mut TensorCore<DynRank> as *mut TypedTensor<T>) }
     }
 }
 
@@ -4053,16 +4068,7 @@ impl Tensor {
 
     pub(crate) fn into_group_parts(self) -> (AllocationGroup, DescriptorSlot) {
         match self.payload {
-            TensorPayload::Native(core) => {
-                let TensorCore {
-                    group, placement, ..
-                } = core;
-                let (mut group, slot) = group.into_parts();
-                // The group round trip rebuilds a tensor from the descriptor, so the
-                // core copy has to reach the descriptor before it is dropped.
-                group.publish_live_descriptor_placement(slot, placement);
-                (group, slot)
-            }
+            TensorPayload::Native(preset) => with_preset!(preset, |typed| typed.into_group_parts()),
             // INVARIANT: a caller-owned payload has no allocation group.
             TensorPayload::External(..) => {
                 unreachable!("an externally defined payload has no allocation group")
@@ -4849,7 +4855,7 @@ fn tensor_layout(tensor: &Tensor) -> TensorLayout<DynRank> {
             // payload it was created from and this construction cannot fail.
             unreachable!("a validated payload yields a layout inside its own storage")
         }),
-        TensorPayload::Native(core) => core.layout.clone(),
+        TensorPayload::Native(preset) => with_preset!(preset, |typed| typed.layout()),
     }
 }
 
@@ -4857,7 +4863,7 @@ fn tensor_buffer_len(tensor: &Tensor) -> usize {
     match &tensor.payload {
         // A caller-owned payload stores its element count directly.
         TensorPayload::External(payload, _) => payload.element_count(),
-        TensorPayload::Native(core) => core.buffer_len(),
+        TensorPayload::Native(preset) => with_preset!(preset, |typed| typed.buffer_len()),
     }
 }
 
@@ -4958,20 +4964,31 @@ fn typed_view_with_layout<T: TensorScalar + 'static>(
     tensor: &TypedTensor<T>,
     layout: TensorLayout<DynRank>,
 ) -> TypedTensorView<'_, T> {
-    let root = match tensor.core.group.view::<T>() {
-        Ok(root) => root,
-        Err(error) => unreachable!("typed tensor group descriptor mismatch: {error}"),
-    };
-    let buffer = if let Some(allocation) = root.backend_allocation() {
-        TensorStorageRef::Root(allocation)
-    } else {
-        TensorStorageRef::Host(tensor.group_host_slice())
-    };
-    TypedTensorView {
-        buffer,
-        root: Some(root),
-        layout,
-        placement: tensor.core.placement.clone(),
+    match &tensor.core {
+        TypedTensorCore::Host {
+            data, placement, ..
+        } => TypedTensorView {
+            buffer: TensorStorageRef::Host(data.as_slice()),
+            root: None,
+            layout,
+            placement: placement.clone(),
+        },
+        TypedTensorCore::Managed(core) => {
+            let root = core.group.view::<T>().unwrap_or_else(|error| {
+                unreachable!("typed tensor group descriptor mismatch: {error}")
+            });
+            let buffer = if let Some(allocation) = root.backend_allocation() {
+                TensorStorageRef::Root(allocation)
+            } else {
+                TensorStorageRef::Host(tensor.group_host_slice())
+            };
+            TypedTensorView {
+                buffer,
+                root: Some(root),
+                layout,
+                placement: core.placement.clone(),
+            }
+        }
     }
 }
 
@@ -5018,9 +5035,14 @@ pub(crate) fn tensor_from_group(
         layout: TensorLayout<DynRank>,
         placement: Placement,
     ) -> TypedTensor<T> {
+        assert_eq!(
+            group.descriptor_dtype(slot).expect("live typed descriptor"),
+            T::dtype(),
+            "managed typed owner must match its descriptor dtype",
+        );
         let (host_ptr, host_byte_len) = host_metadata::<T>(&group, slot);
         TypedTensor {
-            core: TensorCore {
+            core: TypedTensorCore::Managed(Box::new(TensorCore {
                 group: OwnedTensorGroup {
                     group,
                     slot,
@@ -5031,32 +5053,51 @@ pub(crate) fn tensor_from_group(
                 },
                 layout,
                 placement,
-            },
-            _scalar: PhantomData,
+            })),
         }
     }
 
     match dtype {
-        DType::F32 => {
-            Tensor::from_core(typed::<f32>(group, slot, allocation_index, layout, placement).core)
-        }
-        DType::F64 => {
-            Tensor::from_core(typed::<f64>(group, slot, allocation_index, layout, placement).core)
-        }
-        DType::I32 => {
-            Tensor::from_core(typed::<i32>(group, slot, allocation_index, layout, placement).core)
-        }
-        DType::I64 => {
-            Tensor::from_core(typed::<i64>(group, slot, allocation_index, layout, placement).core)
-        }
-        DType::Bool => {
-            Tensor::from_core(typed::<bool>(group, slot, allocation_index, layout, placement).core)
-        }
-        DType::C32 => Tensor::from_core(
-            typed::<Complex<f32>>(group, slot, allocation_index, layout, placement).core,
+        DType::F32 => <f32 as TensorScalar>::typed_tensor_into_tensor(typed::<f32>(
+            group,
+            slot,
+            allocation_index,
+            layout,
+            placement,
+        )),
+        DType::F64 => <f64 as TensorScalar>::typed_tensor_into_tensor(typed::<f64>(
+            group,
+            slot,
+            allocation_index,
+            layout,
+            placement,
+        )),
+        DType::I32 => <i32 as TensorScalar>::typed_tensor_into_tensor(typed::<i32>(
+            group,
+            slot,
+            allocation_index,
+            layout,
+            placement,
+        )),
+        DType::I64 => <i64 as TensorScalar>::typed_tensor_into_tensor(typed::<i64>(
+            group,
+            slot,
+            allocation_index,
+            layout,
+            placement,
+        )),
+        DType::Bool => <bool as TensorScalar>::typed_tensor_into_tensor(typed::<bool>(
+            group,
+            slot,
+            allocation_index,
+            layout,
+            placement,
+        )),
+        DType::C32 => <Complex<f32> as TensorScalar>::typed_tensor_into_tensor(
+            typed::<Complex<f32>>(group, slot, allocation_index, layout, placement),
         ),
-        DType::C64 => Tensor::from_core(
-            typed::<Complex<f64>>(group, slot, allocation_index, layout, placement).core,
+        DType::C64 => <Complex<f64> as TensorScalar>::typed_tensor_into_tensor(
+            typed::<Complex<f64>>(group, slot, allocation_index, layout, placement),
         ),
         // INVARIANT: an allocation group is created from a sealed preset scalar,
         // so it can never carry an externally defined one. External payloads are
@@ -5078,7 +5119,7 @@ pub(crate) fn tensor_from_group(
 /// ```
 impl From<TypedTensor<f64>> for Tensor {
     fn from(t: TypedTensor<f64>) -> Self {
-        Tensor::from_core(t.core)
+        Tensor::from_typed(t)
     }
 }
 
@@ -5095,7 +5136,7 @@ impl From<TypedTensor<f64>> for Tensor {
 /// ```
 impl From<TypedTensor<f32>> for Tensor {
     fn from(t: TypedTensor<f32>) -> Self {
-        Tensor::from_core(t.core)
+        Tensor::from_typed(t)
     }
 }
 
@@ -5113,7 +5154,7 @@ impl From<TypedTensor<f32>> for Tensor {
 /// ```
 impl From<TypedTensor<i64>> for Tensor {
     fn from(t: TypedTensor<i64>) -> Self {
-        Tensor::from_core(t.core)
+        Tensor::from_typed(t)
     }
 }
 
@@ -5131,7 +5172,7 @@ impl From<TypedTensor<i64>> for Tensor {
 /// ```
 impl From<TypedTensor<i32>> for Tensor {
     fn from(t: TypedTensor<i32>) -> Self {
-        Tensor::from_core(t.core)
+        Tensor::from_typed(t)
     }
 }
 
@@ -5149,7 +5190,7 @@ impl From<TypedTensor<i32>> for Tensor {
 /// ```
 impl From<TypedTensor<bool>> for Tensor {
     fn from(t: TypedTensor<bool>) -> Self {
-        Tensor::from_core(t.core)
+        Tensor::from_typed(t)
     }
 }
 
@@ -5171,7 +5212,7 @@ impl From<TypedTensor<bool>> for Tensor {
 /// ```
 impl From<TypedTensor<Complex<f64>>> for Tensor {
     fn from(t: TypedTensor<Complex<f64>>) -> Self {
-        Tensor::from_core(t.core)
+        Tensor::from_typed(t)
     }
 }
 
@@ -5193,7 +5234,7 @@ impl From<TypedTensor<Complex<f64>>> for Tensor {
 /// ```
 impl From<TypedTensor<Complex<f32>>> for Tensor {
     fn from(t: TypedTensor<Complex<f32>>) -> Self {
-        Tensor::from_core(t.core)
+        Tensor::from_typed(t)
     }
 }
 
@@ -5645,13 +5686,13 @@ impl<'a> TensorView<'a> {
         }
 
         match self {
-            Self::F32(view) => duplicate_typed(view).map(|t| Tensor::from_core(t.core)),
-            Self::F64(view) => duplicate_typed(view).map(|t| Tensor::from_core(t.core)),
-            Self::I32(view) => duplicate_typed(view).map(|t| Tensor::from_core(t.core)),
-            Self::I64(view) => duplicate_typed(view).map(|t| Tensor::from_core(t.core)),
-            Self::Bool(view) => duplicate_typed(view).map(|t| Tensor::from_core(t.core)),
-            Self::C32(view) => duplicate_typed(view).map(|t| Tensor::from_core(t.core)),
-            Self::C64(view) => duplicate_typed(view).map(|t| Tensor::from_core(t.core)),
+            Self::F32(view) => duplicate_typed(view).map(Tensor::from_typed),
+            Self::F64(view) => duplicate_typed(view).map(Tensor::from_typed),
+            Self::I32(view) => duplicate_typed(view).map(Tensor::from_typed),
+            Self::I64(view) => duplicate_typed(view).map(Tensor::from_typed),
+            Self::Bool(view) => duplicate_typed(view).map(Tensor::from_typed),
+            Self::C32(view) => duplicate_typed(view).map(Tensor::from_typed),
+            Self::C64(view) => duplicate_typed(view).map(Tensor::from_typed),
         }
     }
 }
@@ -6714,7 +6755,7 @@ pub(crate) fn default_placement() -> Placement {
     }
 }
 
-fn typed_tensor_from_vec_col_major<T: TensorScalar, R: TensorRank>(
+fn typed_tensor_from_vec_col_major<T, R: TensorRank>(
     shape: impl tenferro_tensor_core::IntoRankShape<R>,
     data: Vec<T>,
     op: &'static str,
@@ -6726,22 +6767,19 @@ fn try_typed_tensor_from_vec_col_major<T, R: TensorRank>(
     shape: impl tenferro_tensor_core::IntoRankShape<R>,
     data: Vec<T>,
     op: &'static str,
-) -> crate::Result<TypedTensor<T, R>>
-where
-    T: TensorScalar,
-{
-    let layout = try_compact_layout(shape, op)?;
-    try_checked_shape_len(layout.shape(), data.len(), op)?;
-    let group_shape =
-        R::shape_from_vec(shape_vec(layout.shape())).map_err(|err| tensor_layout_error(op, err))?;
-    let group = OwnedTensorGroup::from_host_vec(group_shape, data)?;
+) -> crate::Result<TypedTensor<T, R>> {
+    let shape = shape
+        .into_rank_shape()
+        .map_err(|err| tensor_layout_error(op, err))?;
+    tenferro_tensor_core::col_major_strides(shape.as_ref())
+        .map_err(|err| tensor_layout_error(op, err))?;
+    try_checked_shape_len(shape.as_ref(), data.len(), op)?;
     Ok(TypedTensor {
-        core: TensorCore {
-            group,
-            layout,
+        core: TypedTensorCore::Host {
+            data: HostData::new(data),
+            shape,
             placement: default_placement(),
         },
-        _scalar: PhantomData,
     })
 }
 
@@ -6756,17 +6794,12 @@ fn try_typed_tensor_zeros<T: TensorScalar + Clone + Zero, R: TensorRank>(
 ) -> crate::Result<TypedTensor<T, R>> {
     let layout = try_compact_layout(shape, "zeros")?;
     let n = try_shape_product(layout.shape(), "zeros")?;
-    let group_shape = R::shape_from_vec(shape_vec(layout.shape()))
-        .map_err(|err| tensor_layout_error("zeros", err))?;
-    let group = OwnedTensorGroup::from_host_vec(group_shape, vec![T::zero(); n])?;
-    Ok(TypedTensor {
-        core: TensorCore {
-            group,
-            layout,
-            placement: default_placement(),
-        },
-        _scalar: PhantomData,
-    })
+    typed_tensor_from_vec_col_major(
+        R::shape_from_vec(shape_vec(layout.shape()))
+            .map_err(|err| tensor_layout_error("zeros", err))?,
+        vec![T::zero(); n],
+        "zeros",
+    )
 }
 
 fn typed_tensor_ones<T: TensorScalar + One + Zero, R: TensorRank>(
@@ -6780,17 +6813,12 @@ fn try_typed_tensor_ones<T: TensorScalar + Clone + One + Zero, R: TensorRank>(
 ) -> crate::Result<TypedTensor<T, R>> {
     let layout = try_compact_layout(shape, "ones")?;
     let n = try_shape_product(layout.shape(), "ones")?;
-    let group_shape = R::shape_from_vec(shape_vec(layout.shape()))
-        .map_err(|err| tensor_layout_error("ones", err))?;
-    let group = OwnedTensorGroup::from_host_vec(group_shape, vec![T::one(); n])?;
-    Ok(TypedTensor {
-        core: TensorCore {
-            group,
-            layout,
-            placement: default_placement(),
-        },
-        _scalar: PhantomData,
-    })
+    typed_tensor_from_vec_col_major(
+        R::shape_from_vec(shape_vec(layout.shape()))
+            .map_err(|err| tensor_layout_error("ones", err))?,
+        vec![T::one(); n],
+        "ones",
+    )
 }
 
 fn typed_tensor_from_buffer_col_major<T: TensorScalar + Send + Sync + 'static, R: TensorRank>(
@@ -6821,7 +6849,7 @@ fn typed_tensor_from_backend_allocation<T: TensorScalar + Send + Sync + 'static,
         .map_err(|error| group_error("TypedTensor::from_backend_allocation", error))?;
     let (host_ptr, host_byte_len) = host_metadata::<T>(&group, slot);
     Ok(TypedTensor {
-        core: TensorCore {
+        core: TypedTensorCore::Managed(Box::new(TensorCore {
             group: OwnedTensorGroup {
                 group,
                 slot,
@@ -6832,8 +6860,7 @@ fn typed_tensor_from_backend_allocation<T: TensorScalar + Send + Sync + 'static,
             },
             layout,
             placement,
-        },
-        _scalar: PhantomData,
+        })),
     })
 }
 
@@ -6850,22 +6877,29 @@ fn try_typed_tensor_from_buffer_col_major<
     try_checked_shape_len(layout.shape(), len, "from_buffer_col_major")?;
     let group_shape = R::shape_from_vec(shape_vec(layout.shape()))
         .map_err(|err| tensor_layout_error("from_buffer_col_major", err))?;
-    let group = match buffer {
-        StorageBuffer::Host(data) => OwnedTensorGroup::from_host_vec(group_shape, data)?,
-        StorageBuffer::Backend(buffer) => OwnedTensorGroup::from_backend_buffer(
-            group_shape,
-            StorageBuffer::Backend(buffer),
-            placement.clone(),
-        )?,
-    };
-    Ok(TypedTensor {
-        core: TensorCore {
-            group,
-            layout,
-            placement,
-        },
-        _scalar: PhantomData,
-    })
+    match buffer {
+        StorageBuffer::Host(data) => Ok(TypedTensor {
+            core: TypedTensorCore::Host {
+                data: HostData::new(data),
+                shape: group_shape,
+                placement,
+            },
+        }),
+        StorageBuffer::Backend(buffer) => {
+            let group = OwnedTensorGroup::from_backend_buffer(
+                group_shape,
+                StorageBuffer::Backend(buffer),
+                placement.clone(),
+            )?;
+            Ok(TypedTensor {
+                core: TypedTensorCore::Managed(Box::new(TensorCore {
+                    group,
+                    layout,
+                    placement,
+                })),
+            })
+        }
+    }
 }
 
 impl<T: TensorScalar + Zero, R: TensorRank> TypedTensor<T, R> {
@@ -6915,6 +6949,81 @@ impl<T: TensorScalar + One + Zero, R: TensorRank> TypedTensor<T, R> {
 }
 
 impl<T, R: TensorRank> TypedTensor<T, R> {
+    /// Adopt a column-major host `Vec<T>` with no scalar, copy or thread-safety bound.
+    ///
+    /// # Errors
+    /// Returns a validation error for a mismatched shape, rank or element count.
+    pub fn from_vec_col_major(
+        shape: impl tenferro_tensor_core::IntoRankShape<R>,
+        data: Vec<T>,
+    ) -> crate::Result<Self> {
+        typed_tensor_from_vec_col_major(shape, data, "from_vec_col_major")
+    }
+
+    /// Consume this compact tensor and return the original host `Vec<T>`.
+    ///
+    /// # Errors
+    /// Device-only storage cannot be exported as a host vector.
+    pub fn into_host_vec(self) -> crate::Result<Vec<T>>
+    where
+        T: 'static,
+    {
+        match self.core {
+            TypedTensorCore::Host { data, .. } => Ok(data.into_vec()),
+            TypedTensorCore::Managed(core) => {
+                if core.group.backend_buffer::<T>().is_some() {
+                    return Err(crate::Error::runtime_state(
+                        "into_host_vec",
+                        "backend buffers cannot be exported as host Vec",
+                    ));
+                }
+                core.group.into_host_vec::<T>()
+            }
+        }
+    }
+
+    /// Consume the original host vector along with its column-major shape.
+    ///
+    /// # Errors
+    /// Device-only storage cannot be exported as a host vector.
+    pub fn into_vec_col_major(self) -> crate::Result<(Vec<usize>, Vec<T>)>
+    where
+        T: 'static,
+    {
+        let shape = self.shape().to_vec();
+        if matches!(&self.core, TypedTensorCore::Managed(core) if core.group.backend_buffer::<T>().is_some())
+        {
+            return Err(crate::Error::runtime_state(
+                "into_vec_col_major",
+                "backend buffers cannot be exported as host Vec",
+            ));
+        }
+        let data = self.into_host_vec()?;
+        Ok((shape, data))
+    }
+
+    /// Borrow the plain host values (or an existing managed host root).
+    ///
+    /// # Errors
+    /// Returns a runtime-state error for device-only storage.
+    pub fn host_data(&self) -> crate::Result<&[T]> {
+        match &self.core {
+            TypedTensorCore::Host { data, .. } => Ok(data.as_slice()),
+            TypedTensorCore::Managed(core) => core.group.host_slice::<T>(),
+        }
+    }
+
+    /// Mutably borrow the plain host values (or an existing managed host root).
+    ///
+    /// # Errors
+    /// Returns a runtime-state error for device-only storage.
+    pub fn host_data_mut(&mut self) -> crate::Result<&mut [T]> {
+        match &mut self.core {
+            TypedTensorCore::Host { data, .. } => Ok(data.as_mut_slice()),
+            TypedTensorCore::Managed(core) => core.group.host_slice_mut::<T>(),
+        }
+    }
+
     /// Create a tensor from an existing buffer and compact column-major layout.
     ///
     /// This preserves the owned tensor invariant that layout metadata is
@@ -7008,22 +7117,31 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
         })?;
         let layout =
             TensorLayout::<Rank<N>>::compact(shape).map_err(|err| tensor_layout_error(op, err))?;
-        let owned = self.core.group;
-        Ok(TypedTensor {
-            core: TensorCore {
-                group: OwnedTensorGroup {
-                    group: owned.group,
-                    slot: owned.slot,
-                    allocation_index: owned.allocation_index,
-                    host_ptr: owned.host_ptr,
-                    host_byte_len: owned.host_byte_len,
-                    _rank: PhantomData,
-                },
-                layout,
-                placement: self.core.placement,
+        let core = match self.core {
+            TypedTensorCore::Host {
+                data, placement, ..
+            } => TypedTensorCore::Host {
+                data,
+                shape,
+                placement,
             },
-            _scalar: PhantomData,
-        })
+            TypedTensorCore::Managed(core) => {
+                let owned = core.group;
+                TypedTensorCore::Managed(Box::new(TensorCore {
+                    group: OwnedTensorGroup {
+                        group: owned.group,
+                        slot: owned.slot,
+                        allocation_index: owned.allocation_index,
+                        host_ptr: owned.host_ptr,
+                        host_byte_len: owned.host_byte_len,
+                        _rank: PhantomData,
+                    },
+                    layout,
+                    placement: core.placement,
+                }))
+            }
+        };
+        Ok(TypedTensor { core })
     }
 
     /// Number of elements in the tensor.
@@ -7057,7 +7175,10 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
     /// assert_eq!(t.shape(), &[2]);
     /// ```
     pub fn shape(&self) -> &[usize] {
-        self.core.layout.shape()
+        match &self.core {
+            TypedTensorCore::Host { shape, .. } => shape.as_ref(),
+            TypedTensorCore::Managed(core) => core.layout.shape(),
+        }
     }
 
     /// Tensor rank.
@@ -7086,8 +7207,12 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
     /// let t = TypedTensor::<f64>::from_vec_col_major(vec![2, 3], vec![0.0; 6]).unwrap();
     /// assert_eq!(t.layout().strides(), &[1, 2]);
     /// ```
-    pub fn layout(&self) -> &TensorLayout<R> {
-        &self.core.layout
+    pub fn layout(&self) -> TensorLayout<R> {
+        match &self.core {
+            TypedTensorCore::Host { shape, .. } => TensorLayout::compact(shape.clone())
+                .unwrap_or_else(|err| unreachable!("validated host shape: {err}")),
+            TypedTensorCore::Managed(core) => core.layout.clone(),
+        }
     }
 
     /// Return the storage backing this tensor.
@@ -7113,14 +7238,13 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
     where
         T: 'static,
     {
-        match self
-            .core
-            .group
-            .host_buffer::<T>()
-            .or_else(|| self.core.group.backend_buffer::<T>())
-        {
-            Some(buffer) => buffer,
-            None => unreachable!("typed tensor group storage mismatch"),
+        match &self.core {
+            TypedTensorCore::Host { data, .. } => &data.buffer,
+            TypedTensorCore::Managed(core) => core
+                .group
+                .host_buffer::<T>()
+                .or_else(|| core.group.backend_buffer::<T>())
+                .unwrap_or_else(|| unreachable!("typed tensor group storage mismatch")),
         }
     }
 
@@ -7139,9 +7263,12 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
     where
         T: 'static,
     {
-        match self.core.group.backend_buffer::<T>() {
-            Some(StorageBuffer::Backend(buffer)) => Some(buffer.as_ref()),
-            Some(StorageBuffer::Host(_)) | None => None,
+        match &self.core {
+            TypedTensorCore::Host { .. } => None,
+            TypedTensorCore::Managed(core) => match core.group.backend_buffer::<T>() {
+                Some(StorageBuffer::Backend(buffer)) => Some(buffer.as_ref()),
+                Some(StorageBuffer::Host(_)) | None => None,
+            },
         }
     }
 
@@ -7151,8 +7278,10 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
     where
         T: 'static,
     {
-        let buffer = self.core.group.backend_buffer_mut::<T>()?;
-        match buffer {
+        let TypedTensorCore::Managed(core) = &mut self.core else {
+            return None;
+        };
+        match core.group.backend_buffer_mut::<T>()? {
             StorageBuffer::Host(_) => None,
             StorageBuffer::Backend(buffer) => Some(buffer.as_mut()),
         }
@@ -7167,9 +7296,14 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
     where
         T: TensorScalar + 'static,
     {
-        self.core
-            .group
-            .prepare_device_read_for_layout::<T>(&self.core.layout)
+        let TypedTensorCore::Managed(core) = &self.core else {
+            return Err(crate::Error::runtime_state_source(
+                op,
+                crate::AccessError::Unsupported { backend: "host" },
+            ));
+        };
+        core.group
+            .prepare_device_read_for_layout::<T>(&core.layout)
             .map_err(|error| crate::Error::runtime_state_source(op, error))
     }
 
@@ -7182,9 +7316,14 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
     where
         T: TensorScalar + 'static,
     {
-        let layout = self.core.layout.clone();
-        self.core
-            .group
+        let TypedTensorCore::Managed(core) = &mut self.core else {
+            return Err(crate::Error::runtime_state_source(
+                op,
+                crate::AccessError::Unsupported { backend: "host" },
+            ));
+        };
+        let layout = core.layout.clone();
+        core.group
             .prepare_device_write_for_layout::<T>(&layout)
             .map_err(|error| crate::Error::runtime_state_source(op, error))
     }
@@ -7193,11 +7332,14 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
     where
         T: 'static,
     {
-        self.core
-            .group
-            .group
-            .descriptor_len(self.core.group.slot)
-            .unwrap_or_else(|| unreachable!("typed tensor group descriptor mismatch"))
+        match &self.core {
+            TypedTensorCore::Host { data, .. } => data.as_slice().len(),
+            TypedTensorCore::Managed(core) => core
+                .group
+                .group
+                .descriptor_len(core.group.slot)
+                .unwrap_or_else(|| unreachable!("typed tensor group descriptor mismatch")),
+        }
     }
 
     /// Return the shared-allocation domain carried by the backend buffer.
@@ -7215,11 +7357,14 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
     where
         T: 'static,
     {
-        self.core
-            .group
-            .group
-            .backend_identity(self.core.group.slot)
-            .map(|(domain, _)| domain)
+        match &self.core {
+            TypedTensorCore::Host { .. } => None,
+            TypedTensorCore::Managed(core) => core
+                .group
+                .group
+                .backend_identity(core.group.slot)
+                .map(|(domain, _)| domain),
+        }
     }
 
     /// Return the stable physical backend allocation identity.
@@ -7237,11 +7382,14 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
     where
         T: 'static,
     {
-        self.core
-            .group
-            .group
-            .backend_identity(self.core.group.slot)
-            .map(|(_, allocation)| allocation)
+        match &self.core {
+            TypedTensorCore::Host { .. } => None,
+            TypedTensorCore::Managed(core) => core
+                .group
+                .group
+                .backend_identity(core.group.slot)
+                .map(|(_, allocation)| allocation),
+        }
     }
 
     /// Return placement metadata for this tensor.
@@ -7255,7 +7403,10 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
     /// assert_eq!(t.placement().memory_kind, MemoryKind::UnpinnedHost);
     /// ```
     pub fn placement(&self) -> &Placement {
-        &self.core.placement
+        match &self.core {
+            TypedTensorCore::Host { placement, .. } => placement,
+            TypedTensorCore::Managed(core) => &core.placement,
+        }
     }
 
     /// Replace placement metadata without changing the storage buffer.
@@ -7274,7 +7425,12 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
     /// assert_eq!(t.placement().memory_kind, MemoryKind::PinnedHost);
     /// ```
     pub fn set_placement(&mut self, placement: Placement) {
-        self.core.placement = placement;
+        match &mut self.core {
+            TypedTensorCore::Host {
+                placement: current, ..
+            } => *current = placement,
+            TypedTensorCore::Managed(core) => core.placement = placement,
+        }
     }
 
     /// Replace only CPU routing/locality metadata without changing storage.
@@ -7293,7 +7449,10 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
     pub fn set_cpu_affinity(&mut self, cpu_affinity: Option<CpuDomainId>) {
-        self.core.placement.cpu_affinity = cpu_affinity;
+        match &mut self.core {
+            TypedTensorCore::Host { placement, .. } => placement.cpu_affinity = cpu_affinity,
+            TypedTensorCore::Managed(core) => core.placement.cpu_affinity = cpu_affinity,
+        }
     }
 
     /// Borrow this tensor as a typed view preserving rank and layout metadata.
@@ -7314,23 +7473,41 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
     /// ```
     pub fn as_view(&self) -> TypedTensorView<'_, T, R>
     where
-        T: TensorScalar + 'static,
+        T: 'static,
     {
-        let root = match self.core.group.view::<T>() {
-            Ok(root) => root,
-            Err(error) => unreachable!("typed tensor group descriptor mismatch: {error}"),
-        };
-        let buffer = if let Some(allocation) = root.backend_allocation() {
-            TensorStorageRef::Root(allocation)
-        } else {
-            TensorStorageRef::Host(self.group_host_slice())
-        };
-        let root = Some(root);
-        TypedTensorView {
-            buffer,
-            root,
-            layout: self.core.layout.clone(),
-            placement: self.core.placement.clone(),
+        match &self.core {
+            TypedTensorCore::Host {
+                data,
+                shape,
+                placement,
+            } => TypedTensorView {
+                buffer: TensorStorageRef::Host(data.as_slice()),
+                root: None,
+                layout: TensorLayout::compact(shape.clone())
+                    .unwrap_or_else(|err| unreachable!("validated host shape: {err}")),
+                placement: placement.clone(),
+            },
+            TypedTensorCore::Managed(core) => {
+                // Managed owners are constructed only with their matching preset T.
+                let root = core
+                    .group
+                    .group
+                    .view_raw::<T, R>(core.group.slot)
+                    .unwrap_or_else(|error| {
+                        unreachable!("typed tensor group descriptor mismatch: {error}")
+                    });
+                let buffer = if let Some(allocation) = root.backend_allocation() {
+                    TensorStorageRef::Root(allocation)
+                } else {
+                    TensorStorageRef::Host(core.group.host_slice::<T>().unwrap_or_default())
+                };
+                TypedTensorView {
+                    buffer,
+                    root: Some(root),
+                    layout: core.layout.clone(),
+                    placement: core.placement.clone(),
+                }
+            }
         }
     }
 
@@ -7354,27 +7531,39 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
     where
         T: TensorScalar + 'static,
     {
-        let layout = self.core.layout.clone();
-        let placement = self.core.placement.clone();
-        let mut root = match self.core.group.view_mut::<T>() {
-            Ok(root) => root,
-            Err(error) => unreachable!("typed tensor group descriptor mismatch: {error}"),
-        };
-        let buffer = if let Some(StorageBuffer::Backend(buffer)) = root.backend_buffer_mut() {
-            TensorStorageRefMut::Backend(buffer.as_mut())
-        } else {
-            TensorStorageRefMut::Host(match root.host_slice_mut() {
-                Ok(slice) => slice,
-                Err(error) => {
-                    unreachable!("typed tensor group descriptor is not host-backed: {error}")
+        match &mut self.core {
+            TypedTensorCore::Host {
+                data,
+                shape,
+                placement,
+            } => TypedTensorViewMut {
+                buffer: TensorStorageRefMut::Host(data.as_mut_slice()),
+                root: None,
+                layout: TensorLayout::compact(shape.clone())
+                    .unwrap_or_else(|err| unreachable!("validated host shape: {err}")),
+                placement: placement.clone(),
+            },
+            TypedTensorCore::Managed(core) => {
+                let layout = core.layout.clone();
+                let placement = core.placement.clone();
+                let mut root = core.group.view_mut::<T>().unwrap_or_else(|error| {
+                    unreachable!("typed tensor group descriptor mismatch: {error}")
+                });
+                let buffer = if let Some(StorageBuffer::Backend(buffer)) = root.backend_buffer_mut()
+                {
+                    TensorStorageRefMut::Backend(buffer.as_mut())
+                } else {
+                    TensorStorageRefMut::Host(root.host_slice_mut().unwrap_or_else(|error| {
+                        unreachable!("typed tensor group descriptor is not host-backed: {error}")
+                    }))
+                };
+                TypedTensorViewMut {
+                    buffer,
+                    root: Some(root),
+                    layout,
+                    placement,
                 }
-            })
-        };
-        TypedTensorViewMut {
-            buffer,
-            root: Some(root),
-            layout,
-            placement,
+            }
         }
     }
 
@@ -7417,7 +7606,10 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
         T: TensorScalar + 'static,
     {
         let op = "TypedTensor::backend_region_view";
-        let root = self.core.group.view_dyn::<T>()?;
+        let TypedTensorCore::Managed(core) = &self.core else {
+            return Err(crate::Error::runtime_state(op, "expected a backend (device) allocation; host tensors use TypedTensorView::from_slice over host storage"));
+        };
+        let root = core.group.view_dyn::<T>()?;
         let Some(allocation) = root.backend_allocation() else {
             return Err(crate::Error::runtime_state(
                 op,
@@ -7436,7 +7628,7 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
             buffer: TensorStorageRef::Root(allocation),
             root: Some(root),
             layout,
-            placement: self.core.placement.clone(),
+            placement: core.placement.clone(),
         })
     }
 
@@ -7487,7 +7679,11 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
         T: TensorScalar + 'static,
     {
         let op = "TypedTensor::backend_region_view_mut";
-        let mut root = self.core.group.view_mut_dyn::<T>()?;
+        let TypedTensorCore::Managed(core) = &mut self.core else {
+            return Err(crate::Error::runtime_state(op, "expected a backend (device) buffer; mutable host regions use TypedTensorViewMut host constructors or try_multi_slice_mut"));
+        };
+        let placement = core.placement.clone();
+        let mut root = core.group.view_mut_dyn::<T>()?;
         let Some(StorageBuffer::Backend(buffer)) = root.backend_buffer_mut() else {
             return Err(crate::Error::runtime_state(
                 op,
@@ -7504,7 +7700,7 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
             buffer: TensorStorageRefMut::Backend(buffer.as_mut()),
             root: Some(root),
             layout,
-            placement: self.core.placement.clone(),
+            placement,
         })
     }
 
@@ -7519,7 +7715,11 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
     /// assert!(t.into_layout().is_compact_col_major().unwrap());
     /// ```
     pub fn into_layout(self) -> TensorLayout<R> {
-        self.core.layout
+        match self.core {
+            TypedTensorCore::Host { shape, .. } => TensorLayout::compact(shape)
+                .unwrap_or_else(|err| unreachable!("validated host shape: {err}")),
+            TypedTensorCore::Managed(core) => core.layout,
+        }
     }
 
     /// Consume this tensor and return its storage, layout, and placement.
@@ -7547,61 +7747,75 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
     where
         T: TensorScalar,
     {
-        let TypedTensor {
-            core:
-                TensorCore {
+        match self.core {
+            TypedTensorCore::Host {
+                data,
+                shape,
+                placement,
+            } => {
+                let layout = TensorLayout::compact(shape)
+                    .unwrap_or_else(|err| unreachable!("validated host shape: {err}"));
+                Ok((StorageBuffer::Host(data.into_vec()), layout, placement))
+            }
+            TypedTensorCore::Managed(core) => {
+                let TensorCore {
                     group,
                     layout,
                     placement,
-                },
-            ..
-        } = self;
-        let data = group.into_host_vec::<T>()?;
-        Ok((StorageBuffer::Host(data), layout, placement))
+                } = *core;
+                Ok((
+                    StorageBuffer::Host(group.into_host_vec::<T>()?),
+                    layout,
+                    placement,
+                ))
+            }
+        }
     }
 }
 
 impl<T: TensorScalar, R: TensorRank> TypedTensor<T, R> {
-    /// Create a tensor from a column-major buffer.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use tenferro_tensor::TypedTensor;
-    ///
-    /// let t = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]).unwrap();
-    /// assert_eq!(t.get(&[1, 0])?, &2.0);
-    /// # Ok::<(), tenferro_tensor::Error>(())
-    /// ```
-    /// # Errors
-    ///
-    /// Returns [`crate::Error::Validation`] with
-    /// [`tenferro_tensor_core::ValidationError::ShapeDataLengthMismatch`] when
-    /// the shape product differs from `data.len()`, or
-    /// [`tenferro_tensor_core::ValidationError::IntegerOverflow`] when shape
-    /// arithmetic overflows.
-    ///
-    /// Arrays and array references must match a static rank at compile time.
-    /// Vectors and slices instead return `ValidationError::RankMismatch` when
-    /// their length differs from the static rank. Dynamic rank accepts arrays
-    /// of any length.
-    ///
-    /// ```
-    /// use tenferro_tensor::{Rank, TypedTensor};
-    /// let tensor = TypedTensor::<f64, Rank<2>>::from_vec_col_major([1, 2], vec![3., 4.])?;
-    /// assert_eq!(tensor.shape(), &[1, 2]);
-    /// # Ok::<(), tenferro_tensor::Error>(())
-    /// ```
-    ///
-    /// ```compile_fail
-    /// use tenferro_tensor::{Rank, TypedTensor};
-    /// let _ = TypedTensor::<f64, Rank<2>>::from_vec_col_major([2], vec![3., 4.]);
-    /// ```
-    pub fn from_vec_col_major(
-        shape: impl tenferro_tensor_core::IntoRankShape<R>,
-        data: Vec<T>,
-    ) -> crate::Result<Self> {
-        typed_tensor_from_vec_col_major(shape, data, "from_vec_col_major")
+    fn into_managed(self) -> Self {
+        match self.core {
+            TypedTensorCore::Host {
+                data,
+                shape,
+                placement,
+            } => {
+                let recycler = data.recycler.clone();
+                let layout = TensorLayout::compact(shape.clone())
+                    .unwrap_or_else(|err| unreachable!("validated host shape: {err}"));
+                let mut group = OwnedTensorGroup::from_host_vec(shape, data.into_vec())
+                    .unwrap_or_else(|err| unreachable!("validated host shape: {err}"));
+                if let Some(recycler) = recycler {
+                    group
+                        .group
+                        .set_host_recycler(group.allocation_index.index(), recycler)
+                        .unwrap_or_else(|err| unreachable!("fresh host group recycler: {err}"));
+                }
+                Self {
+                    core: TypedTensorCore::Managed(Box::new(TensorCore {
+                        group,
+                        layout,
+                        placement,
+                    })),
+                }
+            }
+            TypedTensorCore::Managed(core) => Self {
+                core: TypedTensorCore::Managed(core),
+            },
+        }
+    }
+
+    fn into_group_parts(self) -> (AllocationGroup, DescriptorSlot) {
+        let TypedTensorCore::Managed(core) = self.into_managed().core else {
+            unreachable!("explicit group promotion produces managed storage")
+        };
+        let TensorCore {
+            group, placement, ..
+        } = *core;
+        let (mut group, slot) = group.into_parts();
+        group.publish_live_descriptor_placement(slot, placement);
+        (group, slot)
     }
 
     /// Construct a backend-pooled host tensor with weak final-owner reclamation.
@@ -7618,13 +7832,9 @@ impl<T: TensorScalar, R: TensorRank> TypedTensor<T, R> {
         recycler: std::sync::Weak<dyn crate::HostBufferRecycler<T>>,
     ) -> crate::Result<Self> {
         let mut tensor = Self::from_vec_col_major(shape, data)?;
-        let allocation_index = tensor.core.group.allocation_index;
-        tensor
-            .core
-            .group
-            .group
-            .set_host_recycler(allocation_index.index(), recycler)
-            .map_err(|error| crate::Error::runtime_state_source("pooled host tensor", error))?;
+        if let TypedTensorCore::Host { data, .. } = &mut tensor.core {
+            data.recycler = Some(recycler);
+        }
         Ok(tensor)
     }
 
@@ -7643,70 +7853,6 @@ impl<T: TensorScalar, R: TensorRank> TypedTensor<T, R> {
         self.as_view().duplicate()
     }
 
-    /// Consume this tensor and return its owned column-major host buffer.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use tenferro_tensor::TypedTensor;
-    ///
-    /// let t = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 2.0]).unwrap();
-    /// let (shape, data) = t.into_vec_col_major().unwrap();
-    /// assert_eq!(shape, vec![2]);
-    /// assert_eq!(data, vec![1.0, 2.0]);
-    /// ```
-    /// # Errors
-    ///
-    /// Returns [`crate::Error::RuntimeState`] when this tensor uses backend
-    /// storage; download it before exporting a host `Vec`.
-    pub fn into_vec_col_major(self) -> crate::Result<(Vec<usize>, Vec<T>)> {
-        let shape = self.shape().to_vec();
-        if self.core.group.backend_buffer::<T>().is_some() {
-            return Err(crate::Error::runtime_state(
-                "into_vec_col_major",
-                "backend buffers cannot be exported as host Vec",
-            ));
-        }
-        Ok((shape, self.core.group.into_host_vec::<T>()?))
-    }
-
-    /// Consume this tensor and return its owned host data without rebuilding
-    /// shape metadata. This is intended for ownership-preserving buffer-pool
-    /// handoff; callers that need the shape should use [`Self::into_vec_col_major`].
-    ///
-    /// # Errors
-    ///
-    /// Returns [`crate::Error::RuntimeState`] when this tensor uses backend
-    /// storage.
-    pub fn into_host_vec(self) -> crate::Result<Vec<T>> {
-        if self.core.group.backend_buffer::<T>().is_some() {
-            return Err(crate::Error::runtime_state(
-                "into_host_vec",
-                "backend buffers cannot be exported as host Vec",
-            ));
-        }
-        self.core.group.into_host_vec::<T>()
-    }
-
-    /// Borrow the host buffer.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use tenferro_tensor::TypedTensor;
-    ///
-    /// let t = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 2.0]).unwrap();
-    /// assert_eq!(t.host_data()?, &[1.0, 2.0]);
-    /// # Ok::<(), tenferro_tensor::Error>(())
-    /// ```
-    /// # Errors
-    ///
-    /// Returns [`crate::Error::RuntimeState`] when this tensor uses backend
-    /// storage; download it before borrowing host data.
-    pub fn host_data(&self) -> crate::Result<&[T]> {
-        self.core.group.host_slice::<T>()
-    }
-
     /// Borrow compact host-visible storage through one synchronization guard.
     #[doc(hidden)]
     pub fn with_host_read<U>(&self, f: impl FnOnce(&[T]) -> U) -> crate::Result<U>
@@ -7722,23 +7868,27 @@ impl<T: TensorScalar, R: TensorRank> TypedTensor<T, R> {
     where
         T: TensorScalar + 'static,
     {
-        let slot = self.core.group.slot;
-        let mut view = self
-            .core
-            .group
-            .group
-            .view_mut::<T, R>(slot)
-            .map_err(|error| group_error("TypedTensor::with_host_write", error))?;
-        let mut prepared = view.prepare_host_write().map_err(|error| {
-            crate::Error::runtime_state("TypedTensor::with_host_write", error.to_string())
-        })?;
-        let slice = prepared.as_slice_mut().ok_or_else(|| {
-            crate::Error::unsupported(
-                "TypedTensor::with_host_write",
-                "host guard access requires a compact descriptor",
-            )
-        })?;
-        Ok(f(slice))
+        match &mut self.core {
+            TypedTensorCore::Host { data, .. } => Ok(f(data.as_mut_slice())),
+            TypedTensorCore::Managed(core) => {
+                let slot = core.group.slot;
+                let mut view = core
+                    .group
+                    .group
+                    .view_mut::<T, R>(slot)
+                    .map_err(|error| group_error("TypedTensor::with_host_write", error))?;
+                let mut prepared = view.prepare_host_write().map_err(|error| {
+                    crate::Error::runtime_state("TypedTensor::with_host_write", error.to_string())
+                })?;
+                let slice = prepared.as_slice_mut().ok_or_else(|| {
+                    crate::Error::unsupported(
+                        "TypedTensor::with_host_write",
+                        "host guard access requires a compact descriptor",
+                    )
+                })?;
+                Ok(f(slice))
+            }
+        }
     }
 
     /// View the tensor data as a flat slice.
@@ -7763,41 +7913,14 @@ impl<T: TensorScalar, R: TensorRank> TypedTensor<T, R> {
         self.host_data()
     }
 
-    /// Mutably borrow the host buffer.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use tenferro_tensor::TypedTensor;
-    ///
-    /// let mut t = TypedTensor::<f64>::zeros(vec![2]).unwrap();
-    /// t.host_data_mut()?[0] = 3.0;
-    /// assert_eq!(t.host_data()?, &[3.0, 0.0]);
-    /// # Ok::<(), tenferro_tensor::Error>(())
-    /// ```
-    /// # Errors
-    ///
-    /// Returns [`crate::Error::RuntimeState`] when this tensor uses backend
-    /// storage; download it before mutably borrowing host data.
-    pub fn host_data_mut(&mut self) -> crate::Result<&mut [T]> {
-        self.core.group.host_slice_mut::<T>()
-    }
-
     fn group_host_slice(&self) -> &[T] {
-        self.core
-            .group
+        let TypedTensorCore::Managed(core) = &self.core else {
+            return &[];
+        };
+        core.group
             .view::<T>()
             .ok()
             .and_then(|view| view.host_slice().ok())
-            .unwrap_or_default()
-    }
-
-    fn group_host_slice_mut(&mut self) -> &mut [T] {
-        self.core
-            .group
-            .view_mut::<T>()
-            .ok()
-            .and_then(|mut view| view.host_slice_mut().ok())
             .unwrap_or_default()
     }
 
@@ -7864,8 +7987,7 @@ impl<T: TensorScalar, R: TensorRank> TypedTensor<T, R> {
     /// [`tenferro_tensor_core::ValidationError::IntegerOverflow`] when
     /// compactness arithmetic overflows.
     pub fn is_col_major_contiguous(&self) -> crate::Result<bool> {
-        self.core
-            .layout
+        self.layout()
             .is_compact_col_major()
             .map_err(|err| tensor_layout_error("TypedTensor::is_col_major_contiguous", err))
     }
@@ -7882,11 +8004,8 @@ impl<T: TensorScalar, R: TensorRank> TypedTensor<T, R> {
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
     pub fn layout_summary(&self) -> String {
-        layout_summary(
-            self.shape(),
-            self.core.layout.strides(),
-            self.core.layout.offset(),
-        )
+        let layout = self.layout();
+        layout_summary(self.shape(), layout.strides(), layout.offset())
     }
 
     /// Assert this tensor is compact column-major.
@@ -7908,11 +8027,12 @@ impl<T: TensorScalar, R: TensorRank> TypedTensor<T, R> {
     /// [`tenferro_tensor_core::ValidationError::InvalidArgument`] when the
     /// tensor is not compact column-major.
     pub fn assert_col_major_contiguous(&self) -> crate::Result<()> {
+        let layout = self.layout();
         assert_layout_col_major_contiguous(
             self.is_col_major_contiguous()?,
             self.shape(),
-            self.core.layout.strides(),
-            self.core.layout.offset(),
+            layout.strides(),
+            layout.offset(),
             "TypedTensor::assert_col_major_contiguous",
         )
     }
@@ -7973,6 +8093,78 @@ impl<T: TensorScalar, R: TensorRank> TypedTensor<T, R> {
     }
 }
 
+fn reinterpret_owned<S: TensorScalar, U: TensorScalar, R: TensorRank>(
+    owner: TypedTensor<S, R>,
+    from: DType,
+    to: DType,
+    make_layout: fn(
+        &[usize],
+        &[isize],
+        isize,
+        usize,
+        &'static str,
+    ) -> crate::Result<TensorLayout<DynRank>>,
+    op: &'static str,
+) -> Result<TypedTensor<U>, ReinterpretError<TypedTensor<S, R>>> {
+    if let Err(error) = validate_representation_pair(op, from, to) {
+        return Err(ReinterpretError::new(owner, error));
+    }
+    if matches!(to, DType::C32 | DType::C64) && !owner.buffer_len().is_multiple_of(2) {
+        return Err(ReinterpretError::new(
+            owner,
+            crate::Error::invalid_argument(
+                op,
+                "buffer",
+                "the owned real buffer must contain an even number of elements",
+            ),
+        ));
+    }
+    let source_layout = owner.layout();
+    let target_layout = match make_layout(
+        source_layout.shape(),
+        source_layout.strides(),
+        source_layout.offset(),
+        owner.buffer_len(),
+        op,
+    ) {
+        Ok(layout) => layout,
+        Err(error) => return Err(ReinterpretError::new(owner, error)),
+    };
+    // Only an explicit owning representation conversion promotes a plain owner;
+    // borrowed session dispatch never passes through a group.
+    let TypedTensorCore::Managed(core) = owner.into_managed().core else {
+        unreachable!("explicit group promotion produces managed storage")
+    };
+    let TensorCore {
+        group,
+        layout: source_layout,
+        placement,
+    } = *core;
+    match group.reinterpret::<S, U>(
+        target_layout.shape().to_vec(),
+        target_layout.strides().to_vec(),
+        target_layout.offset(),
+    ) {
+        Ok(group) => Ok(TypedTensor {
+            core: TypedTensorCore::Managed(Box::new(TensorCore {
+                group,
+                layout: target_layout,
+                placement,
+            })),
+        }),
+        Err((group, error)) => Err(ReinterpretError::new(
+            TypedTensor {
+                core: TypedTensorCore::Managed(Box::new(TensorCore {
+                    group,
+                    layout: source_layout,
+                    placement,
+                })),
+            },
+            error,
+        )),
+    }
+}
+
 impl<R: TensorRank> TypedTensor<Complex32, R> {
     /// Borrow this tensor as an interleaved `f32` view without copying.
     ///
@@ -7996,10 +8188,11 @@ impl<R: TensorRank> TypedTensor<Complex32, R> {
     pub fn as_real_view_mut(&mut self) -> crate::Result<TypedTensorViewMut<'_, f32, DynRank>> {
         let op = "TypedTensor::as_real_view_mut";
         validate_representation_pair(op, DType::C32, DType::F32)?;
+        let source_layout = self.layout();
         let layout = reinterpret_complex_to_real_layout(
             self.shape(),
-            self.core.layout.strides(),
-            self.core.layout.offset(),
+            source_layout.strides(),
+            source_layout.offset(),
             self.buffer_len(),
             op,
         )?;
@@ -8012,9 +8205,9 @@ impl<R: TensorRank> TypedTensor<Complex32, R> {
                 "backend representation reinterpretation is enabled by the provider phases",
             ));
         }
-        let placement = self.core.placement.clone();
+        let placement = self.placement().clone();
         let buffer = TensorStorageRefMut::Host(reinterpret_host_slice_mut::<Complex32, f32>(
-            self.group_host_slice_mut(),
+            self.host_data_mut()?,
             op,
         )?);
         Ok(TypedTensorViewMut {
@@ -8037,57 +8230,13 @@ impl<R: TensorRank> TypedTensor<Complex32, R> {
     /// [`ValidationError::ViewOutOfBounds`] while retaining the unchanged
     /// owner.
     pub fn into_real(self) -> Result<TypedTensor<f32, DynRank>, ReinterpretError<Self>> {
-        let op = "TypedTensor::into_real";
-        if let Err(error) = validate_representation_pair(op, DType::C32, DType::F32) {
-            return Err(ReinterpretError::new(self, error));
-        }
-        let source_shape = self.shape().to_vec();
-        let source_strides = self.core.layout.strides().to_vec();
-        let source_offset = self.core.layout.offset();
-        let target_layout = match reinterpret_complex_to_real_layout(
-            &source_shape,
-            &source_strides,
-            source_offset,
-            self.buffer_len(),
-            op,
-        ) {
-            Ok(layout) => layout,
-            Err(error) => return Err(ReinterpretError::new(self, error)),
-        };
-        let TypedTensor {
-            core:
-                TensorCore {
-                    group,
-                    layout: source_layout,
-                    placement,
-                },
-            ..
-        } = self;
-        match group.reinterpret::<Complex32, f32>(
-            target_layout.shape().to_vec(),
-            target_layout.strides().to_vec(),
-            target_layout.offset(),
-        ) {
-            Ok(group) => Ok(TypedTensor {
-                core: TensorCore {
-                    group,
-                    layout: target_layout,
-                    placement,
-                },
-                _scalar: PhantomData,
-            }),
-            Err((group, error)) => Err(ReinterpretError::new(
-                TypedTensor {
-                    core: TensorCore {
-                        group,
-                        layout: source_layout,
-                        placement,
-                    },
-                    _scalar: PhantomData,
-                },
-                error,
-            )),
-        }
+        reinterpret_owned(
+            self,
+            DType::C32,
+            DType::F32,
+            reinterpret_complex_to_real_layout,
+            "TypedTensor::into_real",
+        )
     }
 }
 
@@ -8114,10 +8263,11 @@ impl<R: TensorRank> TypedTensor<Complex64, R> {
     pub fn as_real_view_mut(&mut self) -> crate::Result<TypedTensorViewMut<'_, f64, DynRank>> {
         let op = "TypedTensor::as_real_view_mut";
         validate_representation_pair(op, DType::C64, DType::F64)?;
+        let source_layout = self.layout();
         let layout = reinterpret_complex_to_real_layout(
             self.shape(),
-            self.core.layout.strides(),
-            self.core.layout.offset(),
+            source_layout.strides(),
+            source_layout.offset(),
             self.buffer_len(),
             op,
         )?;
@@ -8130,9 +8280,9 @@ impl<R: TensorRank> TypedTensor<Complex64, R> {
                 "backend representation reinterpretation is enabled by the provider phases",
             ));
         }
-        let placement = self.core.placement.clone();
+        let placement = self.placement().clone();
         let buffer = TensorStorageRefMut::Host(reinterpret_host_slice_mut::<Complex64, f64>(
-            self.group_host_slice_mut(),
+            self.host_data_mut()?,
             op,
         )?);
         Ok(TypedTensorViewMut {
@@ -8155,57 +8305,13 @@ impl<R: TensorRank> TypedTensor<Complex64, R> {
     /// [`ValidationError::ViewOutOfBounds`] while retaining the unchanged
     /// owner.
     pub fn into_real(self) -> Result<TypedTensor<f64, DynRank>, ReinterpretError<Self>> {
-        let op = "TypedTensor::into_real";
-        if let Err(error) = validate_representation_pair(op, DType::C64, DType::F64) {
-            return Err(ReinterpretError::new(self, error));
-        }
-        let source_shape = self.shape().to_vec();
-        let source_strides = self.core.layout.strides().to_vec();
-        let source_offset = self.core.layout.offset();
-        let target_layout = match reinterpret_complex_to_real_layout(
-            &source_shape,
-            &source_strides,
-            source_offset,
-            self.buffer_len(),
-            op,
-        ) {
-            Ok(layout) => layout,
-            Err(error) => return Err(ReinterpretError::new(self, error)),
-        };
-        let TypedTensor {
-            core:
-                TensorCore {
-                    group,
-                    layout: source_layout,
-                    placement,
-                },
-            ..
-        } = self;
-        match group.reinterpret::<Complex64, f64>(
-            target_layout.shape().to_vec(),
-            target_layout.strides().to_vec(),
-            target_layout.offset(),
-        ) {
-            Ok(group) => Ok(TypedTensor {
-                core: TensorCore {
-                    group,
-                    layout: target_layout,
-                    placement,
-                },
-                _scalar: PhantomData,
-            }),
-            Err((group, error)) => Err(ReinterpretError::new(
-                TypedTensor {
-                    core: TensorCore {
-                        group,
-                        layout: source_layout,
-                        placement,
-                    },
-                    _scalar: PhantomData,
-                },
-                error,
-            )),
-        }
+        reinterpret_owned(
+            self,
+            DType::C64,
+            DType::F64,
+            reinterpret_complex_to_real_layout,
+            "TypedTensor::into_real",
+        )
     }
 }
 
@@ -8234,10 +8340,11 @@ impl<R: TensorRank> TypedTensor<f32, R> {
     ) -> crate::Result<TypedTensorViewMut<'_, Complex32, DynRank>> {
         let op = "TypedTensor::as_complex_view_mut";
         validate_representation_pair(op, DType::F32, DType::C32)?;
+        let source_layout = self.layout();
         let layout = reinterpret_real_to_complex_layout(
             self.shape(),
-            self.core.layout.strides(),
-            self.core.layout.offset(),
+            source_layout.strides(),
+            source_layout.offset(),
             self.buffer_len(),
             op,
         )?;
@@ -8250,9 +8357,9 @@ impl<R: TensorRank> TypedTensor<f32, R> {
                 "backend representation reinterpretation is enabled by the provider phases",
             ));
         }
-        let placement = self.core.placement.clone();
+        let placement = self.placement().clone();
         let buffer = TensorStorageRefMut::Host(reinterpret_host_slice_mut::<f32, Complex32>(
-            self.group_host_slice_mut(),
+            self.host_data_mut()?,
             op,
         )?);
         Ok(TypedTensorViewMut {
@@ -8276,67 +8383,13 @@ impl<R: TensorRank> TypedTensor<f32, R> {
     /// [`ValidationError::ViewOutOfBounds`] while retaining the unchanged
     /// owner.
     pub fn into_complex(self) -> Result<TypedTensor<Complex32, DynRank>, ReinterpretError<Self>> {
-        let op = "TypedTensor::into_complex";
-        if let Err(error) = validate_representation_pair(op, DType::F32, DType::C32) {
-            return Err(ReinterpretError::new(self, error));
-        }
-        if !self.buffer_len().is_multiple_of(2) {
-            return Err(ReinterpretError::new(
-                self,
-                crate::Error::invalid_argument(
-                    op,
-                    "buffer",
-                    "the owned real buffer must contain an even number of elements",
-                ),
-            ));
-        }
-        let source_shape = self.shape().to_vec();
-        let source_strides = self.core.layout.strides().to_vec();
-        let source_offset = self.core.layout.offset();
-        let target_layout = match reinterpret_real_to_complex_layout(
-            &source_shape,
-            &source_strides,
-            source_offset,
-            self.buffer_len(),
-            op,
-        ) {
-            Ok(layout) => layout,
-            Err(error) => return Err(ReinterpretError::new(self, error)),
-        };
-        let TypedTensor {
-            core:
-                TensorCore {
-                    group,
-                    layout: source_layout,
-                    placement,
-                },
-            ..
-        } = self;
-        match group.reinterpret::<f32, Complex32>(
-            target_layout.shape().to_vec(),
-            target_layout.strides().to_vec(),
-            target_layout.offset(),
-        ) {
-            Ok(group) => Ok(TypedTensor {
-                core: TensorCore {
-                    group,
-                    layout: target_layout,
-                    placement,
-                },
-                _scalar: PhantomData,
-            }),
-            Err((group, error)) => Err(ReinterpretError::new(
-                TypedTensor {
-                    core: TensorCore {
-                        group,
-                        layout: source_layout,
-                        placement,
-                    },
-                    _scalar: PhantomData,
-                },
-                error,
-            )),
-        }
+        reinterpret_owned(
+            self,
+            DType::F32,
+            DType::C32,
+            reinterpret_real_to_complex_layout,
+            "TypedTensor::into_complex",
+        )
     }
 }
 
@@ -8365,10 +8418,11 @@ impl<R: TensorRank> TypedTensor<f64, R> {
     ) -> crate::Result<TypedTensorViewMut<'_, Complex64, DynRank>> {
         let op = "TypedTensor::as_complex_view_mut";
         validate_representation_pair(op, DType::F64, DType::C64)?;
+        let source_layout = self.layout();
         let layout = reinterpret_real_to_complex_layout(
             self.shape(),
-            self.core.layout.strides(),
-            self.core.layout.offset(),
+            source_layout.strides(),
+            source_layout.offset(),
             self.buffer_len(),
             op,
         )?;
@@ -8381,9 +8435,9 @@ impl<R: TensorRank> TypedTensor<f64, R> {
                 "backend representation reinterpretation is enabled by the provider phases",
             ));
         }
-        let placement = self.core.placement.clone();
+        let placement = self.placement().clone();
         let buffer = TensorStorageRefMut::Host(reinterpret_host_slice_mut::<f64, Complex64>(
-            self.group_host_slice_mut(),
+            self.host_data_mut()?,
             op,
         )?);
         Ok(TypedTensorViewMut {
@@ -8407,67 +8461,13 @@ impl<R: TensorRank> TypedTensor<f64, R> {
     /// [`ValidationError::ViewOutOfBounds`] while retaining the unchanged
     /// owner.
     pub fn into_complex(self) -> Result<TypedTensor<Complex64, DynRank>, ReinterpretError<Self>> {
-        let op = "TypedTensor::into_complex";
-        if let Err(error) = validate_representation_pair(op, DType::F64, DType::C64) {
-            return Err(ReinterpretError::new(self, error));
-        }
-        if !self.buffer_len().is_multiple_of(2) {
-            return Err(ReinterpretError::new(
-                self,
-                crate::Error::invalid_argument(
-                    op,
-                    "buffer",
-                    "the owned real buffer must contain an even number of elements",
-                ),
-            ));
-        }
-        let source_shape = self.shape().to_vec();
-        let source_strides = self.core.layout.strides().to_vec();
-        let source_offset = self.core.layout.offset();
-        let target_layout = match reinterpret_real_to_complex_layout(
-            &source_shape,
-            &source_strides,
-            source_offset,
-            self.buffer_len(),
-            op,
-        ) {
-            Ok(layout) => layout,
-            Err(error) => return Err(ReinterpretError::new(self, error)),
-        };
-        let TypedTensor {
-            core:
-                TensorCore {
-                    group,
-                    layout: source_layout,
-                    placement,
-                },
-            ..
-        } = self;
-        match group.reinterpret::<f64, Complex64>(
-            target_layout.shape().to_vec(),
-            target_layout.strides().to_vec(),
-            target_layout.offset(),
-        ) {
-            Ok(group) => Ok(TypedTensor {
-                core: TensorCore {
-                    group,
-                    layout: target_layout,
-                    placement,
-                },
-                _scalar: PhantomData,
-            }),
-            Err((group, error)) => Err(ReinterpretError::new(
-                TypedTensor {
-                    core: TensorCore {
-                        group,
-                        layout: source_layout,
-                        placement,
-                    },
-                    _scalar: PhantomData,
-                },
-                error,
-            )),
-        }
+        reinterpret_owned(
+            self,
+            DType::F64,
+            DType::C64,
+            reinterpret_real_to_complex_layout,
+            "TypedTensor::into_complex",
+        )
     }
 }
 
@@ -8540,8 +8540,7 @@ impl Tensor {
         let dtype = self.dtype();
         match dtype {
             DType::C32 => {
-                let tensor = self
-                    .into_preset::<Complex<f32>>()
+                let tensor = <Complex<f32> as TensorScalar>::into_typed(self)
                     .unwrap_or_else(|_| unreachable!("the dtype guard selects this arm"));
                 tensor
                     .into_real()
@@ -8552,8 +8551,7 @@ impl Tensor {
                     })
             }
             DType::C64 => {
-                let tensor = self
-                    .into_preset::<Complex<f64>>()
+                let tensor = <Complex<f64> as TensorScalar>::into_typed(self)
                     .unwrap_or_else(|_| unreachable!("the dtype guard selects this arm"));
                 tensor
                     .into_real()
@@ -8641,8 +8639,7 @@ impl Tensor {
         let dtype = self.dtype();
         match dtype {
             DType::F32 => {
-                let tensor = self
-                    .into_preset::<f32>()
+                let tensor = <f32 as TensorScalar>::into_typed(self)
                     .unwrap_or_else(|_| unreachable!("the dtype guard selects this arm"));
                 tensor
                     .into_complex()
@@ -8653,8 +8650,7 @@ impl Tensor {
                     })
             }
             DType::F64 => {
-                let tensor = self
-                    .into_preset::<f64>()
+                let tensor = <f64 as TensorScalar>::into_typed(self)
                     .unwrap_or_else(|_| unreachable!("the dtype guard selects this arm"));
                 tensor
                     .into_complex()
@@ -8706,7 +8702,7 @@ impl Tensor {
         self.as_typed::<T>()
             .unwrap_or_else(|| unreachable!("the caller selected this arm from the dtype"))
             .duplicate()
-            .map(|duplicate| Self::from_core(duplicate.core))
+            .map(Self::from_typed)
     }
 
     /// Create a tensor from a shape and column-major flat data.
@@ -8749,7 +8745,7 @@ impl Tensor {
     /// ```
     pub fn shape(&self) -> &[usize] {
         match &self.payload {
-            TensorPayload::Native(core) => core.layout.shape(),
+            TensorPayload::Native(preset) => with_preset!(preset, |typed| typed.shape()),
             // The payload keeps its shape from construction.
             TensorPayload::External(payload, _) => payload.shape(),
         }
@@ -8767,7 +8763,15 @@ impl Tensor {
     /// ```
     pub fn dtype(&self) -> DType {
         match &self.payload {
-            TensorPayload::Native(core) => core.group.dtype(),
+            TensorPayload::Native(preset) => match preset {
+                PresetTensor::F32(_) => DType::F32,
+                PresetTensor::F64(_) => DType::F64,
+                PresetTensor::I32(_) => DType::I32,
+                PresetTensor::I64(_) => DType::I64,
+                PresetTensor::Bool(_) => DType::Bool,
+                PresetTensor::C32(_) => DType::C32,
+                PresetTensor::C64(_) => DType::C64,
+            },
             // The payload carries its own element identity.
             TensorPayload::External(payload, _) => DType::External(payload.element_type_id()),
         }
@@ -8785,7 +8789,7 @@ impl Tensor {
     /// ```
     pub fn placement(&self) -> &Placement {
         match &self.payload {
-            TensorPayload::Native(core) => &core.placement,
+            TensorPayload::Native(preset) => with_preset!(preset, |typed| typed.placement()),
             // The placement is stored with the payload.
             TensorPayload::External(_, placement) => placement,
         }
@@ -8803,7 +8807,9 @@ impl Tensor {
     /// ```
     pub fn is_backend_buffer(&self) -> bool {
         match &self.payload {
-            TensorPayload::Native(core) => core.is_backend_buffer(),
+            TensorPayload::Native(preset) => with_preset!(preset, |typed| {
+                matches!(&typed.core, TypedTensorCore::Managed(core) if core.is_backend_buffer())
+            }),
             // A caller-owned payload is host memory, never a backend buffer.
             TensorPayload::External(..) => false,
         }
@@ -8830,13 +8836,16 @@ impl Tensor {
     /// arithmetic overflows.
     pub fn layout_linear_offset(&self, indices: &[usize]) -> crate::Result<usize> {
         match &self.payload {
-            TensorPayload::Native(core) => checked_view_offset_result(
-                core.layout.shape(),
-                core.layout.strides(),
-                core.layout.offset(),
-                indices,
-                "Tensor::layout_linear_offset",
-            ),
+            TensorPayload::Native(_) => {
+                let layout = tensor_layout(self);
+                checked_view_offset_result(
+                    layout.shape(),
+                    layout.strides(),
+                    layout.offset(),
+                    indices,
+                    "Tensor::layout_linear_offset",
+                )
+            }
             // A caller-owned payload's owner resolves its own offsets.
             TensorPayload::External(..) => Err(crate::Error::unsupported_dtype(
                 "layout_linear_offset",
@@ -8864,8 +8873,7 @@ impl Tensor {
     /// compactness arithmetic overflows.
     pub fn is_col_major_contiguous(&self) -> crate::Result<bool> {
         match &self.payload {
-            TensorPayload::Native(core) => core
-                .layout
+            TensorPayload::Native(_) => tensor_layout(self)
                 .is_compact_col_major()
                 .map_err(|err| tensor_layout_error("Tensor::is_col_major_contiguous", err)),
             // The payload is a compact column-major host tensor by construction.
@@ -8965,9 +8973,9 @@ impl Tensor {
             return None;
         }
         match &self.payload {
-            // SAFETY: the dtype check above proves `T` is the element type the core records,
-            // and `TypedTensor<T>` is `#[repr(transparent)]` over that core.
-            TensorPayload::Native(core) => Some(unsafe { core.as_typed::<T>() }),
+            TensorPayload::Native(preset) => with_preset!(preset, |typed| {
+                (typed as &dyn Any).downcast_ref::<TypedTensor<T>>()
+            }),
             TensorPayload::External(..) => None,
         }
     }
@@ -8994,9 +9002,9 @@ impl Tensor {
             return None;
         }
         match &mut self.payload {
-            // SAFETY: the dtype check above proves `T` is the element type the core records,
-            // and `TypedTensor<T>` is `#[repr(transparent)]` over that core.
-            TensorPayload::Native(core) => Some(unsafe { core.as_typed_mut::<T>() }),
+            TensorPayload::Native(preset) => with_preset!(preset, |typed| {
+                (typed as &mut dyn Any).downcast_mut::<TypedTensor<T>>()
+            }),
             TensorPayload::External(..) => None,
         }
     }

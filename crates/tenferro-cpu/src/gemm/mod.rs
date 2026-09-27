@@ -155,7 +155,7 @@ trait TypedTensorRead<T> {
 
 impl<T: TensorScalar> TypedTensorRead<T> for TypedTensor<T> {
     fn shape(&self) -> &[usize] {
-        self.layout().shape()
+        self.shape()
     }
 
     fn strides(&self) -> crate::Result<SmallVec<[isize; 8]>> {

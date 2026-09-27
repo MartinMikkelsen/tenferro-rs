@@ -72,6 +72,31 @@ fn output_and_scratch_checkouts_coexist_without_borrowing_the_pool() {
 }
 
 #[test]
+fn ranked_recycled_handoff_returns_once_and_rank_error_cancels_checkout() {
+    use tenferro_tensor::Rank;
+
+    let pool = BufferPool::new();
+    let mut wrong = PooledUninitOutput::<f64>::new(&pool, vec![2]).unwrap();
+    wrong.as_uninit_slice_mut()[0].write(1.0);
+    wrong.as_uninit_slice_mut()[1].write(2.0);
+    // SAFETY: both elements have been initialized, although the selected rank is wrong.
+    assert!(unsafe { wrong.assume_init_as_recycled::<Rank<2>>() }.is_err());
+    assert!(pool.in_flight_is_empty());
+    assert!(pool.is_empty());
+
+    let mut output = PooledUninitOutput::<f64>::new(&pool, vec![2]).unwrap();
+    output.as_uninit_slice_mut()[0].write(3.0);
+    output.as_uninit_slice_mut()[1].write(4.0);
+    // SAFETY: both elements have been initialized.
+    let owner = unsafe { output.assume_init_as_recycled::<Rank<1>>() }.unwrap();
+    assert_eq!(owner.as_slice().unwrap(), &[3.0, 4.0]);
+    assert!(pool.is_empty());
+    drop(owner);
+    assert_eq!(pool.len(), 1);
+    assert!(pool.in_flight_is_empty());
+}
+
+#[test]
 fn recycled_output_extraction_disarms_return_and_pool_may_drop_first() {
     let mut pool = BufferPool::new();
     let tensor = recycled(&mut pool);

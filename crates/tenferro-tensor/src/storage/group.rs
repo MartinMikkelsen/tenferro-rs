@@ -357,13 +357,6 @@ impl<'a, T: TensorScalar, R: TensorRank> GroupReadView<'a, T, R> {
         }
     }
 
-    pub(crate) fn backend_allocation(&self) -> Option<&'a dyn BackendAllocation> {
-        let allocation = unsafe { self.owner.as_ref().backend_allocation() }?;
-        Some(unsafe {
-            std::mem::transmute::<&dyn BackendAllocation, &'a dyn BackendAllocation>(allocation)
-        })
-    }
-
     pub(crate) fn prepare_device_read_for_layout(
         &self,
         layout: &TensorLayout<R>,
@@ -429,6 +422,14 @@ impl<'a, T: TensorScalar, R: TensorRank> GroupReadView<'a, T, R> {
 }
 
 impl<'a, T: 'static, R: TensorRank> GroupReadView<'a, T, R> {
+    pub(crate) fn backend_allocation(&self) -> Option<&'a dyn BackendAllocation> {
+        // SAFETY: the group borrow retains the owner for `'a`.
+        let allocation = unsafe { self.owner.as_ref().backend_allocation() }?;
+        Some(unsafe {
+            std::mem::transmute::<&dyn BackendAllocation, &'a dyn BackendAllocation>(allocation)
+        })
+    }
+
     pub(crate) fn backend_buffer(&self) -> Option<&'a crate::StorageBuffer<T>> {
         // SAFETY: the owner pointer is bounded by the group borrow carried by
         // this view, and the root buffer cannot be resized after import.
@@ -1654,10 +1655,7 @@ impl AllocationGroup {
         Ok((group, DescriptorSlot(0)))
     }
 
-    pub(crate) fn into_host_vec<T: TensorScalar>(
-        self,
-        slot: DescriptorSlot,
-    ) -> Result<Vec<T>, String> {
+    pub(crate) fn into_host_vec<T: 'static>(self, slot: DescriptorSlot) -> Result<Vec<T>, String> {
         let owner = self
             .into_owner(slot)
             .map_err(|(_, error)| error.to_string())?;

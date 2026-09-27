@@ -660,7 +660,7 @@ fn typed_tensor_owned_layout_is_always_compact() {
     let tensor = TypedTensor::<i32>::from_vec_col_major(vec![3], vec![1, 2, 3]).unwrap();
     assert_eq!(
         tensor.layout(),
-        &TensorLayout::compact(vec![3].into()).unwrap()
+        TensorLayout::compact(vec![3].into()).unwrap()
     );
 }
 

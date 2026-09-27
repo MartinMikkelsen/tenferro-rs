@@ -224,6 +224,20 @@ impl<T: PoolScalar> PooledUninitOutput<T> {
         unsafe { self.finish(false) }
     }
 
+    /// Finish a fully initialized ranked output while retaining its pool recycler.
+    ///
+    /// # Safety
+    /// Every logical element must have been initialized and no writer may retain
+    /// the output view.
+    ///
+    /// # Errors
+    /// Returns a validation or rank-conversion error if the checked output
+    /// metadata cannot be represented by `R`.
+    pub unsafe fn assume_init_as_recycled<R: TensorRank>(self) -> Result<TypedTensor<T, R>> {
+        // SAFETY: the caller guarantees complete initialization.
+        unsafe { self.finish(true) }
+    }
+
     /// Transfer a fully initialized output with automatic original-pool return.
     /// The pool is retained weakly; dropping the pool first frees later outputs
     /// normally. Dropping an output never acquires a CPU session lock.

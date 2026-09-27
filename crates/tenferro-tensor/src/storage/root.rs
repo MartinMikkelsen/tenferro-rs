@@ -1082,7 +1082,7 @@ impl OwnedStorage {
         Ok(())
     }
 
-    pub(crate) fn into_host_vec<T: TensorScalar>(mut self) -> Result<Vec<T>, AccessError> {
+    pub(crate) fn into_host_vec<T: 'static>(mut self) -> Result<Vec<T>, AccessError> {
         let allocation = self
             .pin
             .as_any_mut()

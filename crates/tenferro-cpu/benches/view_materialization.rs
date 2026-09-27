@@ -1,6 +1,6 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion, Throughput};
 use tenferro_cpu::CpuBackend;
-use tenferro_tensor::{TensorViewCanonicalization, TypedTensorView};
+use tenferro_tensor::{BackendSessionHost, TensorViewCanonicalization, TypedTensorView};
 
 const TN_24D_PERM: [usize; 24] = [
     0, 1, 2, 3, 22, 4, 23, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21,
@@ -208,6 +208,7 @@ fn bench_view_materialization(c: &mut Criterion) {
                     .expect("benchmark view layout is valid");
             let mut backend = CpuBackend::with_threads(threads)
                 .expect("benchmark CPU thread configuration is valid");
+            assert_eq!(backend.num_threads(), threads);
 
             // The checked tensor is dropped when this helper returns, before
             // Criterion starts measuring allocation-inclusive materialization.
@@ -224,6 +225,27 @@ fn bench_view_materialization(c: &mut Criterion) {
                     black_box(materialized);
                 });
             });
+            if threads == 1 && matches!(spec, MaterializationSpec::TinyTranspose) {
+                let read = view
+                    .clone()
+                    .into_tensor_read()
+                    .expect("erased borrowed input");
+                let checked = backend
+                    .with_backend_session(|session| session.to_contiguous_read(read.clone()))
+                    .expect("pre-timing session copy succeeds");
+                verify_exact_output(&case, checked.as_slice::<f64>().expect("CPU host output"));
+                group.bench_function("tiny_transpose_erased_session", |b| {
+                    b.iter(|| {
+                        black_box(
+                            backend
+                                .with_backend_session(|session| {
+                                    session.to_contiguous_read(black_box(read.clone()))
+                                })
+                                .expect("timed session copy succeeds"),
+                        );
+                    });
+                });
+            }
         }
         group.finish();
     }

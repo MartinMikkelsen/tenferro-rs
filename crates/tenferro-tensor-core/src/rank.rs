@@ -247,8 +247,9 @@ impl<const N: usize> TensorRank for Rank<N> {
     fn shape_from_vec(shape: ShapeVec) -> Result<Self::Shape> {
         let actual = shape.len();
         shape
-            .into_vec()
+            .as_slice()
             .try_into()
+            .map(|array: &[usize; N]| *array)
             .map_err(|_| ValidationError::RankMismatch {
                 expected: N,
                 actual,
@@ -262,8 +263,9 @@ impl<const N: usize> TensorRank for Rank<N> {
     fn strides_from_vec(strides: StrideVec) -> Result<Self::Strides> {
         let actual = strides.len();
         strides
-            .into_vec()
+            .as_slice()
             .try_into()
+            .map(|array: &[isize; N]| *array)
             .map_err(|_| ValidationError::RankMismatch {
                 expected: N,
                 actual,

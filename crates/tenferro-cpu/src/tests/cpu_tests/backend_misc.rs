@@ -193,6 +193,78 @@ fn cpu_session_copy_accepts_ranked_borrow_without_group_promotion() {
 }
 
 #[test]
+fn cpu_session_copy_reads_plain_owner_into_plain_owner() {
+    let source =
+        TypedTensor::<f64, Rank<2>>::from_vec_col_major([2, 2], vec![1.0, 2.0, 3.0, 4.0]).unwrap();
+    let mut destination = Tensor::from_typed(
+        TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![-1.0; 4]).unwrap(),
+    );
+    let destination_ptr = destination.as_slice::<f64>().unwrap().as_ptr();
+    let mut backend = CpuBackend::with_threads(1).unwrap();
+    backend
+        .with_backend_session(|session| {
+            session.copy_read_into(
+                source.as_view().into_tensor_read()?,
+                TensorWrite::from_tensor(&mut destination),
+            )
+        })
+        .unwrap();
+    assert_eq!(
+        destination.as_slice::<f64>().unwrap(),
+        &[1.0, 2.0, 3.0, 4.0]
+    );
+    assert_eq!(
+        destination.as_slice::<f64>().unwrap().as_ptr(),
+        destination_ptr
+    );
+}
+
+#[test]
+fn cpu_session_materializes_plain_borrow_into_recyclable_plain_output() {
+    let source =
+        TypedTensor::<f64, Rank<2>>::from_vec_col_major([2, 2], vec![1.0, 2.0, 3.0, 4.0]).unwrap();
+    let source_ptr = source.as_slice().unwrap().as_ptr();
+    let mut backend = CpuBackend::with_threads(1).unwrap();
+    let retained_before = backend.buffer_pool_len().unwrap();
+    let read = source.as_view().into_tensor_read().unwrap();
+
+    let copied = backend
+        .with_backend_session(|session| session.to_contiguous_read(read.clone()))
+        .unwrap();
+    let copied_ptr = copied.as_slice::<f64>().unwrap().as_ptr();
+    assert_ne!(copied_ptr, source_ptr);
+    assert_eq!(copied.as_slice::<f64>().unwrap(), &[1.0, 2.0, 3.0, 4.0]);
+    assert_eq!(source.as_slice().unwrap().as_ptr(), source_ptr);
+    assert_eq!(backend.buffer_pool_len().unwrap(), retained_before);
+    drop(copied);
+    assert_eq!(backend.buffer_pool_len().unwrap(), retained_before + 1);
+
+    let reused = backend
+        .with_backend_session(|session| session.to_contiguous_read(read))
+        .unwrap();
+    assert_eq!(reused.as_slice::<f64>().unwrap().as_ptr(), copied_ptr);
+    drop(reused);
+    assert_eq!(backend.buffer_pool_len().unwrap(), retained_before + 1);
+}
+
+#[test]
+fn cpu_session_materialization_rejects_bad_placement_without_pool_checkout() {
+    let mut source = TypedTensor::<f64, Rank<1>>::from_vec_col_major([2], vec![1.0, 2.0]).unwrap();
+    source.set_placement(opaque_backend_placement());
+    let mut backend = CpuBackend::with_threads(1).unwrap();
+    let retained_before = backend.buffer_pool_len().unwrap();
+    let read = source.as_view().into_tensor_read().unwrap();
+    assert!(matches!(
+        backend.with_backend_session(|session| session.to_contiguous_read(read)),
+        Err(Error::RuntimeState {
+            op: "CpuBackend::to_contiguous_read",
+            ..
+        })
+    ));
+    assert_eq!(backend.buffer_pool_len().unwrap(), retained_before);
+}
+
+#[test]
 fn cpu_runtime_copy_handles_strided_source_and_destination_without_allocation() {
     let mut backend = CpuBackend::with_threads(2).unwrap();
     backend.reclaim_buffer(Tensor::from_typed::<i32>(
