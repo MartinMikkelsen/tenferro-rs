@@ -260,6 +260,44 @@ fn test_cubecl_complex_sum_and_prod_match_cpu() {
 }
 
 #[test]
+#[ignore = "requires CUDA GPU"]
+fn test_cubecl_complex_sum_and_prod_match_cpu_on_plane_path() {
+    if !crate::cubecl::gpu_available() {
+        eprintln!("skipping complex plane reduction parity test - no CUDA device found");
+        return;
+    }
+
+    // Axes longer than the warp/plane size force the plane (warp-shuffle)
+    // reduction kernel, which must shuffle the complex components separately.
+    let mut cpu = cpu_backend();
+    let mut gpu = gpu_backend();
+    for len in [33usize, 64] {
+        let c64: Vec<_> = (0..len)
+            .map(|i| num_complex::Complex64::new((i % 7) as f64 - 3.0, (i % 5) as f64 - 2.0) * 0.25)
+            .collect();
+        let c32: Vec<_> = (0..len)
+            .map(|i| num_complex::Complex32::new((i % 7) as f32 - 3.0, (i % 5) as f32 - 2.0) * 0.25)
+            .collect();
+
+        for input in [tensor_c64(vec![len, 1], c64), tensor_c32(vec![len, 1], c32)] {
+            let gpu_input = upload(&gpu, &input);
+            for (expected, actual) in [
+                (
+                    cpu.reduce_sum(&input, &[0]).unwrap(),
+                    gpu.reduce_sum(&gpu_input, &[0]).unwrap(),
+                ),
+                (
+                    cpu.reduce_prod(&input, &[0]).unwrap(),
+                    gpu.reduce_prod(&gpu_input, &[0]).unwrap(),
+                ),
+            ] {
+                assert_tensor_close(&download(&gpu, &actual), &expected, 1e-5);
+            }
+        }
+    }
+}
+
+#[test]
 #[ignore]
 fn test_cubecl_i64_sum_and_prod_match_cpu() {
     let input = tensor_i64(vec![2, 3, 2], vec![1, 2, 3, 4, 5, 6, -1, -2, 2, 3, -3, 4]);
