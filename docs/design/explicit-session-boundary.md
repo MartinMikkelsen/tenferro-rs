@@ -861,6 +861,98 @@ caveat that its sections do not cover the whole ~200 µs saving, and the remaini
 questions are in
 `docs/worklogs/2026-09-27-scope-intervention-experiment.md`.
 
+#### Execution scopes as an evaluation boundary: ownership protocol
+
+Both intervention halves confirm the direction, so the next artefact is the protocol
+that a scope-as-evaluation-boundary must satisfy. This is the design to agree on
+**before** any public hook is frozen or shipped; nothing here is implemented.
+
+**What a scope owns.** One execution permit, acquired once from the backend's domain,
+plus the `CpuOperationEntry` and the resource set the permit keys (`BufferPool`, the
+GEMM analysis cache, the indexed plan cache). Sessions opened inside the scope reuse
+that permit and those resources rather than acquiring their own — measured as ~32 ns
+of session construction per inner entry, against a fresh outer entry of 18.9 µs before
+the scope and 7.9 µs with it.
+
+**Holder and release.** The scope holds the permit/entry/resources for exactly the
+duration of its callback and releases them on every exit path: normal return, early
+return through `?`, and unwind (the state is dropped). A session must never outlive
+its scope, which the callback's lifetime already constrains; the implementation must
+also not return a borrow of the scope state to the caller.
+
+**Joining, and never a new failure mode.** The hook is "ensure a scope for this
+domain, then run", not "always open one":
+
+| state when the hook is entered | required behaviour |
+| --- | --- |
+| no scope, managed domain, no active execution | open one scope for the callback, then release |
+| a scope is already active for this domain (user code, or a nested evaluation) | run the callback inside it; do **not** acquire a second permit |
+| a scope or CPU execution is active for another domain, or the domain is externally managed (`Error::Unsupported`), or the backend has no scope concept | run the callback plainly; the optimization is skipped |
+
+The last row is the load-bearing rule: the hook may only make the common case faster
+and must never turn a working call into an error. Today `with_execution_scope` returns
+`Error::RuntimeState` for a second scope or active execution and `Error::Unsupported`
+for an externally managed domain; the hook must absorb both and fall back.
+
+**No waiting.** Contention is handled by falling back, never by blocking: a hook that
+waited for a permit would introduce waiting cycles and delay other users, which the
+review flagged as a risk. Consequence: a scope's duration must stay bounded (one
+evaluation or one backward pass, not a user session), and a contention measurement is
+part of acceptance — with a second thread active, the other user's latency must stay
+within a recorded bound or the fallback must trigger.
+
+**Backend-generic shape.** A defaulted method on the backend contract, so backends
+without a scope keep the current behaviour:
+
+```rust
+/// Run `f` with one execution permit/resource set shared by every session entry
+/// opened inside it. Default: no scope. Never fails because a scope is
+/// unavailable; it falls back to running `f` directly.
+fn with_evaluation_scope<R: Send>(&mut self, f: impl FnOnce(&mut Self) -> R + Send) -> R {
+    f(self)
+}
+```
+
+CPU implements it by splitting the existing scope machinery: acquire the scope state
+from `&self` (permit, entry, resources), then run `f(self)` with `&mut self` and
+release on exit. The existing user-facing `CpuBackend::with_execution_scope(&self,
+…)` stays as it is; the hook must not require `Clone` on the backend or on the
+caller's tensors. CUDA and WebGPU keep the default: their session entry is a struct
+plus an entry guard with no permit, pool loan or plan-cache lookup, and the GPU
+campaign target shows no regression, so a GPU scope would buy nothing today. If one
+is ever added it must preserve enqueue order and the synchronize points exactly.
+
+**Invariants the hook must not touch.** Values, dtypes, validation order, typed
+errors and their sources, failure-output immutability, AD semantics, provider
+exclusion, permit lifetime semantics (acquired once per evaluation instead of once
+per operation, released at scope exit), GPU device ordering, cache ownership and plan
+lifetime. A scope is evidence that a permit is held, not a new kind of session: one
+session at a time inside it stays the rule, and the existing nested-entry detection
+is unchanged.
+
+**Audit gate.** The session-entry audit tracks mechanisms that create session entries.
+A scope is not a session entry, but it does create execution state (permit, entry,
+resources), so the allowlist decision is explicit: either the hook's call sites are
+tracked as an entry mechanism, or the rules section states why a scope is out of
+scope for that gate. Leaving it undecided would let a future second scope factory
+appear without review.
+
+**Rollout, and what remains open.**
+
+1. Issue intake for the new public API (a scope hook on the backend contract).
+2. Implement the hook plus the AD call sites: one scope per eager evaluation and per
+   `backward()` (the granularity the experiments measured), with the fallback table
+   above.
+3. Tests: parity of values/dtypes/errors with and without the scope; release on
+   normal, `Err` and panic paths, with a following scope opening normally; joining a
+   caller's open scope; externally managed domain falls back silently; other backends
+   keep the default; contention/latency bound; the compiled-path and GPU
+   non-regression rows; then the repository's three alternating pairs for the claim.
+4. Open decisions for the maintainer: the hook's trait and name; the AD granularity
+   (per evaluation, per backward, or both); whether the hook's call sites enter the
+   audit allowlist; and whether the residue that a scope does not cover (ops executed
+   outside an evaluation) is accepted with a recorded bound.
+
 Consequences for the design decision: the direction is worth adopting, and Astra's
 ordering stands — the execution-ownership protocol (who holds the permit and the
 entered execution, where it is released on normal, error and unwind paths, how a

@@ -89,6 +89,38 @@ instrumentation. The profiler is a diagnostic aid here, not a ledger.
   cost, so the win is available on top of the unification rather than as a
   restoration of it.
 
+## Eager small-op confirmation (same series)
+
+The `eager_dispatch_baseline` residue is the other half, so the same intervention was
+applied there (bench-only: `runtime()` returns a `CpuBackend` clone and every case
+body is wrapped in `maybe_scoped`, which opens one scope per iteration only when
+`TENFERRO_BENCH_SCOPE` is set; the case set is unchanged).
+
+A first attempt compared two whole-benchmark runs (plain vs scoped). It is not usable:
+the plain run flagged 28 of 28 cases above +5% against the baseline, a uniform ~+10%
+across both lazy and materialized families, which is the contention signature rather
+than a code effect — the pinned core read 0% busy immediately before and after the
+run but a foreign job can land during a three-minute run. It is recorded here as a
+protocol failure, not as a result.
+
+The matched measurement is the per-case A/B/A below (plain, scope, plain, each a
+single-case run with idle checks before and after; baseline from the recaptured
+artifact, captured in a different window, so the "vs baseline" column carries that
+caveat and the plain-vs-scope delta is the trustworthy one):
+
+| case | baseline | plain | scope | plain vs scope |
+| --- | --- | --- | --- | --- |
+| `materialized/reduce_sum_f64/1` | 13.61 µs | 15.06 / 14.86 µs | **12.82 µs** | −14% |
+| `materialized/dot_general_f64/1` | 15.91 µs | 17.32 / 17.20 µs | **14.08 µs** | −18% |
+| `lazy/neg_f64/64` | 11.68 µs | 12.84 µs | **10.91 µs** | −15% |
+
+All three scoped values are also *below* the pre-unification baseline (−5.8%, −11.5%,
+−6.6%), which is the same conclusion as the linalg half: the eager path was paying the
+same per-operation session cost before the unification, so the scope is a net cost
+reduction rather than a restoration. The intervention was reverted
+(`/tmp/scope-intervention-ad.diff`), so the campaign harness is unchanged.
+
+
 ## Limits
 
 * Bench-level scope: it exercises the scope as a *caller* would, which is a
