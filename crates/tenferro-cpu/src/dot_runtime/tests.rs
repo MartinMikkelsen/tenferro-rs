@@ -1,7 +1,7 @@
 use super::{
     validate_axis_groups, validate_dot_general, validate_layout_metadata, CpuProviderBundle,
-    CpuProviderDomainContract, GroupedJobState, PackedJobStates, GROUPED_INLINE_JOB_CAPACITY,
-    GROUPED_JOBS_PER_STATE_WORD,
+    CpuProviderDomainContract, GroupedJobState, PackedJobStates, UninitTensor,
+    GROUPED_INLINE_JOB_CAPACITY, GROUPED_JOBS_PER_STATE_WORD,
 };
 use crate::buffer_pool::{BufferPool, PoolScalar};
 use crate::gemm::GemmAnalysisCache;
@@ -26,6 +26,27 @@ use tenferro_tensor::{
     ContractionScalar, DType, DotGeneralAccumulation, DotGeneralConfig, ErrorKind, Tensor,
     TensorRead, TensorViewMut, TensorWrite, TypedTensorViewMut, ValidationKind,
 };
+
+#[test]
+fn erased_full_overwrite_outputs_can_share_one_pool() {
+    let pool = BufferPool::new();
+    let mut first = UninitTensor::acquire(&pool, DType::F32, vec![1]).unwrap();
+    let second = UninitTensor::acquire(&pool, DType::F64, vec![2]).unwrap();
+    for (byte, value) in first
+        .as_uninit_bytes_mut()
+        .iter_mut()
+        .zip(3.5_f32.to_ne_bytes())
+    {
+        byte.write(value);
+    }
+    // An uninitialized scratch lease is discarded, not published.
+    drop(second);
+    // SAFETY: all bytes of the sole f32 element were initialized above.
+    let output = unsafe { first.assume_init() }.unwrap();
+    assert_eq!(output.as_slice::<f32>().unwrap(), &[3.5]);
+    drop(output);
+    assert_eq!(pool.len(), 0); // This path does not request recycling.
+}
 
 #[derive(Debug)]
 struct CountingExecutor {
