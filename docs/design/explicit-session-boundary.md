@@ -831,6 +831,45 @@ Two constraints make this a design decision rather than a local edit:
 That is an API decision for the umbrella, not an unattended correctness fix, so it
 is recorded here rather than implemented.
 
+#### The scope hypothesis is confirmed (bench-only intervention)
+
+The council and the Astra review fixed the bar before measuring: recover at least
+80% of the `linalg_vjp_gate` delta, with one scope per timed iteration. The
+intervention lives only in `crates/tenferro-linalg/benches/linalg_vjp_gate.rs`
+(the fixture keeps a `CpuBackend` clone so each iteration can open its own scope);
+no library file changed. Both variants are cases of the same benchmark run, so the
+comparison is matched by construction, and the pinned core was idle before and
+after every run.
+
+| case | baseline | no scope | with scope | vs baseline |
+| --- | --- | --- | --- | --- |
+| `triangular_solve_vjp/8` | 320.95 µs | 379.84 µs (+18.3%) | 178.79 µs | 1.80× |
+| `svd_values_vjp/8` | 336.29 µs | 370.81 µs (+10.3%) | 182.78 µs | 1.84× |
+| `triangular_solve_vjp/16` | 319.77 µs | 383.43 µs (+19.9%) | 185.01 µs | 1.73× |
+| `svd_values_vjp/16` | 333.32 µs | 372.11 µs (+11.6%) | 185.15 µs | 1.80× |
+
+The scope does not merely recover the regression: it makes these VJPs about 1.8×
+faster than the pre-unification baseline, which says the eager path was paying much
+of the same per-operation session cost before the unification too. So this is a
+cost reduction available on top of the contracts, not only a restoration.
+
+The session-entry counts are unchanged by the scope (2000 outer and 12000 inner
+entries per profiler window in both variants); what changes is the cost of an outer
+entry, 18.9 µs → 7.9 µs, once the permit and pool loan are already held. Session
+construction inside the scope measures ~32 ns per call. Details, the profiler
+caveat that its sections do not cover the whole ~200 µs saving, and the remaining
+questions are in
+`docs/worklogs/2026-09-27-scope-intervention-experiment.md`.
+
+Consequences for the design decision: the direction is worth adopting, and Astra's
+ordering stands — the execution-ownership protocol (who holds the permit and the
+entered execution, where it is released on normal, error and unwind paths, how a
+caller's already-open scope is joined, how other backends and external executors
+behave, and the waiting relationships under contention) must be settled **before**
+any public hook is frozen or shipped. The `eager_dispatch_baseline` small-op cases
+are the other half of the residue and were not re-measured under a scope; they
+belong in the same follow-up.
+
 The criterion settings stay at the pinned defaults for certification; cheaper
 settings are acceptable for a diagnostic pass only, because they change the
 confidence intervals the comparator uses to separate `NOISY` from `REGRESSION`.
