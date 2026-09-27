@@ -3,7 +3,7 @@ use std::cell::Cell;
 use std::hint::black_box;
 
 use num_complex::Complex64;
-use tenferro_tensor::{Rank, TypedTensorView, TypedTensorViewMut};
+use tenferro_tensor::{Rank, TypedTensor, TypedTensorView, TypedTensorViewMut};
 
 struct CountingAllocator;
 
@@ -62,6 +62,27 @@ fn small_dynamic_borrowed_view_metadata_stays_inline() {
 
     assert_eq!(read_allocations, 0);
     assert_eq!(write_allocations, 0);
+}
+
+#[test]
+fn static_rank_borrowed_erasure_does_not_allocate_or_promote_storage() {
+    let data = [1.0_f64, 2.0, 3.0, 4.0];
+    let allocations = count_allocations(|| {
+        let view =
+            TypedTensorView::<_, Rank<2>>::from_slice_ranked([2, 2], [1, 2], 0, &data).unwrap();
+        let read = view.into_tensor_read().unwrap();
+        assert_eq!(read.as_slice::<f64>().unwrap(), &data);
+        black_box(read);
+    });
+    assert_eq!(allocations, 0);
+}
+
+#[test]
+fn ranked_owner_view_erasure_keeps_its_root_borrow() {
+    let owner =
+        TypedTensor::<f64, Rank<2>>::from_vec_col_major([2, 2], vec![1.0, 2.0, 3.0, 4.0]).unwrap();
+    let read = owner.as_view().into_tensor_read().unwrap();
+    assert_eq!(read.as_slice::<f64>().unwrap(), &[1.0, 2.0, 3.0, 4.0]);
 }
 
 #[test]

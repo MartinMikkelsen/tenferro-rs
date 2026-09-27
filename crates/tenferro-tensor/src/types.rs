@@ -1559,6 +1559,43 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorView<'a, T, R> {
         })
     }
 
+    /// Erase a borrowed view's rank and dtype for session dispatch without
+    /// allocating tensor storage or promoting it into an allocation group.
+    /// Common ranks use the existing inline shape and stride metadata.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::{Rank, TypedTensorView};
+    /// let data = [1.0_f64, 2.0];
+    /// let view = TypedTensorView::<_, Rank<1>>::from_slice_ranked([2], [1], 0, &data)?;
+    /// let read = view.into_tensor_read()?;
+    /// assert_eq!(read.as_slice::<f64>()?, &[1.0, 2.0]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    /// # Errors
+    /// Returns `Error::Validation` if the rank-erased layout cannot be
+    /// represented or is outside the borrowed allocation.
+    pub fn into_tensor_read(self) -> crate::Result<TensorRead<'a>>
+    where
+        T: TensorScalar,
+    {
+        let layout = TensorLayout::<DynRank>::from_parts(
+            shape_vec(self.layout.shape()),
+            stride_vec(self.layout.strides()),
+            self.layout.offset(),
+            self.buffer.len(),
+        )
+        .map_err(|err| tensor_layout_error("TypedTensorView::into_tensor_read", err))?;
+        let view = TypedTensorView {
+            buffer: self.buffer,
+            root: self.root.map(GroupReadView::into_dyn),
+            layout,
+            placement: self.placement,
+        };
+        Ok(TensorRead::from_view(T::tensor_view(view)))
+    }
+
     /// Return the logical shape.
     ///
     /// # Examples

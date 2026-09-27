@@ -1,6 +1,6 @@
 use super::*;
 use tenferro_tensor::{
-    BackendSessionHost, BackendStorageHandle, ElementwiseReadOp, MemoryKind, Placement,
+    BackendSessionHost, BackendStorageHandle, ElementwiseReadOp, MemoryKind, Placement, Rank,
     StorageBuffer, TensorRead, TensorViewCanonicalization, TypedTensorView, TypedTensorViewMut,
 };
 
@@ -173,6 +173,23 @@ fn cpu_runtime_copy_dispatches_all_dtypes_with_backend_session_parity() {
         vec![Complex64::new(5.0, -6.0), Complex64::new(-7.0, 8.0)],
         vec![Complex64::new(0.0, 0.0); 2]
     );
+}
+
+#[test]
+fn cpu_session_copy_accepts_ranked_borrow_without_group_promotion() {
+    let source = [1.0_f64, 2.0, 3.0, 4.0];
+    let view =
+        TypedTensorView::<_, Rank<2>>::from_slice_ranked([2, 2], [1, 2], 0, &source).unwrap();
+    let read = view.into_tensor_read().unwrap();
+    let mut destination = [-1.0_f64; 4];
+    let write = TensorWrite::from_view(TensorViewMut::F64(
+        TypedTensorViewMut::from_slice([2, 2], [1, 2], 0, &mut destination).unwrap(),
+    ));
+    let mut backend = CpuBackend::new();
+    backend
+        .with_backend_session(|session| session.copy_read_into(read, write))
+        .unwrap();
+    assert_eq!(destination, source);
 }
 
 #[test]

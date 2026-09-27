@@ -294,6 +294,14 @@ impl<'a, T, R: TensorRank> GroupReadView<'a, T, R> {
             _borrow: PhantomData,
         }
     }
+
+    pub(crate) fn into_dyn(self) -> GroupReadView<'a, T, crate::DynRank> {
+        GroupReadView {
+            owner: self.owner,
+            descriptor: self.descriptor,
+            _borrow: PhantomData,
+        }
+    }
 }
 
 impl<T, R: TensorRank> std::fmt::Debug for GroupReadView<'_, T, R> {
