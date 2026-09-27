@@ -930,16 +930,31 @@ lifetime. A scope is evidence that a permit is held, not a new kind of session: 
 session at a time inside it stays the rule, and the existing nested-entry detection
 is unchanged.
 
-**Audit gate.** The session-entry audit tracks mechanisms that create session entries.
-A scope is not a session entry, but it does create execution state (permit, entry,
-resources), so the allowlist decision is explicit: either the hook's call sites are
-tracked as an entry mechanism, or the rules section states why a scope is out of
-scope for that gate. Leaving it undecided would let a future second scope factory
-appear without review.
+**Audit gate (implemented now, before the hook exists).** The session-entry audit
+tracks mechanisms that create execution state, and a scope is one of them even though
+it is not a session entry: it holds an execution permit and the resource set that
+permit keys. Two mechanisms were therefore added to
+`scripts/audit-session-entry.py`, and `REPOSITORY_RULES.md` names both in its
+"Backend Session Entry" section:
+
+* `with_execution_scope` — allowlisted at exactly one site, the API definition in
+  `tenferro-cpu` (the reviewed boundary). Adding the mechanism immediately surfaced
+  that site, which is the point of the gate.
+* `with_evaluation_scope` — the planned hook, tracked with **zero** allowlisted
+  entries. Library code cannot call it without failing the gate, so the hook cannot
+  appear, or spread to a second call site, without a reviewed allowlist change.
+
+Demonstrated end to end: inserting an aliased `with_evaluation_scope` call in
+`crates/tenferro-ad/src/eager_exec.rs` fails the check with
+`with_evaluation_scope: unallowlisted session entry at
+crates/tenferro-ad/src/eager_exec.rs::<fn>` (exit 1), and the reverted tree passes
+again. The audit's own negative tests now cover both scope mechanisms, so the check
+cannot silently degrade into name matching.
 
 **Rollout, and what remains open.**
 
-1. Issue intake for the new public API (a scope hook on the backend contract).
+1. The API is tracked under the existing issue #1926 / umbrella #1929; no new
+   intake. The audit freeze above is already in place.
 2. Implement the hook plus the AD call sites: one scope per eager evaluation and per
    `backward()` (the granularity the experiments measured), with the fallback table
    above.
@@ -948,10 +963,11 @@ appear without review.
    caller's open scope; externally managed domain falls back silently; other backends
    keep the default; contention/latency bound; the compiled-path and GPU
    non-regression rows; then the repository's three alternating pairs for the claim.
-4. Open decisions for the maintainer: the hook's trait and name; the AD granularity
-   (per evaluation, per backward, or both); whether the hook's call sites enter the
-   audit allowlist; and whether the residue that a scope does not cover (ops executed
-   outside an evaluation) is accepted with a recorded bound.
+4. Open decisions for the maintainer: the hook's trait and name, the AD granularity
+   (per evaluation, per backward, or both), and whether the residue that a scope does
+   not cover (ops executed outside an evaluation) is accepted with a recorded bound.
+   The allowlist question is settled: the hook's call sites enter the audit as
+   reviewed allowlist entries.
 
 Consequences for the design decision: the direction is worth adopting, and Astra's
 ordering stands — the execution-ownership protocol (who holds the permit and the

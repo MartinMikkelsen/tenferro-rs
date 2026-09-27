@@ -22,6 +22,10 @@
     "crates/tenferro-cpu/src/backend.rs::BackendSessionHost::with_backend_session_cached",
     "crates/tenferro-cpu/src/backend.rs::CpuBackend::run_backend_session_cached"
   ],
+  "with_evaluation_scope": [],
+  "with_execution_scope": [
+    "crates/tenferro-cpu/src/backend/execution_scope.rs::CpuBackend::with_execution_scope"
+  ],
   "with_session_entry_guard": [
     "crates/tenferro-einsum/src/typed_eager_tests.rs::BackendSessionHost::with_backend_session",
     "crates/tenferro-gpu/src/cubecl/exec_session.rs::BackendSessionHost::with_backend_session",

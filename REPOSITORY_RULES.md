@@ -162,13 +162,20 @@ mechanisms, not by exported names. The audited set lives in
 [`scripts/audit-session-entry.py`](scripts/audit-session-entry.py):
 `default_backend_session`, `with_session_entry_guard`,
 `install_with_pool_context[_fresh]`, `install_with_indexed_pool_context[_unmarked]`,
-`run_backend_session_cached`, and `CpuExecSession` / `CudaExecSession` /
-`WebGpuExecSession` construction.
+`run_backend_session_cached`, `with_execution_scope`, `with_evaluation_scope`, and
+`CpuExecSession` / `CudaExecSession` / `WebGpuExecSession` construction.
 
 - Every occurrence in library code must sit inside a function listed in
   [`scripts/session-entry-allowlist.json`](scripts/session-entry-allowlist.json),
   which is keyed by mechanism and holds function-level source locations. The
   allowlist may only shrink; `--bless` is for recording a removal.
+- An execution scope creates execution state too: it holds an execution permit and
+the resource set that permit keys, and sessions opened inside it reuse them. Scope
+entry points therefore belong to the audited set. `with_execution_scope` has exactly
+one allowlisted entry — the API definition in `tenferro-cpu` — and
+`with_evaluation_scope`, the hook that lets an evaluation open one scope of its own,
+is tracked with **zero** entries: the day library code calls it, the gate fails until
+a reviewer allowlists that call site.
 - Operation implementations reach a session through `with_backend_session` and
   must not create execution state themselves.
 - A renamed import is not an exemption: the audit resolves `use ... as alias`

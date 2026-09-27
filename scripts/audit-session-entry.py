@@ -13,6 +13,8 @@ Mechanisms tracked (issue #1926 / umbrella #1929):
   * `install_with_pool_context_fresh`    - CPU owner operation entry (fresh output)
   * `install_with_indexed_pool_context`  - CPU indexed owner operation entry
   * `run_backend_session_cached`         - CPU session construction
+  * `with_execution_scope`               - CPU execution-scope entry (holds a permit)
+  * `with_evaluation_scope`              - execution-scope hook, planned; same gate
   * `CpuExecSession construction`        - CPU session construction
   * `CudaExecSession construction`       - CUDA session construction
   * `WebGpuExecSession construction`     - WebGPU session construction
@@ -42,6 +44,8 @@ MECHANISMS: dict[str, tuple[str, tuple[str, ...]]] = {
     "install_with_pool_context_fresh": (r"\binstall_with_pool_context_fresh\b", ("install_with_pool_context_fresh",)),
     "install_with_indexed_pool_context": (r"\binstall_with_indexed_pool_context(?:_unmarked)?\b", ("install_with_indexed_pool_context", "install_with_indexed_pool_context_unmarked")),
     "run_backend_session_cached": (r"\brun_backend_session_cached\b", ("run_backend_session_cached",)),
+    "with_execution_scope": (r"\bwith_execution_scope\b", ("with_execution_scope",)),
+    "with_evaluation_scope": (r"\bwith_evaluation_scope\b", ("with_evaluation_scope",)),
     "CpuExecSession construction": (r"\bCpuExecSession\s*\{", ("CpuExecSession",)),
     "CudaExecSession construction": (r"\bCudaExecSession\s*\{", ("CudaExecSession",)),
     "WebGpuExecSession construction": (r"\bWebGpuExecSession\s*\{", ("WebGpuExecSession",)),
@@ -300,6 +304,16 @@ fn build() -> Session<'static> {
 }
 """
 
+SELF_TEST_SCOPE_ENTRY = """
+use tenferro_cpu::with_execution_scope as scope_entry;
+use tenferro_tensor::with_evaluation_scope as evaluation_scope;
+
+fn hidden_scope(backend: &mut B) {
+    scope_entry(backend, || ());
+    evaluation_scope(backend, |_| ());
+}
+"""
+
 
 def self_test() -> int:
     failures: list[str] = []
@@ -323,6 +337,14 @@ def self_test() -> int:
     if ("CpuExecSession construction", "build") not in grouped:
         failures.append("a grouped `as` import must be traced")
 
+    # Scope entry points create execution state (a permit and its resources), so
+    # they are tracked by the same gate that guards session construction.
+    scope_entry = sites(SELF_TEST_SCOPE_ENTRY)
+    if ("with_execution_scope", "hidden_scope") not in scope_entry:
+        failures.append("a renamed execution scope must be traced to its mechanism")
+    if ("with_evaluation_scope", "hidden_scope") not in scope_entry:
+        failures.append("a renamed evaluation-scope hook must be traced to its mechanism")
+
     unrelated = sites(SELF_TEST_UNRELATED_STRUCT)
     if unrelated:
         failures.append("an unrelated struct literal must not be reported")
@@ -331,7 +353,7 @@ def self_test() -> int:
         print(f"self-test failure: {failure}")
     if failures:
         return 1
-    print("self-test passed: alias, boundary, method and grouped-import cases")
+    print("self-test passed: alias, boundary, method, grouped-import and scope cases")
     return 0
 
 
