@@ -88,40 +88,27 @@ fn reinterpret_complex_to_real_layout(
     let real_buffer_len = complex_buffer_len
         .checked_mul(2)
         .ok_or_else(|| crate::Error::validation(op, ValidationError::IntegerOverflow))?;
-    let mut real_shape = Vec::with_capacity(
-        shape
-            .len()
-            .checked_add(1)
-            .ok_or_else(|| crate::Error::validation(op, ValidationError::IntegerOverflow))?,
-    );
+    let rank = shape
+        .len()
+        .checked_add(1)
+        .ok_or_else(|| crate::Error::validation(op, ValidationError::IntegerOverflow))?;
+    let mut real_shape = ShapeVec::with_capacity(rank);
     real_shape.push(2);
     real_shape.extend_from_slice(shape);
-    let real_strides = strides
-        .iter()
-        .map(|&stride| {
+    let mut real_strides = StrideVec::with_capacity(rank);
+    real_strides.push(1);
+    for &stride in strides {
+        real_strides.push(
             stride
                 .checked_mul(2)
-                .ok_or_else(|| crate::Error::validation(op, ValidationError::IntegerOverflow))
-        })
-        .collect::<crate::Result<Vec<_>>>()?;
-    let mut all_strides = Vec::with_capacity(
-        real_strides
-            .len()
-            .checked_add(1)
-            .ok_or_else(|| crate::Error::validation(op, ValidationError::IntegerOverflow))?,
-    );
-    all_strides.push(1);
-    all_strides.extend(real_strides);
+                .ok_or_else(|| crate::Error::validation(op, ValidationError::IntegerOverflow))?,
+        );
+    }
     let real_offset = offset
         .checked_mul(2)
         .ok_or_else(|| crate::Error::validation(op, ValidationError::IntegerOverflow))?;
-    TensorLayout::from_parts(
-        real_shape.into(),
-        all_strides.into(),
-        real_offset,
-        real_buffer_len,
-    )
-    .map_err(|err| tensor_layout_error(op, err))
+    TensorLayout::from_parts(real_shape, real_strides, real_offset, real_buffer_len)
+        .map_err(|err| tensor_layout_error(op, err))
 }
 
 fn reinterpret_real_to_complex_layout(
@@ -152,23 +139,21 @@ fn reinterpret_real_to_complex_layout(
             "the offset must be divisible by 2 for a complex reinterpretation",
         ));
     }
-    let complex_strides = strides[1..]
-        .iter()
-        .map(|&stride| {
-            if stride % 2 != 0 {
-                return Err(crate::Error::invalid_argument(
-                    op,
-                    "strides",
-                    "all non-leading strides must be divisible by 2",
-                ));
-            }
-            Ok(stride / 2)
-        })
-        .collect::<crate::Result<Vec<_>>>()?;
+    let mut complex_strides = StrideVec::with_capacity(strides.len() - 1);
+    for &stride in &strides[1..] {
+        if stride % 2 != 0 {
+            return Err(crate::Error::invalid_argument(
+                op,
+                "strides",
+                "all non-leading strides must be divisible by 2",
+            ));
+        }
+        complex_strides.push(stride / 2);
+    }
     let complex_buffer_len = real_buffer_len / 2;
     TensorLayout::from_parts(
-        shape[1..].to_vec().into(),
-        complex_strides.into(),
+        shape[1..].iter().copied().collect(),
+        complex_strides,
         offset / 2,
         complex_buffer_len,
     )

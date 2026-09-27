@@ -2,7 +2,8 @@ use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
 use std::hint::black_box;
 
-use tenferro_tensor::{TypedTensorView, TypedTensorViewMut};
+use num_complex::Complex64;
+use tenferro_tensor::{Rank, TypedTensorView, TypedTensorViewMut};
 
 struct CountingAllocator;
 
@@ -61,4 +62,46 @@ fn small_dynamic_borrowed_view_metadata_stays_inline() {
 
     assert_eq!(read_allocations, 0);
     assert_eq!(write_allocations, 0);
+}
+
+#[test]
+fn small_complex_real_views_do_not_allocate_metadata() {
+    let data = [Complex64::new(1.0, 2.0); 6];
+    let immutable = count_allocations(|| {
+        let view =
+            TypedTensorView::<_, Rank<2>>::from_slice_ranked([2, 3], [1, 2], 0, &data).unwrap();
+        let real = view.as_real_view().unwrap();
+        assert_eq!(real.shape(), &[2, 2, 3]);
+        assert_eq!(real.as_slice().unwrap()[1], 2.0);
+        black_box(real);
+    });
+    let mut data = [Complex64::new(1.0, 2.0); 6];
+    let mutable = count_allocations(|| {
+        let mut view =
+            TypedTensorViewMut::<_, Rank<2>>::from_slice_ranked([2, 3], [1, 2], 0, &mut data)
+                .unwrap();
+        let mut real = view.as_real_view_mut().unwrap();
+        real.host_storage_mut().unwrap()[1] = 4.0;
+        black_box(real);
+    });
+    let dynamic = count_allocations(|| {
+        let view = TypedTensorView::from_slice([2, 3], [1, 2], 0, &data).unwrap();
+        black_box(view.as_real_view().unwrap());
+    });
+    let dynamic_mut = count_allocations(|| {
+        let mut view = TypedTensorViewMut::from_slice([2, 3], [1, 2], 0, &mut data).unwrap();
+        black_box(view.as_real_view_mut().unwrap());
+    });
+    assert_eq!(data[0].im, 4.0);
+    assert_eq!(immutable, 0);
+    assert_eq!(mutable, 0);
+    assert_eq!(dynamic, 0);
+    assert_eq!(dynamic_mut, 0);
+
+    // Arbitrary rank may spill, but its layout must still be valid.
+    let high_rank = TypedTensorView::from_slice([1; 8], [1; 8], 0, &data[..1]).unwrap();
+    assert_eq!(
+        high_rank.as_real_view().unwrap().shape(),
+        &[2, 1, 1, 1, 1, 1, 1, 1, 1]
+    );
 }
