@@ -953,35 +953,33 @@ cannot silently degrade into name matching.
 
 **The public benchmark harness has to migrate with this change (B).** The umbrella
 requires `tenferro-benchmark` and `strided-rs-benchmark-suite` to publish results at
-exact library revisions. Measured in a worktree of `tenferro-benchmark` at
+exact library revisions. In an isolated worktree of `tenferro-benchmark` at
 `origin/main` (`2a8469f`), pointed at this branch:
 
 * `cargo build --release --features cpu-faer --bins` fails in four binaries with
-  **72 × E0599** from the deleted owner spellings (`CudaBackend`/`CpuBackend`
-  receivers calling `reduce_sum`, `mul`, `exp`, `transpose`, `tril`, `triu`,
-  `slice`, …) and **28 × E0308** from an independent upstream API change the
-  repository is behind on (`DotGeneralConfig` now takes `SmallVec<[usize; 4]>`
-  rather than `Vec<usize>`).
-* the small-work/session-lane binary `small_work_case` needs only the session-surface
-  migration and then builds and runs: `reduce_sum` → `reduce_sum_read` with
-  `TensorRead::from_tensor`, and `dot_general` → `dot_general_read`. Those three
-  sites are the session-surface delta for this repository; they are kept as a patch
-  outside the repository (`/tmp/bench-session-surface-migration.diff`) rather than
-  pushed, because the remaining binaries need the team's in-flight API update to the
-  same revision and duplicating that would conflict with it.
-* the harness already records what the umbrella asks for at publication time: the
-  exact `tenferro_rs` commit and `dirty` flag, the enabled features, the BLAS
-  implementation, and the per-thread environment (`OMP_NUM_THREADS`,
-  `RAYON_NUM_THREADS`, …), plus raw samples per case.
-* what remains against `tenferro-benchmark` #107: selected/expected/executed/
-  unsupported/failed/noisy case IDs in the run metadata (a run here reported
-  "0/0 recorded rows" for a BLAS-backed case under the faer provider, which the
-  metadata does not surface as unsupported), the versioned `quick`/`full` manifests
-  with measured wall times, and the session/public-route latency lane itself
-  (`benchmark_cpu_session` is the natural base and does not build yet).
+  deleted owner spellings on `CpuBackend` (`reduce_sum`, `mul`, `exp`, etc.) and
+  separate config-type errors (`DotGeneralConfig` expects `SmallVec<[usize; 4]>`
+  rather than `Vec<usize>`). The complete benchmark harness needs an API update.
+* after migrating two `reduce_sum` calls to `reduce_sum_read` with
+  `TensorRead::from_tensor`, `small_work_case` builds. The separate
+  `benchmark_cpu_session` binary also needs `dot_general_read` and config updates;
+  building `small_work_case` does **not** establish a working session lane.
+* the runner records the exact `tenferro_rs` commit and `dirty` flag, enabled
+  features, BLAS implementation, and thread environment. It has raw-sample
+  storage, but an empty sample file is not a measured result.
+* a host-only diagnostic invocation with `BENCH_INSTANCE=add_f64_concrete_fresh`
+  produced **zero rows**: `selected_cases` filters out `-fresh` cases unless
+  `BENCH_INCLUDE_SETUP_DIAGNOSTICS=1`, even when explicitly selected. This was
+  selection filtering, **not** evidence that the faer provider cannot run the
+  case. The invocation is not a publishable Linux result: the benchmark repo
+  requires Linux collection inside its devcontainer.
+* what remains against `tenferro-benchmark` #107: explicit expected/selected/
+  executed/unsupported/failed/noisy case identities in run metadata, nonempty
+  matching samples, versioned `quick`/`full` manifests with measured wall times,
+  and the session/public-route latency lane.
 * `TENFERRO_CPU_FEATURES=cpu-faer` avoids the OpenBLAS prefix requirement that the
-  Linux runner defaults to; the harness's own default feature is `cpu-faer`, so a
-  pure-Rust provider path needs no system BLAS.
+  Linux runner defaults to; this is useful for compilation diagnostics, not a
+  substitute for the repository's Linux publication provider policy.
 
 **A2 is blocked by the eager backend's ownership shape (verified in code, hook
 reverted).** A first implementation of the hook landed and compiled — a defaulted
