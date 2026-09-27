@@ -951,6 +951,66 @@ crates/tenferro-ad/src/eager_exec.rs::<fn>` (exit 1), and the reverted tree pass
 again. The audit's own negative tests now cover both scope mechanisms, so the check
 cannot silently degrade into name matching.
 
+**A2 is blocked by the eager backend's ownership shape (verified in code, hook
+reverted).** A first implementation of the hook landed and compiled — a defaulted
+`with_evaluation_scope(&self, f: impl FnOnce() -> R + Send) -> R` on
+`BackendSessionHost`, the CPU override built on a split of the existing scope
+machinery (`open_evaluation_scope` acquiring the permit/entry/resources, and a `run`
+that keeps the callback available when entry admission fails), and the
+`EagerBackend` forward. It was reverted unused, because no safe call site exists in
+the current eager runtime:
+
+* a CPU permit is acquired with a `compare_exchange`, so a second concurrent
+  acquisition **panics** (`BACKEND_REENTRY_PANIC`) instead of waiting. Opening a
+  scope outside the eager backend's mutex and then locking inside it inverts the
+  lock order: the scope holds the permit and waits for the mutex while a concurrent
+  same-runtime operation holds the mutex and takes the permit. Today that pair
+  serializes.
+* `CpuOperationEntry::enter` may install its callback into the domain executor, so
+  the callback must be `Send`. The eager path's closure captures the backend
+  `MutexGuard`, which is `!Send`, so it cannot be passed into a scope.
+* `EagerBackend` is a composite enum behind that mutex. It cannot forward a
+  `&mut self`-callback hook (the match arm reborrows `self` while the callback needs
+  it again), and the `&self` + `FnOnce() -> R` shape needs a second handle of the
+  same domain, which the enum cannot produce: it does not implement `Clone`, and the
+  test-only `RecordingBackend` is not semantically cloneable.
+* a thread-bound (`!Send`) scope entry does not help either: the outermost scope's
+  callback *is* the eager body, and `enter` may still need to install it.
+
+So A2 needs a decision, with one viable path: **evaluate an eager operation (or a
+backward pass) on a concrete handle instead of the composite enum**, so no mutex
+guard crosses the scope and today's lock and permit ordering is preserved. That
+changes how the eager runtime owns its backend, which is why it is not an
+unattended edit. The measured win awaiting it is the linalg 2.0–2.1× and the eager
+small-op −14…−18% from the intervention experiment, and the audit freeze keeps
+`with_evaluation_scope` at zero allowlisted entries so the implementation cannot
+appear unreviewed.
+
+**Deliverable boundary and the decisions taken.** The remaining work for this
+workstream is A, everything that lands in `tenferro-rs` (the hook, its AD call
+sites, the re-verification and the certification campaign), plus B, the two external
+benchmark repositories (`tenferro-benchmark` #107 and `strided-rs-benchmark-suite`
+#41) publishing representative results with `quick`/`full` manifests. The per-issue
+CPU/GPU optimization workstreams (#1927, #1928 and their focused issues) are outside
+this boundary.
+
+Decided here, so the implementation does not stall on open questions (each remains
+reviewable and reversible):
+
+1. **Hook home and shape.** A defaulted method on the existing
+   `BackendSessionHost` trait in `tenferro-tensor`, named `with_evaluation_scope`,
+   taking `&self` and a `FnOnce() -> R + Send` callback with a default that simply
+   calls it. The caller opens the scope on a handle and runs the evaluation on
+   another handle of the same domain (the pattern the intervention measured), so the
+   hook needs no `Clone` bound and no interior mutability.
+2. **AD granularity.** One scope per eager evaluation and per `backward()` call: the
+   single-operation entry path wraps its operation, and `backward()` wraps its tape
+   replay. The join rule makes the nested case free, and this is the granularity the
+   measurements used.
+3. **Residue.** Operations executed outside an evaluation (runtime-dispatched compiled
+   runs, direct session use) keep today's behaviour. Any residue that survives the
+   hook is recorded per case with a bound rather than silently accepted.
+
 **Rollout, and what remains open.**
 
 1. The API is tracked under the existing issue #1926 / umbrella #1929; no new
