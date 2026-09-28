@@ -70,32 +70,43 @@ fn contraction_scalar_identity_errors_name_the_public_constructor() {
 }
 
 #[test]
-#[cfg(debug_assertions)]
-#[should_panic(expected = "nested backend session entry")]
-fn nested_backend_session_entry_is_rejected_in_debug_builds() {
+fn nested_backend_session_entry_is_rejected_before_its_callback_runs() {
     use crate::tests::backend_default_read_tests::DefaultReadBackend;
 
     let mut backend = DefaultReadBackend::default();
-    backend.with_backend_session(|outer| {
-        // Recover the concrete backend from the session through the documented
-        // capability bridge so the nested call re-enters the session entry on
-        // the same backend, same thread.
-        let concrete: &mut DefaultReadBackend =
-            unsafe { &mut *outer.session_data_mut().cast::<DefaultReadBackend>() };
-        concrete.with_backend_session(|_inner| ())
-    });
+    let mut inner_ran = false;
+    let nested = backend
+        .with_backend_session(|outer| {
+            // Recover the concrete backend from the session through the documented
+            // capability bridge so the nested call re-enters the session entry on
+            // the same backend, same thread.
+            let concrete: &mut DefaultReadBackend =
+                unsafe { &mut *outer.session_data_mut().cast::<DefaultReadBackend>() };
+            concrete.with_backend_session(|_inner| inner_ran = true)
+        })
+        .unwrap();
+    assert!(matches!(
+        nested,
+        Err(SessionEntryError::Reentered {
+            backend: "test backend"
+        })
+    ));
+    assert!(!inner_ran);
+    // The rejected nested entry leaves the outer guard's flag handling intact.
+    assert!(!IN_SESSION.get());
+    assert_eq!(backend.with_backend_session(|_| 4usize).unwrap(), 4);
 }
 
 #[test]
 fn backend_session_entry_runs_and_clears_the_in_session_flag() {
     let mut backend = crate::tests::backend_default_read_tests::DefaultReadBackend::default();
 
-    let first = backend.with_backend_session(|_| 1usize);
+    let first = backend.with_backend_session(|_| 1usize).unwrap();
     assert_eq!(first, 1);
     assert!(!IN_SESSION.get());
 
     // A second sequential session proves the first guard restored the flag.
-    let second = backend.with_backend_session(|_| 2usize);
+    let second = backend.with_backend_session(|_| 2usize).unwrap();
     assert_eq!(second, 2);
     assert!(!IN_SESSION.get());
 }
@@ -107,39 +118,54 @@ fn backend_session_entry_clears_the_in_session_flag_after_panic() {
     let mut backend = crate::tests::backend_default_read_tests::DefaultReadBackend::default();
 
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        backend.with_backend_session(|_| {
-            assert!(IN_SESSION.get());
-            panic!("boom");
-        })
+        backend
+            .with_backend_session(|_| {
+                assert!(IN_SESSION.get());
+                panic!("boom");
+            })
+            .unwrap()
     }));
     assert!(outcome.is_err());
     assert!(!IN_SESSION.get());
 
     // The flag is usable again on the same thread.
-    let again = backend.with_backend_session(|_| 3usize);
+    let again = backend.with_backend_session(|_| 3usize).unwrap();
     assert_eq!(again, 3);
     assert!(!IN_SESSION.get());
 }
 
 #[test]
-#[cfg(debug_assertions)]
-#[should_panic(expected = "nested backend session entry")]
-fn with_session_entry_guard_rejects_nested_entry_in_debug_builds() {
-    with_session_entry_guard(|| with_session_entry_guard(|| ()))
+fn with_session_entry_guard_rejects_nested_entry_in_every_build() {
+    let mut inner_ran = false;
+    let nested = with_session_entry_guard("test backend", || {
+        with_session_entry_guard("test backend", || inner_ran = true)
+    })
+    .unwrap();
+    assert!(matches!(
+        nested,
+        Err(SessionEntryError::Reentered {
+            backend: "test backend"
+        })
+    ));
+    assert!(!inner_ran);
+    assert_eq!(
+        nested.unwrap_err().kind(),
+        tenferro_tensor_core::ErrorKind::RuntimeState
+    );
 }
 
 #[test]
 fn with_session_entry_guard_sets_and_restores_the_flag() {
-    let value = with_session_entry_guard(|| 1usize);
+    let value = with_session_entry_guard("test backend", || 1usize).unwrap();
     assert_eq!(value, 1);
     assert!(!IN_SESSION.get());
 
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        with_session_entry_guard(|| panic!("boom"))
+        with_session_entry_guard("test backend", || panic!("boom"))
     }));
     assert!(outcome.is_err());
     assert!(!IN_SESSION.get());
 
-    let again = with_session_entry_guard(|| 2usize);
+    let again = with_session_entry_guard("test backend", || 2usize).unwrap();
     assert_eq!(again, 2);
 }

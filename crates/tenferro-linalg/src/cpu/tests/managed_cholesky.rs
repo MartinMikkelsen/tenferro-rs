@@ -449,6 +449,7 @@ fn managed_snapshot_is_independent_and_rejects_foreign_storage() {
     let before = domain.counts.allocations.load(Ordering::Relaxed);
     let error = cpu
         .with_backend_session(|__s| __s.to_contiguous_read(TensorRead::from_tensor(&foreign)))
+        .unwrap()
         .unwrap_err();
     assert!(matches!(
         error,
@@ -470,7 +471,8 @@ fn managed_snapshot_is_independent_and_rejects_foreign_storage() {
         assert!(matches!(
             cpu.with_backend_session(
                 |__s| __s.to_contiguous_read(TensorRead::from_tensor(&invalid))
-            ),
+            )
+            .unwrap(),
             Err(tenferro_tensor::Error::HostAccess { .. })
         ));
         assert_eq!(domain.counts.allocations.load(Ordering::Relaxed), before);
@@ -480,6 +482,7 @@ fn managed_snapshot_is_independent_and_rejects_foreign_storage() {
         .with_backend_session(
             |__s| __s.to_contiguous_read(TensorRead::from_view(TensorView::F64(transposed)))
         )
+        .unwrap()
         .is_err());
     assert_eq!(domain.counts.allocations.load(Ordering::Relaxed), before);
 }

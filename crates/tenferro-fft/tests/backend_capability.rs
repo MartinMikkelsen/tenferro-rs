@@ -377,8 +377,8 @@ macro_rules! impl_minimal_tensor_backend {
             fn with_backend_session<R: Send>(
                 &mut self,
                 f: impl FnOnce(&mut dyn tenferro_tensor::BackendSession) -> R + Send,
-            ) -> R {
-                tenferro_tensor::with_session_entry_guard(|| f(self))
+            ) -> Result<R, tenferro_tensor::SessionEntryError> {
+                tenferro_tensor::with_session_entry_guard("test backend", || f(self))
             }
         }
         impl TensorBackend for $ty {}
@@ -434,6 +434,7 @@ fn cpu_fft_is_invoked_through_the_borrowed_provider_session() {
     let mut owner = CpuBackend::new();
     let output = owner
         .with_backend_session(|session| input.fft(None, -1, FftNorm::Backward, session))
+        .unwrap()
         .unwrap();
 
     assert_eq!(
@@ -452,14 +453,16 @@ fn caller_owned_cache_is_backend_neutral_and_reports_reuse_clear_and_stats() {
     let mut owner = CpuBackend::new();
     let mut executor = FftExecutor::default();
 
-    owner.with_backend_session(|session| {
-        executor
-            .fft(&input, None, -1, FftNorm::Backward, session)
-            .unwrap();
-        executor
-            .fft(&input, None, -1, FftNorm::Backward, session)
-            .unwrap();
-    });
+    owner
+        .with_backend_session(|session| {
+            executor
+                .fft(&input, None, -1, FftNorm::Backward, session)
+                .unwrap();
+            executor
+                .fft(&input, None, -1, FftNorm::Backward, session)
+                .unwrap();
+        })
+        .unwrap();
 
     let stats = executor.cache_stats();
     assert_eq!(stats.entries, 1);
@@ -470,11 +473,13 @@ fn caller_owned_cache_is_backend_neutral_and_reports_reuse_clear_and_stats() {
     assert_eq!(executor.cache_stats().entries, 0);
     assert_eq!(executor.cache_stats().retained_bytes, 0);
 
-    owner.with_backend_session(|session| {
-        executor
-            .fft(&input, None, -1, FftNorm::Backward, session)
-            .unwrap();
-    });
+    owner
+        .with_backend_session(|session| {
+            executor
+                .fft(&input, None, -1, FftNorm::Backward, session)
+                .unwrap();
+        })
+        .unwrap();
     assert_eq!(executor.cache_stats().entries, 1);
 }
 
@@ -504,43 +509,45 @@ fn direct_concrete_api_returns_typed_capability_error_without_fft_capability() {
 fn concrete_cpu_execution_preserves_all_four_scalar_dtypes() {
     let mut backend = CpuBackend::new();
 
-    backend.with_backend_session(|session| {
-        let f32_input = Tensor::from_vec_col_major(vec![2], vec![1.0_f32, 2.0]).unwrap();
-        let f32_output = f32_input.fft(None, -1, FftNorm::Backward, session).unwrap();
-        assert_eq!(
-            f32_output.as_slice::<Complex32>().unwrap()[0],
-            Complex32::new(3.0, 0.0)
-        );
+    backend
+        .with_backend_session(|session| {
+            let f32_input = Tensor::from_vec_col_major(vec![2], vec![1.0_f32, 2.0]).unwrap();
+            let f32_output = f32_input.fft(None, -1, FftNorm::Backward, session).unwrap();
+            assert_eq!(
+                f32_output.as_slice::<Complex32>().unwrap()[0],
+                Complex32::new(3.0, 0.0)
+            );
 
-        let f64_input = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
-        let f64_output = f64_input.fft(None, -1, FftNorm::Backward, session).unwrap();
-        assert_eq!(
-            f64_output.as_slice::<Complex64>().unwrap()[0],
-            Complex64::new(3.0, 0.0)
-        );
+            let f64_input = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
+            let f64_output = f64_input.fft(None, -1, FftNorm::Backward, session).unwrap();
+            assert_eq!(
+                f64_output.as_slice::<Complex64>().unwrap()[0],
+                Complex64::new(3.0, 0.0)
+            );
 
-        let c32_input = Tensor::from_vec_col_major(
-            vec![2],
-            vec![Complex32::new(1.0, 0.0), Complex32::new(2.0, 0.0)],
-        )
+            let c32_input = Tensor::from_vec_col_major(
+                vec![2],
+                vec![Complex32::new(1.0, 0.0), Complex32::new(2.0, 0.0)],
+            )
+            .unwrap();
+            let c32_output = c32_input.fft(None, -1, FftNorm::Backward, session).unwrap();
+            assert_eq!(
+                c32_output.as_slice::<Complex32>().unwrap()[0],
+                Complex32::new(3.0, 0.0)
+            );
+
+            let c64_input = Tensor::from_vec_col_major(
+                vec![2],
+                vec![Complex64::new(1.0, 0.0), Complex64::new(2.0, 0.0)],
+            )
+            .unwrap();
+            let c64_output = c64_input.fft(None, -1, FftNorm::Backward, session).unwrap();
+            assert_eq!(
+                c64_output.as_slice::<Complex64>().unwrap()[0],
+                Complex64::new(3.0, 0.0)
+            );
+        })
         .unwrap();
-        let c32_output = c32_input.fft(None, -1, FftNorm::Backward, session).unwrap();
-        assert_eq!(
-            c32_output.as_slice::<Complex32>().unwrap()[0],
-            Complex32::new(3.0, 0.0)
-        );
-
-        let c64_input = Tensor::from_vec_col_major(
-            vec![2],
-            vec![Complex64::new(1.0, 0.0), Complex64::new(2.0, 0.0)],
-        )
-        .unwrap();
-        let c64_output = c64_input.fft(None, -1, FftNorm::Backward, session).unwrap();
-        assert_eq!(
-            c64_output.as_slice::<Complex64>().unwrap()[0],
-            Complex64::new(3.0, 0.0)
-        );
-    });
 }
 
 fn cuda_c64_tensor(shape: Vec<usize>) -> Tensor {
@@ -571,6 +578,7 @@ fn foreign_placement_is_unsupported_without_transfer() {
 
     let error = owner
         .with_backend_session(|session| input.fft(None, -1, FftNorm::Backward, session))
+        .unwrap()
         .unwrap_err();
 
     assert_eq!(error.kind(), ErrorKind::Unsupported);

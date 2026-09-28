@@ -63,6 +63,7 @@ fn default_read_execution_preserves_owned_input_and_canonicalizes_a_view() {
                 })
                 .expect("the CPU session exposes the FFT capability")
             })
+            .unwrap()
             .unwrap();
         assert_eq!(
             output.as_slice::<Complex64>().unwrap(),

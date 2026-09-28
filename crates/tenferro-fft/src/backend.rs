@@ -151,7 +151,7 @@ pub trait FftBackend: BackendSession {
     /// let mut backend = CpuBackend::with_threads(1)?;
     /// let output = backend.with_backend_session(|session| {
     ///     TensorRead::Tensor(&input).fft_read(None, 0, FftNorm::Backward, session)
-    /// })?;
+    /// })??;
     /// assert_eq!(output.as_slice::<Complex64>()?, &[Complex64::new(2., 0.), Complex64::new(0., 0.)]);
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```

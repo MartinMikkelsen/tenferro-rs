@@ -201,7 +201,7 @@ fn placement_binding_is_idle_until_a_session_operation_runs() {
 
     let (sent, received) = mpsc::channel();
     let worker = thread::spawn(move || {
-        probe.install(|| {});
+        probe.install(|| {}).unwrap();
         sent.send(()).unwrap();
     });
     let completed = received.recv_timeout(Duration::from_secs(1));
@@ -280,7 +280,7 @@ fn callback_error_and_panic_release_the_session_for_reuse() {
 }
 
 #[test]
-fn same_runtime_eager_reentry_panics_without_deadlock_and_then_recovers() {
+fn same_runtime_eager_reentry_is_rejected_without_deadlock_and_then_recovers() {
     let counters = Arc::new(ExecutorCounters::default());
     let runtime = EagerRuntime::with_cpu_backend(external_backend(counters)).unwrap();
     let eager = EagerTensor::from_tensor_in(
@@ -290,19 +290,21 @@ fn same_runtime_eager_reentry_panics_without_deadlock_and_then_recovers() {
     .unwrap();
     let mut cpu = runtime.on_cpu(placement()).unwrap();
 
-    let panicked = catch_unwind(AssertUnwindSafe(|| {
-        let _ = cpu.with_eager_session::<()>(|_| {
-            let _ = runtime.with_eager_session(|session| session.add(&eager, &eager));
-            Ok(())
-        });
-    }));
-    let payload = panicked.expect_err("same-runtime eager re-entry must be rejected");
-    let message = payload
-        .downcast_ref::<&str>()
-        .copied()
-        .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
-        .unwrap_or_default();
-    assert!(message.contains("CpuBackend cannot be re-entered"));
+    let nested = cpu
+        .with_eager_session(|_| {
+            Ok(runtime
+                .with_eager_session(|session| session.add(&eager, &eager))
+                .map(|_| ()))
+        })
+        .unwrap();
+    let error = nested.expect_err("same-runtime eager re-entry must be rejected");
+    assert_eq!(error.kind(), tenferro_tensor::ErrorKind::RuntimeState);
+    assert!(
+        error
+            .to_string()
+            .contains("an execution is already active on this thread"),
+        "{error}"
+    );
 
     cpu.with_eager_session(add_one).unwrap();
 }

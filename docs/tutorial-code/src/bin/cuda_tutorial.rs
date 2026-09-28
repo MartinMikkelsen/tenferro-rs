@@ -39,7 +39,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let gpu_a = upload_tensor(backend.runtime(), &a)?;
     let gpu_b = upload_tensor(backend.runtime(), &b)?;
 
-    let gpu_sum = backend.with_backend_session(|session| session.add(&gpu_a, &gpu_b))?;
+    let gpu_sum = backend.with_backend_session(|session| session.add(&gpu_a, &gpu_b))??;
     let sum = download_tensor(backend.runtime(), &gpu_sum)?;
     assert_eq!(sum.as_slice::<f64>()?, &[4.0, 6.0]);
     println!("cuda_tutorial: upload -> session -> download passed");

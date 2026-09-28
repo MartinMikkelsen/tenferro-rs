@@ -566,7 +566,7 @@ let gpu_b = upload_tensor(backend.runtime(), &b)?;
 // Operations run on a borrowed session, not on the backend object.
 let gpu_c = backend.with_backend_session(|session| {
     session.add_read(TensorRead::from_tensor(&gpu_a), TensorRead::from_tensor(&gpu_b))
-})?;
+})??;
 let cpu_c = download_tensor(backend.runtime(), &gpu_c)?;
 ```
 

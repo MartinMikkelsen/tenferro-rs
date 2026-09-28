@@ -85,58 +85,60 @@ fn binary_public_execution_surfaces_bypass_general_optimizers() {
     let mut out = Tensor::from_vec_col_major(vec![2, 2], vec![f64::NAN; 4]).unwrap();
     let mut tout = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![f64::NAN; 4]).unwrap();
     let mut backend = CpuBackend::with_threads(1).unwrap();
-    backend.with_backend_session(|session| {
-        // Reset/read on the executing thread, so session scheduling cannot hide calls.
-        OMECO_CALLS.with(|count| count.set(0));
-        SELF_GREEDY_CALLS.with(|count| count.set(0));
-        for result in [
-            [&a, &b].einsum("ij,jk->ik", session).unwrap(),
-            [&a, &b].einsum_subscripts(&subs, session).unwrap(),
-            reads.einsum_read("ij,jk->ik", session).unwrap(),
-            reads.einsum_read_subscripts(&subs, session).unwrap(),
-        ] {
-            assert_eq!(result.as_slice::<f64>().unwrap(), &[6.0; 4]);
-        }
-        assert_eq!(
+    backend
+        .with_backend_session(|session| {
+            // Reset/read on the executing thread, so session scheduling cannot hide calls.
+            OMECO_CALLS.with(|count| count.set(0));
+            SELF_GREEDY_CALLS.with(|count| count.set(0));
+            for result in [
+                [&a, &b].einsum("ij,jk->ik", session).unwrap(),
+                [&a, &b].einsum_subscripts(&subs, session).unwrap(),
+                reads.einsum_read("ij,jk->ik", session).unwrap(),
+                reads.einsum_read_subscripts(&subs, session).unwrap(),
+            ] {
+                assert_eq!(result.as_slice::<f64>().unwrap(), &[6.0; 4]);
+            }
+            assert_eq!(
+                [&ta, &tb]
+                    .einsum("ij,jk->ik", session)
+                    .unwrap()
+                    .as_slice()
+                    .unwrap(),
+                &[6.0; 4]
+            );
+            assert_eq!(
+                views
+                    .einsum_read("ij,jk->ik", session)
+                    .unwrap()
+                    .as_slice()
+                    .unwrap(),
+                &[6.0; 4]
+            );
+            [&a, &b]
+                .einsum_into("ij,jk->ik", session, TensorWrite::from_tensor(&mut out))
+                .unwrap();
+            assert_eq!(out.as_slice::<f64>().unwrap(), &[6.0; 4]);
+            reads
+                .einsum_read_into("ij,jk->ik", session, TensorWrite::from_tensor(&mut out))
+                .unwrap();
+            assert_eq!(out.as_slice::<f64>().unwrap(), &[6.0; 4]);
             [&ta, &tb]
-                .einsum("ij,jk->ik", session)
-                .unwrap()
-                .as_slice()
-                .unwrap(),
-            &[6.0; 4]
-        );
-        assert_eq!(
+                .einsum_into("ij,jk->ik", session, &mut tout)
+                .unwrap();
+            assert_eq!(tout.as_slice().unwrap(), &[6.0; 4]);
             views
-                .einsum_read("ij,jk->ik", session)
-                .unwrap()
-                .as_slice()
-                .unwrap(),
-            &[6.0; 4]
-        );
-        [&a, &b]
-            .einsum_into("ij,jk->ik", session, TensorWrite::from_tensor(&mut out))
-            .unwrap();
-        assert_eq!(out.as_slice::<f64>().unwrap(), &[6.0; 4]);
-        reads
-            .einsum_read_into("ij,jk->ik", session, TensorWrite::from_tensor(&mut out))
-            .unwrap();
-        assert_eq!(out.as_slice::<f64>().unwrap(), &[6.0; 4]);
-        [&ta, &tb]
-            .einsum_into("ij,jk->ik", session, &mut tout)
-            .unwrap();
-        assert_eq!(tout.as_slice().unwrap(), &[6.0; 4]);
-        views
-            .einsum_read_into("ij,jk->ik", session, &mut tout)
-            .unwrap();
-        assert_eq!(tout.as_slice().unwrap(), &[6.0; 4]);
-        assert_eq!(OMECO_CALLS.with(Cell::get), 0);
-        assert_eq!(SELF_GREEDY_CALLS.with(Cell::get), 0);
+                .einsum_read_into("ij,jk->ik", session, &mut tout)
+                .unwrap();
+            assert_eq!(tout.as_slice().unwrap(), &[6.0; 4]);
+            assert_eq!(OMECO_CALLS.with(Cell::get), 0);
+            assert_eq!(SELF_GREEDY_CALLS.with(Cell::get), 0);
 
-        // The same public call with three operands must reach the counter.
-        let result = [&a, &b, &a].einsum("ij,jk,kl->il", session).unwrap();
-        assert_eq!(result.as_slice::<f64>().unwrap(), &[12.0; 6]);
-        assert_eq!(OMECO_CALLS.with(Cell::get), 1);
-    });
+            // The same public call with three operands must reach the counter.
+            let result = [&a, &b, &a].einsum("ij,jk,kl->il", session).unwrap();
+            assert_eq!(result.as_slice::<f64>().unwrap(), &[12.0; 6]);
+            assert_eq!(OMECO_CALLS.with(Cell::get), 1);
+        })
+        .unwrap();
 }
 
 #[test]
@@ -217,6 +219,7 @@ fn binary_public_einsum_preserves_general_numerical_semantics() {
         let b = Tensor::from_vec_col_major(bshape, bdata).unwrap();
         let result = backend
             .with_backend_session(|session| [&a, &b].einsum(notation, session))
+            .unwrap()
             .unwrap();
         assert_eq!(result.shape(), shape, "{notation}");
         assert_eq!(result.as_slice::<f64>().unwrap(), expected, "{notation}");

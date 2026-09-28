@@ -69,6 +69,7 @@ fn run_grouped_into(
                 TensorWrite::from_tensor(out),
             )
         })
+        .unwrap()
         .unwrap();
 }
 
@@ -100,6 +101,7 @@ fn run_grouped_views_into(
                 TensorWrite::from_tensor(out),
             )
         })
+        .unwrap()
         .unwrap();
 }
 
@@ -164,6 +166,7 @@ fn run_sequential(backend: &mut CpuBackend, fixture: &GroupedFixture) -> Tensor 
                     TensorWrite::from_view(tenferro_tensor::TensorViewMut::F64(out_matrix)),
                 )
             })
+            .unwrap()
             .unwrap();
     }
     out

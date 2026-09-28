@@ -147,7 +147,7 @@ fn faer_parallelism_from_session() -> tenferro_tensor::Result<()> {
             );
             Ok(())
         })
-    })?;
+    })??;
     let product = product.as_ref();
     assert_close(*product.get(0, 0), 19.0, "A * B (0,0)");
     assert_close(*product.get(1, 0), 43.0, "A * B (1,0)");

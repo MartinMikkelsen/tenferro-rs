@@ -128,7 +128,7 @@ let (sum, product, total, mask, selected) = backend.with_backend_session(|sessio
     let mask = sum.compare(&product, CompareDir::Lt, session).unwrap();
     let selected = mask.where_select(&sum, &product, session).unwrap();
     (sum, product, total, mask, selected)
-});
+})?;
 
 assert_eq!(sum.as_slice().unwrap(), &[5.0, 7.0, 9.0]);
 assert_eq!(product.as_slice().unwrap(), &[4.0, 10.0, 18.0]);
@@ -230,7 +230,7 @@ let (sum, product) = backend.with_backend_session(|session| {
     let sum = a.add(&b, session).unwrap();
     let product = a.mul(&b, session).unwrap();
     (sum, product)
-});
+})?;
 
 assert_eq!(sum.as_slice::<f64>().unwrap(), &[5.0, 7.0, 9.0]);
 assert_eq!(product.as_slice::<f64>().unwrap(), &[4.0, 10.0, 18.0]);
@@ -360,7 +360,7 @@ let (reshaped, transposed) = backend.with_backend_session(|session| {
     let reshaped = a.reshape(&[6], session).unwrap();
     let transposed = a.transpose(&[1, 0], session).unwrap();
     (reshaped, transposed)
-});
+})?;
 
 assert_eq!(reshaped.shape(), &[6]);
 assert_eq!(reshaped.as_slice::<f64>().unwrap(), &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
@@ -407,7 +407,7 @@ let (row_sums, total) = backend.with_backend_session(|session| {
     let row_sums = a.reduce_sum(&[1], session).unwrap();
     let total = a.reduce_sum(&[0, 1], session).unwrap();
     (row_sums, total)
-});
+})?;
 
 assert_eq!(row_sums.shape(), &[2]);
 assert_eq!(row_sums.as_slice::<f64>().unwrap(), &[9.0, 12.0]);

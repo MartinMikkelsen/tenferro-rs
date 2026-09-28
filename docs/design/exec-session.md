@@ -102,10 +102,18 @@ cuTENSOR/cuSOLVER/cuBLAS wrapper against the backend's `CudaRuntime`.
 GPU exec sessions run the closure on the calling thread, so `Send` is not
 needed for GPU; the trait still requires it because the CPU managed path does.
 Both GPU overrides call `with_session_entry_guard`
-(`crates/tenferro-tensor/src/backend.rs`), so nested entry is caught by the
-portable in-session guard — in **debug builds only**. Release-mode nested-entry
-enforcement for the GPU overrides is still open (see
-`session-oriented-concrete-apis.md`).
+(`crates/tenferro-tensor/src/backend.rs`), so a nested entry on the same thread
+is rejected with `SessionEntryError::Reentered` before its closure runs, in every
+build profile.
+
+Session entry is fallible (#1938 D6): `with_backend_session` returns
+`Result<R, SessionEntryError>`, and every rejection happens before the closure
+runs. CPU admission waits in FIFO order for a permit that another thread holds
+and reports only states waiting cannot resolve (same-thread reentry, a busy
+caller-managed domain, a scope-witness mismatch, poisoned arbiter state,
+executor-entry failure). The closure's own value, including its own `Result`, is
+returned unchanged inside `Ok`; see
+[`tensor-session-redesign-1938.md`](tensor-session-redesign-1938.md) D6.
 
 ### Default (no-op)
 

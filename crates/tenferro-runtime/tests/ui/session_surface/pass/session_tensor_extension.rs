@@ -20,7 +20,7 @@ fn main() {
             let broadcast = column.add(&row, session)?;
             assert_eq!(broadcast.shape(), &[2]);
             broadcast.reduce_sum(&[0], session)
-        })
+        }).unwrap()
         .unwrap();
 
     // `column` broadcasts to [1.5, 2.5], so the total is 4.0.

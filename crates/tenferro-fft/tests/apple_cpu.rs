@@ -35,12 +35,14 @@ fn managed_cpu_fft_preserves_values_domain_and_transfer_counters() {
     let mut reference_cpu = tenferro_cpu::CpuBackend::new();
     let reference = reference_cpu
         .with_backend_session(|session| host_f32.rfft(Some(4), 1, FftNorm::Ortho, session))
+        .unwrap()
         .unwrap();
     let managed_f32 = context.upload_tensor(&host_f32).unwrap();
     let before = context.transfer_stats();
     let mut apple_cpu = context.cpu_backend().clone();
     let output = apple_cpu
         .with_backend_session(|session| managed_f32.rfft(Some(4), 1, FftNorm::Ortho, session))
+        .unwrap()
         .unwrap();
 
     let output = output
@@ -55,22 +57,26 @@ fn managed_cpu_fft_preserves_values_domain_and_transfer_counters() {
     assert_eq!(context.transfer_stats(), before);
 
     let host_f64 = Tensor::from_vec_col_major(vec![3], vec![1.0_f64, -2.0, 0.5]).unwrap();
-    let reference_round_trip = reference_cpu.with_backend_session(|session| {
-        host_f64
-            .rfft(Some(4), 0, FftNorm::Forward, session)
-            .unwrap()
-            .irfft(Some(4), 0, FftNorm::Forward, session)
-            .unwrap()
-    });
+    let reference_round_trip = reference_cpu
+        .with_backend_session(|session| {
+            host_f64
+                .rfft(Some(4), 0, FftNorm::Forward, session)
+                .unwrap()
+                .irfft(Some(4), 0, FftNorm::Forward, session)
+                .unwrap()
+        })
+        .unwrap();
     let managed_f64 = context.upload_tensor(&host_f64).unwrap();
     let before = context.transfer_stats();
-    let round_trip = apple_cpu.with_backend_session(|session| {
-        managed_f64
-            .rfft(Some(4), 0, FftNorm::Forward, session)
-            .unwrap()
-            .irfft(Some(4), 0, FftNorm::Forward, session)
-            .unwrap()
-    });
+    let round_trip = apple_cpu
+        .with_backend_session(|session| {
+            managed_f64
+                .rfft(Some(4), 0, FftNorm::Forward, session)
+                .unwrap()
+                .irfft(Some(4), 0, FftNorm::Forward, session)
+                .unwrap()
+        })
+        .unwrap();
     let round_trip = round_trip.into_typed::<f64>().expect("expected F64 output");
     assert_eq!(round_trip.allocation_domain(), Some(context.domain_id()));
     assert_eq!(
@@ -90,11 +96,13 @@ fn managed_cpu_fft_preserves_values_domain_and_transfer_counters() {
     .unwrap();
     let reference = reference_cpu
         .with_backend_session(|session| host_c32.fft(Some(2), 0, FftNorm::Forward, session))
+        .unwrap()
         .unwrap();
     let managed_c32 = context.upload_tensor(&host_c32).unwrap();
     let before = context.transfer_stats();
     let output = apple_cpu
         .with_backend_session(|session| managed_c32.fft(Some(2), 0, FftNorm::Forward, session))
+        .unwrap()
         .unwrap();
     let output = output
         .into_typed::<tenferro_tensor::Complex32>()
@@ -113,19 +121,22 @@ fn managed_cpu_fft_preserves_values_domain_and_transfer_counters() {
     .unwrap();
     let reference = reference_cpu
         .with_backend_session(|session| host_c64.fft(None, -1, FftNorm::Backward, session))
+        .unwrap()
         .unwrap();
     let managed_c64 = context.upload_tensor(&host_c64).unwrap();
     let before = context.transfer_stats();
     let mut executor = FftExecutor::default();
-    let (output, repeated) = apple_cpu.with_backend_session(|session| {
-        let output = executor
-            .fft(&managed_c64, None, -1, FftNorm::Backward, session)
-            .unwrap();
-        let repeated = executor
-            .fft(&managed_c64, None, -1, FftNorm::Backward, session)
-            .unwrap();
-        (output, repeated)
-    });
+    let (output, repeated) = apple_cpu
+        .with_backend_session(|session| {
+            let output = executor
+                .fft(&managed_c64, None, -1, FftNorm::Backward, session)
+                .unwrap();
+            let repeated = executor
+                .fft(&managed_c64, None, -1, FftNorm::Backward, session)
+                .unwrap();
+            (output, repeated)
+        })
+        .unwrap();
     let cached_entries = executor.cache_stats().entries;
     assert!(cached_entries > 0);
     assert_eq!(executor.cache_stats().entries, cached_entries);
@@ -160,6 +171,7 @@ fn managed_cpu_fft_rejects_foreign_and_device_local_buffers_without_transfers() 
     let mut second_cpu = second.cpu_backend().clone();
     let error = second_cpu
         .with_backend_session(|session| foreign.fft(None, -1, FftNorm::Backward, session))
+        .unwrap()
         .unwrap_err();
     assert!(
         matches!(
@@ -183,6 +195,7 @@ fn managed_cpu_fft_rejects_foreign_and_device_local_buffers_without_transfers() 
     let mut first_cpu = first.cpu_backend().clone();
     let error = first_cpu
         .with_backend_session(|session| device_local.fft(None, -1, FftNorm::Backward, session))
+        .unwrap()
         .unwrap_err();
     assert!(matches!(
         error,

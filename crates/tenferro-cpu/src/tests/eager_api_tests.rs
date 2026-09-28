@@ -27,7 +27,7 @@ fn eager_tensor_elementwise_and_structural_methods_match_backend_results() {
     let a = Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]).unwrap();
     let b = Tensor::from_vec_col_major(vec![3], vec![4.0_f64, 5.0, 6.0]).unwrap();
     let sum = ctx.add(&a, &b).unwrap();
-    let product = ctx.with_backend_session(|__s| __s.mul_read(TensorRead::from_tensor(&a), TensorRead::from_tensor(&b))).unwrap();
+    let product = ctx.with_backend_session(|__s| __s.mul_read(TensorRead::from_tensor(&a), TensorRead::from_tensor(&b))).unwrap().unwrap();
     let negated = ctx.neg(&a).unwrap();
 
     assert_eq!(sum.as_slice::<f64>(), Some([5.0, 7.0, 9.0].as_slice()));

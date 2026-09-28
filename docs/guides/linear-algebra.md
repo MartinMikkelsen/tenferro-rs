@@ -121,7 +121,7 @@ use tenferro_runtime::Tensor;
 let a = Tensor::from_vec_col_major(vec![2, 2], vec![4.0_f64, 0.0, 0.0, 9.0])?;
 let b = Tensor::from_vec_col_major(vec![2, 1], vec![8.0_f64, 27.0])?;
 let mut backend = CpuBackend::new();
-let x = backend.with_backend_session(|session| a.solve(&b, session))?;
+let x = backend.with_backend_session(|session| a.solve(&b, session))??;
 
 assert_eq!(x.shape(), &[2, 1]);
 assert_eq!(x.as_slice::<f64>()?, &[2.0, 3.0]);
@@ -153,7 +153,7 @@ let (factor, reconstructed) = backend.with_backend_session(|session| -> tenferro
     let factor_t = factor.transpose(&[1, 0], session)?;
     let reconstructed = factor.matmul(&factor_t, session)?;
     Ok((factor, reconstructed))
-})?;
+})??;
 
 assert_eq!(factor.shape(), &[2, 2]);
 assert_eq!(a.shape(), &[2, 2]);
@@ -205,7 +205,7 @@ fn max_abs_diff(lhs: &Tensor, rhs: &Tensor) -> Result<f64, tenferro_tensor::Erro
 }
 let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 3.0, 2.0, 4.0])?;
 let mut backend = CpuBackend::new();
-let (u, s, vt) = backend.with_backend_session(|session| a.svd(session))?;
+let (u, s, vt) = backend.with_backend_session(|session| a.svd(session))??;
 
 assert_eq!(u.shape(), &[2, 2]);
 assert_eq!(vt.shape(), &[2, 2]);
@@ -219,7 +219,7 @@ let (reconstructed,) = backend.with_backend_session(|session| -> tenferro_tensor
     let us = u.matmul(&sigma, session)?;
     let reconstructed = us.matmul(&vt, session)?;
     Ok((reconstructed,))
-})?;
+})??;
 
 assert_eq!(a.shape(), &[2, 2]);
 assert!(max_abs_diff(&reconstructed, &a)? < 1.0e-12);
@@ -391,7 +391,7 @@ let (q, r) = backend.with_backend_session(|session| {
         QrOptions::default().gauge(QrGauge::PositiveDiagonal),
         session,
     )
-})?;
+})??;
 
 let identity = Tensor::from_vec_col_major(
     vec![3, 3],
@@ -402,7 +402,7 @@ let (reconstructed, qtq) = backend.with_backend_session(|session| -> tenferro_te
     let qt = q.transpose(&[1, 0], session)?;
     let qtq = qt.matmul(&q, session)?;
     Ok((reconstructed, qtq))
-})?;
+})??;
 
 assert_eq!(q.shape(), &[4, 3]);
 assert_eq!(r.shape(), &[3, 3]);
@@ -445,7 +445,7 @@ let (q, r, reconstructed) = backend.with_backend_session(|session| {
     let r = state.r(options, session)?;
     let reconstructed = q.matmul(&r, session)?;
     Ok::<_, tenferro_runtime::Error>((q, r, reconstructed))
-})?;
+})??;
 
 assert_eq!(q.shape(), &[3, 3]);
 assert_eq!(r.shape(), &[3, 3]);
@@ -496,7 +496,7 @@ fn max_abs_diff(lhs: &Tensor, rhs: &Tensor) -> Result<f64, tenferro_tensor::Erro
 }
 let a = Tensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 1.0, 1.0, 2.0])?;
 let mut backend = CpuBackend::new();
-let (values, vectors) = backend.with_backend_session(|session| a.eigh(session))?;
+let (values, vectors) = backend.with_backend_session(|session| a.eigh(session))??;
 
 assert_eq!(values.shape(), &[2]);
 assert_eq!(vectors.shape(), &[2, 2]);
@@ -511,7 +511,7 @@ let (reconstructed,) = backend.with_backend_session(|session| -> tenferro_tensor
     let vt = vectors.transpose(&[1, 0], session)?;
     let reconstructed = vd.matmul(&vt, session)?;
     Ok((reconstructed,))
-})?;
+})??;
 
 assert_eq!(a.shape(), &[2, 2]);
 assert!(max_abs_diff(&reconstructed, &a)? < 1.0e-12);
@@ -616,15 +616,15 @@ let a = Tensor::from_vec_col_major(
 )?;
 let b = Tensor::from_vec_col_major(vec![4, 1], vec![1.0_f64, 2.0, 3.0, 4.0])?;
 
-let (p, l, u, q, parity) = backend.with_backend_session(|session| a.full_piv_lu(session))?;
+let (p, l, u, q, parity) = backend.with_backend_session(|session| a.full_piv_lu(session))??;
 let (reconstructed,) = backend.with_backend_session(|session| -> tenferro_tensor::Result<(Tensor,)> {
     let pt = p.transpose(&[1, 0], session)?;
     let pt_l = pt.matmul(&l, session)?;
     let pt_lu = pt_l.matmul(&u, session)?;
     let reconstructed = pt_lu.matmul(&q, session)?;
     Ok((reconstructed,))
-})?;
-let x = backend.with_backend_session(|session| a.full_piv_lu_solve(&b, session))?;
+})??;
+let x = backend.with_backend_session(|session| a.full_piv_lu_solve(&b, session))??;
 
 assert_eq!(p.shape(), &[4, 4]);
 assert_eq!(a.shape(), &[4, 4]);

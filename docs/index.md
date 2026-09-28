@@ -60,7 +60,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let solution = product.solve(&rhs, session)?;
         let singular_values = product.svdvals(session)?;
         Ok::<_, tenferro_runtime::Error>((product, solution, singular_values))
-    })?;
+    })??;
     assert_eq!(product.shape(), &[2, 2]);
     assert_close(product.host_data()?, &[3.0, 0.0, 0.0, 1.0]);
     assert_close(solution.as_slice()?, &[2.0, 2.0]);

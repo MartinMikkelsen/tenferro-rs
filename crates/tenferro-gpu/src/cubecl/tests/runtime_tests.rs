@@ -174,6 +174,7 @@ gpu_test!(test_pointer_bridge, {
             })
             .expect("CUDA backend session should be available")
         })
+        .unwrap()
         .expect("raw session should run");
 });
 
@@ -188,6 +189,7 @@ gpu_test!(test_backend_add_matches_cpu_reference, {
         .with_backend_session(|__s| {
             __s.add_read(TensorRead::from_tensor(&a), TensorRead::from_tensor(&b))
         })
+        .unwrap()
         .unwrap();
     let actual_gpu = backend
         .with_backend_session(|__s| {
@@ -196,6 +198,7 @@ gpu_test!(test_backend_add_matches_cpu_reference, {
                 TensorRead::from_tensor(&gpu_b),
             )
         })
+        .unwrap()
         .unwrap();
     let actual = download_tensor(backend.runtime(), &actual_gpu).unwrap();
     assert_eq!(actual.shape(), expected.shape());
@@ -246,6 +249,7 @@ gpu_test!(
             .unwrap();
         let output = backend
             .with_backend_session(|__s| __s.to_contiguous_read(view.tensor_read()))
+            .unwrap()
             .unwrap();
         assert_eq!(
             backend
@@ -325,6 +329,7 @@ gpu_test!(test_complex_sign_is_scale_safe, {
     let input = upload_tensor(backend.runtime(), &host).unwrap();
     let output = backend
         .with_backend_session(|__s| __s.sign_read(TensorRead::from_tensor(&input)))
+        .unwrap()
         .unwrap();
     let actual = download_tensor(backend.runtime(), &output).unwrap();
     for (&value, expected) in actual.as_slice::<Complex64>().unwrap().iter().zip([
@@ -350,6 +355,7 @@ gpu_test!(test_complex_sign_is_scale_safe, {
     let input = upload_tensor(backend.runtime(), &host).unwrap();
     let output = backend
         .with_backend_session(|__s| __s.sign_read(TensorRead::from_tensor(&input)))
+        .unwrap()
         .unwrap();
     let actual = download_tensor(backend.runtime(), &output).unwrap();
     for (&value, expected) in actual.as_slice::<Complex32>().unwrap().iter().zip([
@@ -476,6 +482,7 @@ gpu_test!(test_pointer_and_stream_bridge, {
             })
             .expect("CUDA backend session should be available")
         })
+        .unwrap()
         .expect("raw session should run");
 
     let back = download_tensor(backend.runtime(), &gpu).unwrap();

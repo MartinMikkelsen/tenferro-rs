@@ -545,24 +545,28 @@ impl<'a> CpuOperationEntry<'a> {
         }))
     }
 
-    pub(crate) fn supports_infallible_session_entry(self) -> bool {
+    /// Whether a backend session enters this domain's executor once for its
+    /// whole callback. Externally managed domains enter per operation instead.
+    pub(crate) fn enters_executor_per_session(self) -> bool {
         self.domain.ownership() == crate::CpuDomainOwnership::Managed
     }
 
+    /// Enter a Tenferro-managed executor once for a whole backend session.
+    ///
+    /// Callers check [`Self::enters_executor_per_session`] first; the managed
+    /// Rayon executor's synchronous install does not fail for Sequential or
+    /// Inner mode, but its typed error is still reported rather than hidden.
     pub(crate) fn enter_managed_session<R: Send>(
         self,
         operation: impl FnOnce(CpuExecutionContext<'a>) -> R + Send,
-    ) -> R {
-        assert!(
-            self.supports_infallible_session_entry(),
-            "managed session entry requires a Tenferro-managed CPU domain"
-        );
+    ) -> Result<R, tenferro_tensor::SessionEntryError> {
         let mode = self.preferred_engine_mode();
         self.enter(mode, |_| {
             operation(CpuExecutionContext::entered(self.domain, mode))
         })
-        .unwrap_or_else(|error| {
-            panic!("Tenferro-managed CPU executor violated synchronous install contract: {error}")
+        .map_err(|error| tenferro_tensor::SessionEntryError::Executor {
+            backend: crate::backend::CPU_BACKEND,
+            source: Box::new(error),
         })
     }
 

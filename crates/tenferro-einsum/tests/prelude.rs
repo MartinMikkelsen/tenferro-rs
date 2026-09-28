@@ -9,6 +9,7 @@ fn prelude_calls_concrete_einsum() {
     let mut backend = CpuBackend::new();
     let result = backend
         .with_backend_session(|session| [&lhs, &rhs].einsum("ij,jk->ik", session))
+        .unwrap()
         .unwrap();
     assert_eq!(result.shape(), &[2, 2]);
 }

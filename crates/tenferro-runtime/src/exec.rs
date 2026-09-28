@@ -682,7 +682,7 @@ pub(crate) fn eval_exec_ir_unsegmented_slots_with_cache_and_workspace<
                         reclaim_last_use_inputs_exec(slots, inst, exec);
                     }
                     Ok::<(), Error>(())
-                })?;
+                })??;
             }
             if index < instructions.len() {
                 let inst = &instructions[index];
@@ -697,7 +697,7 @@ pub(crate) fn eval_exec_ir_unsegmented_slots_with_cache_and_workspace<
             }
         }
 
-        backend.with_backend_session(|exec| collect_outputs_from(program, slots, exec))
+        backend.with_backend_session(|exec| collect_outputs_from(program, slots, exec))?
     })();
     slots.clear();
     result
@@ -759,7 +759,7 @@ pub(crate) fn eval_exec_ir_unsegmented_slot_values_with_cache_and_workspace<
                         reclaim_last_use_inputs_exec(slots, inst, exec);
                     }
                     Ok::<(), Error>(())
-                })?;
+                })??;
             }
             if index < instructions.len() {
                 let inst = &instructions[index];
@@ -774,7 +774,7 @@ pub(crate) fn eval_exec_ir_unsegmented_slot_values_with_cache_and_workspace<
             }
         }
 
-        backend.with_backend_session(|exec| collect_output_values_from(program, slots, exec))
+        backend.with_backend_session(|exec| collect_output_values_from(program, slots, exec))?
     })();
     slots.clear();
     result
@@ -854,7 +854,7 @@ pub(crate) fn eval_exec_ir_single_session_slots_with_workspace<'input, B: Tensor
                 reclaim_last_use_inputs_exec(slots, inst, exec);
             }
             collect_outputs_from(program, slots, exec)
-        })
+        })?
     })();
     slots.clear();
     result
@@ -1284,7 +1284,9 @@ pub(crate) fn reclaim_last_use_inputs_via_session<'input, B: TensorBackend>(
     slots: &mut [Option<ExecSlot<'input>>],
     inst: &ExecInstruction,
 ) {
-    backend.with_backend_session(|exec| reclaim_last_use_inputs_exec(slots, inst, exec));
+    // Recycling is best effort: if no session can be admitted, the last-use
+    // inputs stay in their slots and are freed on drop instead of pooled.
+    let _ = backend.with_backend_session(|exec| reclaim_last_use_inputs_exec(slots, inst, exec));
 }
 
 #[cfg(test)]

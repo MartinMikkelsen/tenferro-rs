@@ -31,7 +31,7 @@
     "crates/tenferro-gpu/src/cubecl/exec_session.rs::BackendSessionHost::with_backend_session",
     "crates/tenferro-gpu/src/webgpu/exec_session.rs::BackendSessionHost::with_backend_session",
     "crates/tenferro-tensor/src/backend.rs::with_session_entry_guard",
-    "crates/tenferro-tensor/src/backend/tests.rs::with_session_entry_guard_rejects_nested_entry_in_debug_builds",
+    "crates/tenferro-tensor/src/backend/tests.rs::with_session_entry_guard_rejects_nested_entry_in_every_build",
     "crates/tenferro-tensor/src/backend/tests.rs::with_session_entry_guard_sets_and_restores_the_flag"
   ]
 }

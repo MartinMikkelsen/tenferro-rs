@@ -40,6 +40,7 @@ fn a_reduction_refuses_a_caller_owned_payload() {
     // caller's value unchanged rather than rejecting it.
     let identity = backend
         .with_backend_session(|__s| __s.reduce_sum_read(TensorRead::from_tensor(&values), &[]))
+        .unwrap()
         .expect("sum over no axes is the identity");
     assert_eq!(identity.dtype(), external_dtype());
 
@@ -47,6 +48,7 @@ fn a_reduction_refuses_a_caller_owned_payload() {
     // caller-owned payload and says so.
     let error = backend
         .with_backend_session(|__s| __s.reduce_sum_read(TensorRead::from_tensor(&values), &[0]))
+        .unwrap()
         .expect_err("no CPU reduction exists for a caller-owned payload");
     assert!(
         error.to_string().contains("external") || error.to_string().contains("unsupported"),
@@ -54,32 +56,40 @@ fn a_reduction_refuses_a_caller_owned_payload() {
     );
     assert!(backend
         .with_backend_session(|__s| __s.reduce_prod_read(TensorRead::from_tensor(&values), &[0]))
+        .unwrap()
         .is_err());
     assert!(backend
         .with_backend_session(|__s| __s.reduce_max_read(TensorRead::from_tensor(&values), &[0]))
+        .unwrap()
         .is_err());
     assert!(backend
         .with_backend_session(|__s| __s.reduce_min_read(TensorRead::from_tensor(&values), &[0]))
+        .unwrap()
         .is_err());
 
     // The same refusals are reached through the borrowed-read entry points, which is
     // where a session hands a value to a kernel.
     assert!(backend
         .with_backend_session(|__s| __s.reduce_sum_read(TensorRead::from_tensor(&values), &[0]))
+        .unwrap()
         .is_err());
     assert!(backend
         .with_backend_session(
             |__s| __s.reduce_sum_squares_read(TensorRead::from_tensor(&values), &[0])
         )
+        .unwrap()
         .is_err());
     assert!(backend
         .with_backend_session(|__s| __s.reduce_prod_read(TensorRead::from_tensor(&values), &[0]))
+        .unwrap()
         .is_err());
     assert!(backend
         .with_backend_session(|__s| __s.reduce_max_read(TensorRead::from_tensor(&values), &[0]))
+        .unwrap()
         .is_err());
     assert!(backend
         .with_backend_session(|__s| __s.reduce_min_read(TensorRead::from_tensor(&values), &[0]))
+        .unwrap()
         .is_err());
 }
 
@@ -89,6 +99,7 @@ fn an_elementwise_operation_refuses_a_caller_owned_payload() {
     let values = external(vec![Df64::from_f64(1.0)], vec![1]);
     assert!(backend
         .with_backend_session(|__s| __s.neg_read(TensorRead::from_tensor(&values)))
+        .unwrap()
         .is_err());
 }
 
@@ -107,6 +118,7 @@ fn every_preset_real_scalar_reduces_to_the_expected_value() {
                     .with_backend_session(
                         |__s| __s.reduce_sum_read(TensorRead::from_tensor(&tensor), &[0])
                     )
+                    .unwrap()
                     .expect("sum")
                     .as_slice::<$ty>()
                     .expect("slice"),
@@ -117,6 +129,7 @@ fn every_preset_real_scalar_reduces_to_the_expected_value() {
                     .with_backend_session(
                         |__s| __s.reduce_prod_read(TensorRead::from_tensor(&tensor), &[0])
                     )
+                    .unwrap()
                     .expect("product")
                     .as_slice::<$ty>()
                     .expect("slice"),
@@ -127,6 +140,7 @@ fn every_preset_real_scalar_reduces_to_the_expected_value() {
                     .with_backend_session(
                         |__s| __s.reduce_max_read(TensorRead::from_tensor(&tensor), &[0])
                     )
+                    .unwrap()
                     .expect("maximum")
                     .as_slice::<$ty>()
                     .expect("slice"),
@@ -137,6 +151,7 @@ fn every_preset_real_scalar_reduces_to_the_expected_value() {
                     .with_backend_session(
                         |__s| __s.reduce_min_read(TensorRead::from_tensor(&tensor), &[0])
                     )
+                    .unwrap()
                     .expect("minimum")
                     .as_slice::<$ty>()
                     .expect("slice"),
@@ -157,6 +172,7 @@ fn every_preset_real_scalar_reduces_to_the_expected_value() {
         .with_backend_session(
             |__s| __s.reduce_sum_squares_read(TensorRead::from_tensor(&integers), &[0])
         )
+        .unwrap()
         .is_err());
     let floats = Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0]).expect("shape");
     assert_eq!(
@@ -164,6 +180,7 @@ fn every_preset_real_scalar_reduces_to_the_expected_value() {
             .with_backend_session(
                 |__s| __s.reduce_sum_squares_read(TensorRead::from_tensor(&floats), &[0])
             )
+            .unwrap()
             .expect("squares")
             .as_slice::<f64>()
             .expect("slice"),
@@ -174,8 +191,10 @@ fn every_preset_real_scalar_reduces_to_the_expected_value() {
     let boolean = Tensor::from_vec_col_major(vec![2], vec![true, false]).expect("shape");
     assert!(backend
         .with_backend_session(|__s| __s.reduce_max_read(TensorRead::from_tensor(&boolean), &[0]))
+        .unwrap()
         .is_err());
     assert!(backend
         .with_backend_session(|__s| __s.reduce_min_read(TensorRead::from_tensor(&boolean), &[0]))
+        .unwrap()
         .is_err());
 }

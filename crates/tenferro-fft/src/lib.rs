@@ -76,11 +76,11 @@
 //!     let after_creation = context.transfer_stats();
 //!     let mut cpu = context.cpu_backend().clone();
 //!     let cpu_output = cpu
-//!         .with_backend_session(|session| input.fft(None, 0, FftNorm::Backward, session))
+//!         .with_backend_session(|session| input.fft(None, 0, FftNorm::Backward, session))?
 //!         .unwrap();
 //!     let mut metal = context.metal_backend().clone();
 //!     let output = metal
-//!         .with_backend_session(|session| input.fft(None, 0, FftNorm::Backward, session))
+//!         .with_backend_session(|session| input.fft(None, 0, FftNorm::Backward, session))?
 //!         .unwrap();
 //!     metal.synchronize().unwrap();
 //!     assert_eq!(output.shape(), &[4]);
@@ -88,6 +88,7 @@
 //!     assert_eq!(context.transfer_stats(), after_creation);
 //! }
 //! # }
+//! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
 //!
 //! ```
@@ -99,10 +100,11 @@
 //! let x = Tensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap();
 //! let mut backend = CpuBackend::new();
 //! let out = backend
-//!     .with_backend_session(|session| x.fft(None, -1, FftNorm::Backward, session))
+//!     .with_backend_session(|session| x.fft(None, -1, FftNorm::Backward, session))?
 //!     .unwrap();
 //!
 //! assert_eq!(out.as_slice::<Complex64>().unwrap()[0], Complex64::new(10.0, 0.0));
+//! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
 
 use std::any::Any;
@@ -458,7 +460,7 @@ impl TracedTensorFftExt for TracedTensor {
 /// let mut backend = CpuBackend::new();
 ///
 /// let spectrum = backend
-///     .with_backend_session(|session| input.fft(None, -1, FftNorm::Backward, session))?;
+///     .with_backend_session(|session| input.fft(None, -1, FftNorm::Backward, session))??;
 /// assert_eq!(spectrum.shape(), &[4]);
 /// assert_eq!(spectrum.as_slice::<Complex64>()?[0], Complex64::new(10.0, 0.0));
 /// # Ok::<(), tenferro_tensor::Error>(())
@@ -642,7 +644,7 @@ impl TensorFftExt for Tensor {
 /// let mut backend = CpuBackend::new();
 ///
 /// let spectrum = backend
-///     .with_backend_session(|session| input.fft_read(None, -1, FftNorm::Backward, session))?;
+///     .with_backend_session(|session| input.fft_read(None, -1, FftNorm::Backward, session))??;
 /// assert_eq!(spectrum.as_slice::<Complex64>()?[0], Complex64::new(10.0, 0.0));
 /// # Ok::<(), tenferro_tensor::Error>(())
 /// ```

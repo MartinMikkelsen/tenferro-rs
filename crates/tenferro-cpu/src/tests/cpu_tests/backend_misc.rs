@@ -49,9 +49,11 @@ fn cpu_runtime_materialization_dispatches_all_dtypes_with_backend_session_parity
 
             let direct = backend
                 .with_backend_session(|__s| __s.to_contiguous_read(read.clone()))
+                .unwrap()
                 .unwrap();
             let session = backend
                 .with_backend_session(|exec| exec.to_contiguous_read(read))
+                .unwrap()
                 .unwrap();
 
             let expected = [values[1], values[0]];
@@ -86,6 +88,7 @@ fn cpu_runtime_materialization_rejects_owned_host_buffer_with_device_placement()
 
     let err = backend
         .with_backend_session(|__s| __s.to_contiguous_read(TensorRead::from_tensor(&input)))
+        .unwrap()
         .unwrap_err();
 
     assert!(matches!(
@@ -107,6 +110,7 @@ fn cpu_runtime_materialization_rejects_host_view_with_device_placement() {
         .with_backend_session(|__s| {
             __s.to_contiguous_read(TensorRead::from_view(TensorView::F64(input.as_view())))
         })
+        .unwrap()
         .unwrap_err();
 
     assert!(matches!(
@@ -141,6 +145,7 @@ fn cpu_runtime_copy_dispatches_all_dtypes_with_backend_session_parity() {
                         TensorWrite::from_tensor(&mut direct_dst),
                     )
                 })
+                .unwrap()
                 .unwrap();
             backend
                 .with_backend_session(|exec| {
@@ -149,6 +154,7 @@ fn cpu_runtime_copy_dispatches_all_dtypes_with_backend_session_parity() {
                         TensorWrite::from_tensor(&mut session_dst),
                     )
                 })
+                .unwrap()
                 .unwrap();
 
             assert_eq!(direct_dst.as_slice::<$ty>().unwrap(), values.as_slice());
@@ -188,6 +194,7 @@ fn cpu_session_copy_accepts_ranked_borrow_without_group_promotion() {
     let mut backend = CpuBackend::new();
     backend
         .with_backend_session(|session| session.copy_read_into(read, write))
+        .unwrap()
         .unwrap();
     assert_eq!(destination, source);
 }
@@ -208,6 +215,7 @@ fn cpu_session_copy_reads_plain_owner_into_plain_owner() {
                 TensorWrite::from_tensor(&mut destination),
             )
         })
+        .unwrap()
         .unwrap();
     assert_eq!(
         destination.as_slice::<f64>().unwrap(),
@@ -230,6 +238,7 @@ fn cpu_session_materializes_plain_borrow_into_recyclable_plain_output() {
 
     let copied = backend
         .with_backend_session(|session| session.to_contiguous_read(read.clone()))
+        .unwrap()
         .unwrap();
     let copied_ptr = copied.as_slice::<f64>().unwrap().as_ptr();
     assert_ne!(copied_ptr, source_ptr);
@@ -241,6 +250,7 @@ fn cpu_session_materializes_plain_borrow_into_recyclable_plain_output() {
 
     let reused = backend
         .with_backend_session(|session| session.to_contiguous_read(read))
+        .unwrap()
         .unwrap();
     assert_eq!(reused.as_slice::<f64>().unwrap().as_ptr(), copied_ptr);
     drop(reused);
@@ -255,7 +265,9 @@ fn cpu_session_materialization_rejects_bad_placement_without_pool_checkout() {
     let retained_before = backend.buffer_pool_len().unwrap();
     let read = source.as_view().into_tensor_read().unwrap();
     assert!(matches!(
-        backend.with_backend_session(|session| session.to_contiguous_read(read)),
+        backend
+            .with_backend_session(|session| session.to_contiguous_read(read))
+            .unwrap(),
         Err(Error::RuntimeState {
             op: "CpuBackend::to_contiguous_read",
             ..
@@ -283,6 +295,7 @@ fn cpu_runtime_copy_handles_strided_source_and_destination_without_allocation() 
                 TensorWrite::from_view(TensorViewMut::I32(dst)),
             )
         })
+        .unwrap()
         .unwrap();
 
     assert_eq!(dst_data, [-1, 1, 5, -1, 3, 7, -1, -1]);
@@ -296,10 +309,12 @@ fn cpu_runtime_copy_reports_dtype_shape_and_placement_errors() {
     let src = Tensor::from_vec_col_major(vec![2], vec![1_i32, 2]).unwrap();
     let mut wrong_dtype = Tensor::from_vec_col_major(vec![2], vec![0_i64, 0]).unwrap();
     assert!(matches!(
-        backend.with_backend_session(|__s| __s.copy_read_into(
-            TensorRead::from_tensor(&src),
-            TensorWrite::from_tensor(&mut wrong_dtype),
-        )),
+        backend
+            .with_backend_session(|__s| __s.copy_read_into(
+                TensorRead::from_tensor(&src),
+                TensorWrite::from_tensor(&mut wrong_dtype),
+            ))
+            .unwrap(),
         Err(Error::Validation {
             op: "CpuBackend::copy_read_into",
             source: tenferro_tensor::ValidationError::DTypeMismatch { .. },
@@ -308,10 +323,12 @@ fn cpu_runtime_copy_reports_dtype_shape_and_placement_errors() {
 
     let mut wrong_shape = Tensor::from_vec_col_major(vec![3], vec![0_i32; 3]).unwrap();
     assert!(matches!(
-        backend.with_backend_session(|__s| __s.copy_read_into(
-            TensorRead::from_tensor(&src),
-            TensorWrite::from_tensor(&mut wrong_shape),
-        )),
+        backend
+            .with_backend_session(|__s| __s.copy_read_into(
+                TensorRead::from_tensor(&src),
+                TensorWrite::from_tensor(&mut wrong_shape),
+            ))
+            .unwrap(),
         Err(Error::Validation {
             op: "CpuBackend::copy_read_into",
             source: tenferro_tensor::ValidationError::ShapeMismatch(_),
@@ -327,7 +344,7 @@ fn cpu_runtime_copy_reports_dtype_shape_and_placement_errors() {
         backend.with_backend_session(|__s| __s.copy_read_into(
             TensorRead::from_tensor(&src),
             TensorWrite::from_tensor(&mut misplaced),
-        )),
+        )).unwrap(),
         Err(Error::RuntimeState {
             op: "CpuBackend::copy_read_into",
             ref message,
@@ -470,6 +487,7 @@ fn test_reclaim_buffer_returns_host_buffer_to_pool() {
                 )),
             )
         })
+        .unwrap()
         .unwrap();
     backend.reclaim_buffer(t);
     assert!(backend.buffer_pool_len().unwrap() > 0);
@@ -493,6 +511,7 @@ fn test_elementwise_add_acquires_output_from_pool() {
         .with_backend_session(|__s| {
             __s.add_read(TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs))
         })
+        .unwrap()
         .unwrap();
 
     assert_eq!(backend.buffer_pool_len().unwrap(), 0);
@@ -785,6 +804,7 @@ fn cpu_view_materialization_preserves_transposed_and_scattered_values() {
         .with_backend_session(|__s| {
             __s.reshape_read(TensorRead::from_view(TensorView::F64(transposed)), &[3, 2])
         })
+        .unwrap()
         .unwrap();
     assert_eq!(transposed.shape(), &[3, 2]);
     assert_eq!(
@@ -810,6 +830,7 @@ fn cpu_view_materialization_preserves_transposed_and_scattered_values() {
         .with_backend_session(|__s| {
             __s.reshape_read(TensorRead::from_view(TensorView::F64(scattered)), &[4])
         })
+        .unwrap()
         .unwrap();
     assert_eq!(scattered.shape(), &[4]);
     assert_eq!(
@@ -828,6 +849,7 @@ fn cpu_structural_read_transpose_explicit_stride_exact_output() {
         .with_backend_session(|__s| {
             __s.transpose_read(TensorRead::from_view(TensorView::F64(view)), &[1, 0])
         })
+        .unwrap()
         .unwrap();
 
     assert_eq!(output.shape(), &[3, 2]);
@@ -847,6 +869,7 @@ fn cpu_structural_read_reshape_explicit_stride_exact_output() {
         .with_backend_session(|__s| {
             __s.reshape_read(TensorRead::from_view(TensorView::I32(view)), &[4])
         })
+        .unwrap()
         .unwrap();
 
     assert_eq!(output.shape(), &[4]);
@@ -867,6 +890,7 @@ fn cpu_structural_read_broadcast_in_dim_explicit_stride_exact_output() {
                 &[0, 1],
             )
         })
+        .unwrap()
         .unwrap();
 
     assert_eq!(output.shape(), &[2, 3]);
@@ -1117,11 +1141,13 @@ fn cpu_structural_read_backend_and_exec_session_outputs_match() {
                         &[1, 0],
                     )
                 })
+                .unwrap()
                 .unwrap(),
             backend
                 .with_backend_session(|__s| {
                     __s.reshape_read(TensorRead::from_view(TensorView::F64(reshape_view)), &[4])
                 })
+                .unwrap()
                 .unwrap(),
             backend
                 .with_backend_session(|__s| {
@@ -1131,36 +1157,39 @@ fn cpu_structural_read_backend_and_exec_session_outputs_match() {
                         &[0, 1],
                     )
                 })
+                .unwrap()
                 .unwrap(),
         ]
     };
 
-    let session_outputs = backend.with_backend_session(|session| {
-        let transpose_view =
-            tenferro_tensor::TypedTensorView::from_slice([2, 2], [2, -1], 3, &storage).unwrap();
-        let reshape_view =
-            tenferro_tensor::TypedTensorView::from_slice([2, 2], [2, -1], 3, &storage).unwrap();
-        let broadcast_view =
-            tenferro_tensor::TypedTensorView::from_slice([2, 1], [2, 0], 1, &storage).unwrap();
-        [
-            session
-                .transpose_read(
-                    TensorRead::from_view(TensorView::F64(transpose_view)),
-                    &[1, 0],
-                )
-                .unwrap(),
-            session
-                .reshape_read(TensorRead::from_view(TensorView::F64(reshape_view)), &[4])
-                .unwrap(),
-            session
-                .broadcast_in_dim_read(
-                    TensorRead::from_view(TensorView::F64(broadcast_view)),
-                    &[2, 3],
-                    &[0, 1],
-                )
-                .unwrap(),
-        ]
-    });
+    let session_outputs = backend
+        .with_backend_session(|session| {
+            let transpose_view =
+                tenferro_tensor::TypedTensorView::from_slice([2, 2], [2, -1], 3, &storage).unwrap();
+            let reshape_view =
+                tenferro_tensor::TypedTensorView::from_slice([2, 2], [2, -1], 3, &storage).unwrap();
+            let broadcast_view =
+                tenferro_tensor::TypedTensorView::from_slice([2, 1], [2, 0], 1, &storage).unwrap();
+            [
+                session
+                    .transpose_read(
+                        TensorRead::from_view(TensorView::F64(transpose_view)),
+                        &[1, 0],
+                    )
+                    .unwrap(),
+                session
+                    .reshape_read(TensorRead::from_view(TensorView::F64(reshape_view)), &[4])
+                    .unwrap(),
+                session
+                    .broadcast_in_dim_read(
+                        TensorRead::from_view(TensorView::F64(broadcast_view)),
+                        &[2, 3],
+                        &[0, 1],
+                    )
+                    .unwrap(),
+            ]
+        })
+        .unwrap();
 
     for (backend_output, session_output) in backend_outputs.iter().zip(&session_outputs) {
         assert_eq!(backend_output.shape(), session_output.shape());
@@ -1318,6 +1347,7 @@ fn test_structural_transpose_acquires_output_from_pool() {
     );
     let out = backend
         .with_backend_session(|__s| __s.transpose_read(TensorRead::from_tensor(&input), &[1, 0]))
+        .unwrap()
         .unwrap();
 
     assert_eq!(backend.buffer_pool_len().unwrap(), 0);
@@ -1342,6 +1372,7 @@ fn test_cast_acquires_output_from_dtype_pool() {
     );
     let out = backend
         .with_backend_session(|__s| __s.cast(&input, DType::F32))
+        .unwrap()
         .unwrap();
 
     assert_eq!(backend.buffer_pool_len().unwrap(), 0);
@@ -1369,6 +1400,7 @@ fn test_slice_acquires_output_from_pool() {
     };
     let out = backend
         .with_backend_session(|__s| __s.slice(&input, &config))
+        .unwrap()
         .unwrap();
 
     assert_eq!(backend.buffer_pool_len().unwrap(), 0);
@@ -1396,6 +1428,7 @@ fn test_pad_acquires_and_zeroes_output_from_pool() {
     };
     let out = backend
         .with_backend_session(|__s| __s.pad(&input, &config))
+        .unwrap()
         .unwrap();
 
     assert_eq!(backend.buffer_pool_len().unwrap(), 0);
@@ -1425,6 +1458,7 @@ fn test_dynamic_update_slice_acquires_clone_from_pool() {
         Tensor::from_typed::<i64>(TypedTensor::from_vec_col_major(vec![1], vec![1]).unwrap());
     let out = backend
         .with_backend_session(|__s| __s.dynamic_update_slice(&operand, &update, &starts))
+        .unwrap()
         .unwrap();
 
     assert_eq!(backend.buffer_pool_len().unwrap(), 0);
@@ -1468,6 +1502,7 @@ fn test_install_with_pool_preserves_buffers() {
                 )),
             )
         })
+        .unwrap()
         .unwrap();
     assert_eq!(get_f64(&t, &[0]), 4.0);
     assert_eq!(get_f64(&t, &[1]), 6.0);
@@ -1502,7 +1537,9 @@ fn test_backend_session_reports_poison_after_panic() {
     assert_eq!(backend.buffer_pool_len().unwrap(), 1);
 
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        backend.with_backend_session::<()>(|_| panic!("forced session panic"));
+        backend
+            .with_backend_session::<()>(|_| panic!("forced session panic"))
+            .unwrap();
     }));
 
     assert!(result.is_err());
@@ -1515,70 +1552,72 @@ fn test_backend_session_reports_poison_after_panic() {
 #[test]
 fn test_exec_session_read_reductions_and_reclaim_cover_typed_paths() {
     let mut backend = CpuBackend::new();
-    backend.with_backend_session(|exec| {
-        let lhs = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
-        let rhs = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]).unwrap();
-        let added = exec
-            .add_read(TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs))
-            .unwrap();
-        assert_eq!(added.as_slice::<f64>().unwrap(), &[4.0, 6.0]);
+    backend
+        .with_backend_session(|exec| {
+            let lhs = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
+            let rhs = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]).unwrap();
+            let added = exec
+                .add_read(TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs))
+                .unwrap();
+            assert_eq!(added.as_slice::<f64>().unwrap(), &[4.0, 6.0]);
 
-        let view_data = [2.0_f64, 3.0];
-        let view_shape = [2usize];
-        assert_eq!(
-            exec.reduce_sum_read(
-                TensorRead::from_view(TensorView::f64(&view_shape, &view_data).unwrap()),
-                &[0],
-            )
-            .unwrap()
-            .as_slice::<f64>()
-            .unwrap(),
-            &[5.0]
-        );
-        assert_eq!(
-            exec.reduce_prod_read(TensorRead::from_tensor(&lhs), &[0])
+            let view_data = [2.0_f64, 3.0];
+            let view_shape = [2usize];
+            assert_eq!(
+                exec.reduce_sum_read(
+                    TensorRead::from_view(TensorView::f64(&view_shape, &view_data).unwrap()),
+                    &[0],
+                )
                 .unwrap()
                 .as_slice::<f64>()
                 .unwrap(),
-            &[2.0]
-        );
-        assert_eq!(
-            exec.reduce_max_read(TensorRead::from_tensor(&rhs), &[0])
-                .unwrap()
-                .as_slice::<f64>()
-                .unwrap(),
-            &[4.0]
-        );
-        assert_eq!(
-            exec.reduce_min_read(TensorRead::from_tensor(&rhs), &[0])
-                .unwrap()
-                .as_slice::<f64>()
-                .unwrap(),
-            &[3.0]
-        );
+                &[5.0]
+            );
+            assert_eq!(
+                exec.reduce_prod_read(TensorRead::from_tensor(&lhs), &[0])
+                    .unwrap()
+                    .as_slice::<f64>()
+                    .unwrap(),
+                &[2.0]
+            );
+            assert_eq!(
+                exec.reduce_max_read(TensorRead::from_tensor(&rhs), &[0])
+                    .unwrap()
+                    .as_slice::<f64>()
+                    .unwrap(),
+                &[4.0]
+            );
+            assert_eq!(
+                exec.reduce_min_read(TensorRead::from_tensor(&rhs), &[0])
+                    .unwrap()
+                    .as_slice::<f64>()
+                    .unwrap(),
+                &[3.0]
+            );
 
-        exec.reclaim_buffer(Tensor::from_typed::<f32>(
-            TypedTensor::from_vec_col_major(vec![1], vec![0.0_f32]).unwrap(),
-        ));
-        exec.reclaim_buffer(Tensor::from_typed::<f64>(
-            TypedTensor::from_vec_col_major(vec![1], vec![0.0_f64]).unwrap(),
-        ));
-        exec.reclaim_buffer(Tensor::from_typed::<i32>(
-            TypedTensor::from_vec_col_major(vec![1], vec![0_i32]).unwrap(),
-        ));
-        exec.reclaim_buffer(Tensor::from_typed::<i64>(
-            TypedTensor::from_vec_col_major(vec![1], vec![0_i64]).unwrap(),
-        ));
-        exec.reclaim_buffer(Tensor::from_typed::<bool>(
-            TypedTensor::from_vec_col_major(vec![1], vec![false]).unwrap(),
-        ));
-        exec.reclaim_buffer(Tensor::from_typed::<tenferro_tensor::Complex32>(
-            TypedTensor::from_vec_col_major(vec![1], vec![Complex32::new(0.0, 0.0)]).unwrap(),
-        ));
-        exec.reclaim_buffer(Tensor::from_typed::<tenferro_tensor::Complex64>(
-            TypedTensor::from_vec_col_major(vec![1], vec![Complex64::new(0.0, 0.0)]).unwrap(),
-        ));
-    });
+            exec.reclaim_buffer(Tensor::from_typed::<f32>(
+                TypedTensor::from_vec_col_major(vec![1], vec![0.0_f32]).unwrap(),
+            ));
+            exec.reclaim_buffer(Tensor::from_typed::<f64>(
+                TypedTensor::from_vec_col_major(vec![1], vec![0.0_f64]).unwrap(),
+            ));
+            exec.reclaim_buffer(Tensor::from_typed::<i32>(
+                TypedTensor::from_vec_col_major(vec![1], vec![0_i32]).unwrap(),
+            ));
+            exec.reclaim_buffer(Tensor::from_typed::<i64>(
+                TypedTensor::from_vec_col_major(vec![1], vec![0_i64]).unwrap(),
+            ));
+            exec.reclaim_buffer(Tensor::from_typed::<bool>(
+                TypedTensor::from_vec_col_major(vec![1], vec![false]).unwrap(),
+            ));
+            exec.reclaim_buffer(Tensor::from_typed::<tenferro_tensor::Complex32>(
+                TypedTensor::from_vec_col_major(vec![1], vec![Complex32::new(0.0, 0.0)]).unwrap(),
+            ));
+            exec.reclaim_buffer(Tensor::from_typed::<tenferro_tensor::Complex64>(
+                TypedTensor::from_vec_col_major(vec![1], vec![Complex64::new(0.0, 0.0)]).unwrap(),
+            ));
+        })
+        .unwrap();
 
     assert!(backend.buffer_pool_len().unwrap() >= 7);
 }
@@ -1611,7 +1650,9 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
             inputs: &[TensorRead<'_>],
             out: TensorWrite<'_>,
         ) -> crate::Result<()> {
-            CpuBackend::new().with_backend_session(|__s| __s.elementwise_read_into(op, inputs, out))
+            CpuBackend::new()
+                .with_backend_session(|__s| __s.elementwise_read_into(op, inputs, out))
+                .unwrap()
         }
 
         // Reproduce the previous read-half default: delegate an owned tensor and
@@ -1623,6 +1664,7 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
             tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
                 __s.add_read(TensorRead::from_tensor(lhs), TensorRead::from_tensor(rhs))
             })
+            .unwrap()
         }
 
         // Reproduce the previous read-half default: delegate an owned tensor and
@@ -1634,6 +1676,7 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
             tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
                 __s.sub_read(TensorRead::from_tensor(lhs), TensorRead::from_tensor(rhs))
             })
+            .unwrap()
         }
 
         // Reproduce the previous read-half default: delegate an owned tensor and
@@ -1645,6 +1688,7 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
             tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
                 __s.mul_read(TensorRead::from_tensor(lhs), TensorRead::from_tensor(rhs))
             })
+            .unwrap()
         }
 
         // Reproduce the previous read-half default: delegate an owned tensor and
@@ -1655,6 +1699,7 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
             tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
                 __s.neg_read(TensorRead::from_tensor(input))
             })
+            .unwrap()
         }
 
         // Reproduce the previous read-half default: delegate an owned tensor and
@@ -1665,6 +1710,7 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
             tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
                 __s.conj_read(TensorRead::from_tensor(input))
             })
+            .unwrap()
         }
 
         // Reproduce the previous read-half default: delegate an owned tensor and
@@ -1676,6 +1722,7 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
             tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
                 __s.div_read(TensorRead::from_tensor(lhs), TensorRead::from_tensor(rhs))
             })
+            .unwrap()
         }
 
         // Reproduce the previous read-half default: delegate an owned tensor and
@@ -1686,6 +1733,7 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
             tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
                 __s.abs_read(TensorRead::from_tensor(input))
             })
+            .unwrap()
         }
 
         // Reproduce the previous read-half default: delegate an owned tensor and
@@ -1696,6 +1744,7 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
             tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
                 __s.sign_read(TensorRead::from_tensor(input))
             })
+            .unwrap()
         }
 
         // Reproduce the previous read-half default: delegate an owned tensor and
@@ -1711,6 +1760,7 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
             tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
                 __s.maximum_read(TensorRead::from_tensor(lhs), TensorRead::from_tensor(rhs))
             })
+            .unwrap()
         }
 
         // Reproduce the previous read-half default: delegate an owned tensor and
@@ -1726,6 +1776,7 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
             tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
                 __s.minimum_read(TensorRead::from_tensor(lhs), TensorRead::from_tensor(rhs))
             })
+            .unwrap()
         }
 
         // Reproduce the previous read-half default: delegate an owned tensor and
@@ -1746,6 +1797,7 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
                     dir,
                 )
             })
+            .unwrap()
         }
 
         // Reproduce the previous read-half default: delegate an owned tensor and
@@ -1767,6 +1819,7 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
                     TensorRead::from_tensor(on_false),
                 )
             })
+            .unwrap()
         }
 
         // Reproduce the previous read-half default: delegate an owned tensor and
@@ -1788,6 +1841,7 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
                     TensorRead::from_tensor(upper),
                 )
             })
+            .unwrap()
         }
     }
 
@@ -1800,6 +1854,7 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
             tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
                 __s.exp_read(TensorRead::from_tensor(input))
             })
+            .unwrap()
         }
 
         // Reproduce the previous read-half default: delegate an owned tensor and
@@ -1810,6 +1865,7 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
             tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
                 __s.log_read(TensorRead::from_tensor(input))
             })
+            .unwrap()
         }
 
         // Reproduce the previous read-half default: delegate an owned tensor and
@@ -1820,6 +1876,7 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
             tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
                 __s.sin_read(TensorRead::from_tensor(input))
             })
+            .unwrap()
         }
 
         // Reproduce the previous read-half default: delegate an owned tensor and
@@ -1830,6 +1887,7 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
             tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
                 __s.cos_read(TensorRead::from_tensor(input))
             })
+            .unwrap()
         }
 
         // Reproduce the previous read-half default: delegate an owned tensor and
@@ -1840,6 +1898,7 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
             tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
                 __s.tanh_read(TensorRead::from_tensor(input))
             })
+            .unwrap()
         }
 
         // Reproduce the previous read-half default: delegate an owned tensor and
@@ -1850,6 +1909,7 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
             tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
                 __s.sqrt_read(TensorRead::from_tensor(input))
             })
+            .unwrap()
         }
 
         // Reproduce the previous read-half default: delegate an owned tensor and
@@ -1860,6 +1920,7 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
             tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
                 __s.rsqrt_read(TensorRead::from_tensor(input))
             })
+            .unwrap()
         }
 
         // Reproduce the previous read-half default: delegate an owned tensor and
@@ -1875,6 +1936,7 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
             tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
                 __s.pow_read(TensorRead::from_tensor(lhs), TensorRead::from_tensor(rhs))
             })
+            .unwrap()
         }
 
         // Reproduce the previous read-half default: delegate an owned tensor and
@@ -1885,6 +1947,7 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
             tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
                 __s.expm1_read(TensorRead::from_tensor(input))
             })
+            .unwrap()
         }
 
         // Reproduce the previous read-half default: delegate an owned tensor and
@@ -1895,6 +1958,7 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
             tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
                 __s.log1p_read(TensorRead::from_tensor(input))
             })
+            .unwrap()
         }
     }
 
@@ -1920,6 +1984,7 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
             tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
                 __s.transpose_read(TensorRead::from_tensor(input), perm)
             })
+            .unwrap()
         }
 
         // The previous read-half default delegated owned tensors to the one-shot
@@ -1935,6 +2000,7 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
             tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
                 __s.reshape_read(TensorRead::from_tensor(input), shape)
             })
+            .unwrap()
         }
 
         // The previous read-half default delegated owned tensors to the one-shot
@@ -1951,6 +2017,7 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
             tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
                 __s.broadcast_in_dim_read(TensorRead::from_tensor(input), shape, dims)
             })
+            .unwrap()
         }
     }
 
@@ -1967,6 +2034,7 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
             tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
                 __s.reduce_sum_read(TensorRead::from_tensor(input), axes)
             })
+            .unwrap()
         }
 
         // The previous read-half default delegated owned tensors to the one-shot
@@ -1981,6 +2049,7 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
             tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
                 __s.reduce_prod_read(TensorRead::from_tensor(input), axes)
             })
+            .unwrap()
         }
 
         // The previous read-half default delegated owned tensors to the one-shot
@@ -1995,6 +2064,7 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
             tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
                 __s.reduce_max_read(TensorRead::from_tensor(input), axes)
             })
+            .unwrap()
         }
 
         // The previous read-half default delegated owned tensors to the one-shot
@@ -2009,6 +2079,7 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
             tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
                 __s.reduce_min_read(TensorRead::from_tensor(input), axes)
             })
+            .unwrap()
         }
     }
 
@@ -2045,6 +2116,7 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
                             config,
                         )
                     })
+                    .unwrap()
                 }
                 _ => {
                     let lhs = self.to_contiguous_read(lhs)?;
@@ -2061,6 +2133,7 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
                                 )
                             },
                         )
+                        .unwrap()
                     }
                 }
             }
@@ -2083,8 +2156,8 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
         fn with_backend_session<R: Send>(
             &mut self,
             f: impl FnOnce(&mut dyn tenferro_tensor::BackendSession) -> R + Send,
-        ) -> R {
-            tenferro_tensor::with_session_entry_guard(|| f(self))
+        ) -> Result<R, tenferro_tensor::SessionEntryError> {
+            tenferro_tensor::with_session_entry_guard("test backend", || f(self))
         }
     }
 
@@ -2119,7 +2192,9 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
             inputs: &[TensorRead<'_>],
             out: TensorWrite<'_>,
         ) -> crate::Result<()> {
-            CpuBackend::new().with_backend_session(|__s| __s.elementwise_read_into(op, inputs, out))
+            CpuBackend::new()
+                .with_backend_session(|__s| __s.elementwise_read_into(op, inputs, out))
+                .unwrap()
         }
 
         // Reproduce the previous read-half default: delegate an owned tensor and
@@ -2131,6 +2206,7 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
             tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
                 __s.add_read(TensorRead::from_tensor(lhs), TensorRead::from_tensor(rhs))
             })
+            .unwrap()
         }
 
         // Reproduce the previous read-half default: delegate an owned tensor and
@@ -2142,6 +2218,7 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
             tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
                 __s.sub_read(TensorRead::from_tensor(lhs), TensorRead::from_tensor(rhs))
             })
+            .unwrap()
         }
 
         // Reproduce the previous read-half default: delegate an owned tensor and
@@ -2153,6 +2230,7 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
             tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
                 __s.mul_read(TensorRead::from_tensor(lhs), TensorRead::from_tensor(rhs))
             })
+            .unwrap()
         }
 
         // Reproduce the previous read-half default: delegate an owned tensor and
@@ -2163,6 +2241,7 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
             tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
                 __s.neg_read(TensorRead::from_tensor(input))
             })
+            .unwrap()
         }
 
         // Reproduce the previous read-half default: delegate an owned tensor and
@@ -2173,6 +2252,7 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
             tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
                 __s.conj_read(TensorRead::from_tensor(input))
             })
+            .unwrap()
         }
 
         // Reproduce the previous read-half default: delegate an owned tensor and
@@ -2184,6 +2264,7 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
             tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
                 __s.div_read(TensorRead::from_tensor(lhs), TensorRead::from_tensor(rhs))
             })
+            .unwrap()
         }
 
         // Reproduce the previous read-half default: delegate an owned tensor and
@@ -2194,6 +2275,7 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
             tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
                 __s.abs_read(TensorRead::from_tensor(input))
             })
+            .unwrap()
         }
 
         // Reproduce the previous read-half default: delegate an owned tensor and
@@ -2204,6 +2286,7 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
             tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
                 __s.sign_read(TensorRead::from_tensor(input))
             })
+            .unwrap()
         }
 
         // Reproduce the previous read-half default: delegate an owned tensor and
@@ -2219,6 +2302,7 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
             tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
                 __s.maximum_read(TensorRead::from_tensor(lhs), TensorRead::from_tensor(rhs))
             })
+            .unwrap()
         }
 
         // Reproduce the previous read-half default: delegate an owned tensor and
@@ -2234,6 +2318,7 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
             tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
                 __s.minimum_read(TensorRead::from_tensor(lhs), TensorRead::from_tensor(rhs))
             })
+            .unwrap()
         }
 
         // Reproduce the previous read-half default: delegate an owned tensor and
@@ -2254,6 +2339,7 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
                     dir,
                 )
             })
+            .unwrap()
         }
 
         // Reproduce the previous read-half default: delegate an owned tensor and
@@ -2275,6 +2361,7 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
                     TensorRead::from_tensor(on_false),
                 )
             })
+            .unwrap()
         }
 
         // Reproduce the previous read-half default: delegate an owned tensor and
@@ -2296,6 +2383,7 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
                     TensorRead::from_tensor(upper),
                 )
             })
+            .unwrap()
         }
     }
 
@@ -2308,6 +2396,7 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
             tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
                 __s.exp_read(TensorRead::from_tensor(input))
             })
+            .unwrap()
         }
 
         // Reproduce the previous read-half default: delegate an owned tensor and
@@ -2318,6 +2407,7 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
             tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
                 __s.log_read(TensorRead::from_tensor(input))
             })
+            .unwrap()
         }
 
         // Reproduce the previous read-half default: delegate an owned tensor and
@@ -2328,6 +2418,7 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
             tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
                 __s.sin_read(TensorRead::from_tensor(input))
             })
+            .unwrap()
         }
 
         // Reproduce the previous read-half default: delegate an owned tensor and
@@ -2338,6 +2429,7 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
             tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
                 __s.cos_read(TensorRead::from_tensor(input))
             })
+            .unwrap()
         }
 
         // Reproduce the previous read-half default: delegate an owned tensor and
@@ -2348,6 +2440,7 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
             tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
                 __s.tanh_read(TensorRead::from_tensor(input))
             })
+            .unwrap()
         }
 
         // Reproduce the previous read-half default: delegate an owned tensor and
@@ -2358,6 +2451,7 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
             tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
                 __s.sqrt_read(TensorRead::from_tensor(input))
             })
+            .unwrap()
         }
 
         // Reproduce the previous read-half default: delegate an owned tensor and
@@ -2368,6 +2462,7 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
             tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
                 __s.rsqrt_read(TensorRead::from_tensor(input))
             })
+            .unwrap()
         }
 
         // Reproduce the previous read-half default: delegate an owned tensor and
@@ -2383,6 +2478,7 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
             tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
                 __s.pow_read(TensorRead::from_tensor(lhs), TensorRead::from_tensor(rhs))
             })
+            .unwrap()
         }
 
         // Reproduce the previous read-half default: delegate an owned tensor and
@@ -2393,6 +2489,7 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
             tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
                 __s.expm1_read(TensorRead::from_tensor(input))
             })
+            .unwrap()
         }
 
         // Reproduce the previous read-half default: delegate an owned tensor and
@@ -2403,6 +2500,7 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
             tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
                 __s.log1p_read(TensorRead::from_tensor(input))
             })
+            .unwrap()
         }
     }
 
@@ -2428,6 +2526,7 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
             tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
                 __s.transpose_read(TensorRead::from_tensor(input), perm)
             })
+            .unwrap()
         }
 
         // The previous read-half default delegated owned tensors to the one-shot
@@ -2443,6 +2542,7 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
             tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
                 __s.reshape_read(TensorRead::from_tensor(input), shape)
             })
+            .unwrap()
         }
 
         // The previous read-half default delegated owned tensors to the one-shot
@@ -2459,6 +2559,7 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
             tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
                 __s.broadcast_in_dim_read(TensorRead::from_tensor(input), shape, dims)
             })
+            .unwrap()
         }
     }
 
@@ -2475,6 +2576,7 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
             tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
                 __s.reduce_sum_read(TensorRead::from_tensor(input), axes)
             })
+            .unwrap()
         }
 
         // The previous read-half default delegated owned tensors to the one-shot
@@ -2489,6 +2591,7 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
             tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
                 __s.reduce_prod_read(TensorRead::from_tensor(input), axes)
             })
+            .unwrap()
         }
 
         // The previous read-half default delegated owned tensors to the one-shot
@@ -2503,6 +2606,7 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
             tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
                 __s.reduce_max_read(TensorRead::from_tensor(input), axes)
             })
+            .unwrap()
         }
 
         // The previous read-half default delegated owned tensors to the one-shot
@@ -2517,6 +2621,7 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
             tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
                 __s.reduce_min_read(TensorRead::from_tensor(input), axes)
             })
+            .unwrap()
         }
     }
 
@@ -2553,6 +2658,7 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
                             config,
                         )
                     })
+                    .unwrap()
                 }
                 _ => {
                     let lhs = self.to_contiguous_read(lhs)?;
@@ -2569,6 +2675,7 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
                                 )
                             },
                         )
+                        .unwrap()
                     }
                 }
             }
@@ -2719,6 +2826,7 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
         .with_backend_session_cached(&mut cache, |__s| {
             __s.dot_general_cached(Some(0), &lhs, &rhs, &config)
         })
+        .unwrap()
         .unwrap();
     assert_eq!(direct.as_slice::<f64>().unwrap(), &[6.0]);
 
@@ -2743,6 +2851,7 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
         .with_backend_session_cached(&mut cache, |__s| {
             __s.dot_general_with_conj_cached(Some(1), &lhs, &rhs, &config, false, true)
         })
+        .unwrap()
         .unwrap();
     assert_eq!(rhs_folded.as_slice::<f64>().unwrap(), &[6.0]);
 
@@ -2783,7 +2892,8 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
                 .dot_general_with_conj_cached(Some(3), &lhs, &rhs, &config, true, false)
                 .unwrap();
             cached.as_slice::<f64>().unwrap()[0] + folded.as_slice::<f64>().unwrap()[0]
-        });
+        })
+        .unwrap();
     assert_eq!(session_value, 12.0);
 
     let mut exec = DefaultOnlyExec;
@@ -3071,18 +3181,22 @@ fn test_pool_backed_structural_public_paths_cover_dispatch_and_helpers() {
     let i64_matrix = Tensor::from_vec_col_major(vec![2, 2], vec![1_i64, 2, 3, 4]).unwrap();
     let as_c64 = backend
         .with_backend_session(|__s| __s.cast(&i64_matrix, DType::C64))
+        .unwrap()
         .unwrap();
     assert_eq!(as_c64.dtype(), DType::C64);
     let as_f32 = backend
         .with_backend_session(|__s| __s.cast(&as_c64, DType::F32))
+        .unwrap()
         .unwrap();
     assert_eq!(as_f32.dtype(), DType::F32);
     let as_c32 = backend
         .with_backend_session(|__s| __s.cast(&matrix, DType::C32))
+        .unwrap()
         .unwrap();
     assert_eq!(as_c32.dtype(), DType::C32);
     let as_i64 = backend
         .with_backend_session(|__s| __s.cast(&as_c32, DType::I64))
+        .unwrap()
         .unwrap();
     assert_eq!(as_i64.as_slice::<i64>().unwrap(), &[1, 2, 3, 4]);
 
@@ -3340,5 +3454,7 @@ where
 #[test]
 fn session_read_delegates_cover_non_add_ops() {
     let mut backend = CpuBackend::new();
-    backend.with_backend_session(|exec| exercise_read_delegate_ops(exec));
+    backend
+        .with_backend_session(|exec| exercise_read_delegate_ops(exec))
+        .unwrap();
 }

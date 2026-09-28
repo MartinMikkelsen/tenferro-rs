@@ -93,11 +93,13 @@ fn inner_fresh_backend_cache(
             .with_backend_session(|__s| {
                 __s.dot_general_with_conj(&env, bra_core, &configs.env_bra, false, true)
             })
+            .unwrap()
             .expect("environment and conjugated bra contraction should succeed");
         env = backend
             .with_backend_session(|__s| {
                 __s.dot_general_with_conj(&tmp, ket_core, &configs.tmp_ket, false, false)
             })
+            .unwrap()
             .expect("normal ket contraction should succeed");
     }
     env
@@ -123,6 +125,7 @@ fn inner_persistent_backend_cache(
                     true,
                 )
             })
+            .unwrap()
             .expect("environment and conjugated bra contraction should succeed");
         env = backend
             .with_backend_session_cached(cache, |__s| {
@@ -135,6 +138,7 @@ fn inner_persistent_backend_cache(
                     false,
                 )
             })
+            .unwrap()
             .expect("normal ket contraction should succeed");
     }
     env
@@ -170,6 +174,7 @@ fn inner_single_exec_session(
             }
             Ok::<(), tenferro_tensor::Error>(())
         })
+        .unwrap()
         .expect("single exec session inner product should succeed");
     env
 }

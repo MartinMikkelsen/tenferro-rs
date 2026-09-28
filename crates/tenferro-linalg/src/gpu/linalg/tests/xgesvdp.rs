@@ -34,6 +34,7 @@ fn test_cubecl_svd_xgesvdp_full_and_economy() {
                     })
                     .unwrap()
                 })
+                .unwrap()
                 .unwrap();
             let (uc, vr, k) = (
                 if full { m } else { m.min(n) },

@@ -748,8 +748,8 @@ impl BackendSessionHost for DefaultReadBackend {
     fn with_backend_session<R: Send>(
         &mut self,
         f: impl FnOnce(&mut dyn crate::BackendSession) -> R + Send,
-    ) -> R {
-        crate::with_session_entry_guard(|| f(self))
+    ) -> Result<R, crate::SessionEntryError> {
+        crate::with_session_entry_guard("test backend", || f(self))
     }
 }
 
@@ -966,6 +966,7 @@ fn default_read_methods_delegate_owned_tensors_and_reject_views() {
                 &config,
             )
         })
+        .unwrap()
         .unwrap();
     backend
         .with_backend_session_cached(&mut cache, |__s| {
@@ -976,6 +977,7 @@ fn default_read_methods_delegate_owned_tensors_and_reject_views() {
                 &config,
             )
         })
+        .unwrap()
         .unwrap();
     backend
         .with_backend_session_cached(&mut cache, |__s| {
@@ -988,6 +990,7 @@ fn default_read_methods_delegate_owned_tensors_and_reject_views() {
                 false,
             )
         })
+        .unwrap()
         .unwrap();
 
     let err = backend
@@ -1493,6 +1496,7 @@ fn run_grouped_f64_default_combo(
                         TensorWrite::from_view(TensorViewMut::F64(out_view)),
                     )
                 })
+                .unwrap()
                 .unwrap();
         }
         out_storage
@@ -1508,6 +1512,7 @@ fn run_grouped_f64_default_combo(
                     TensorWrite::from_tensor(&mut out),
                 )
             })
+            .unwrap()
             .unwrap();
         out.as_slice::<f64>().unwrap().to_vec()
     }
@@ -1563,6 +1568,7 @@ fn grouped_gemm_default_fallback_updates_shared_buffer_offsets() {
                 TensorWrite::from_tensor(&mut out),
             )
         })
+        .unwrap()
         .unwrap();
 
     assert_eq!(out.as_slice::<f64>().unwrap(), &[13.0, 20.0, 23.0, 40.0]);
@@ -1606,6 +1612,7 @@ fn grouped_gemm_default_fallback_covers_supported_dtypes() {
                 TensorWrite::from_tensor(&mut out),
             )
         })
+        .unwrap()
         .unwrap();
     assert_eq!(out.as_slice::<f32>().unwrap(), &[11.0]);
 
@@ -1636,6 +1643,7 @@ fn grouped_gemm_default_fallback_covers_supported_dtypes() {
                 TensorWrite::from_tensor(&mut out),
             )
         })
+        .unwrap()
         .unwrap();
     assert_eq!(
         out.as_slice::<Complex32>().unwrap(),
@@ -1669,6 +1677,7 @@ fn grouped_gemm_default_fallback_covers_supported_dtypes() {
                 TensorWrite::from_tensor(&mut out),
             )
         })
+        .unwrap()
         .unwrap();
     assert_eq!(
         out.as_slice::<Complex64>().unwrap(),
@@ -1865,6 +1874,7 @@ fn grouped_gemm_default_fallback_rejects_offsets_that_do_not_fit_isize() {
                 TensorWrite::from_tensor(&mut out),
             )
         })
+        .unwrap()
         .unwrap_err();
 
     assert!(err.to_string().contains("offset"));
@@ -1877,6 +1887,7 @@ fn tensor_index_select_builds_gather_config_and_validates_inputs() {
 
     backend
         .with_backend_session(|session| input.index_select(-1, &[2, 0], session))
+        .unwrap()
         .unwrap();
 
     let indices = backend.gather_indices.as_ref().unwrap();
@@ -1892,11 +1903,13 @@ fn tensor_index_select_builds_gather_config_and_validates_inputs() {
 
     let axis_err = backend
         .with_backend_session(|session| input.index_select(2, &[0], session))
+        .unwrap()
         .unwrap_err();
     assert!(axis_err.to_string().contains("axis 2"));
 
     let position_err = backend
         .with_backend_session(|session| input.index_select(1, &[3], session))
+        .unwrap()
         .unwrap_err();
     assert!(position_err
         .to_string()
@@ -1911,6 +1924,7 @@ fn tensor_stack_reshapes_then_concatenates_and_validates_inputs() {
 
     backend
         .with_backend_session(|session| Tensor::stack(&[&a, &b], -1, session))
+        .unwrap()
         .unwrap();
 
     assert_eq!(backend.reshape_shapes, vec![vec![2, 1], vec![2, 1]]);
@@ -1919,12 +1933,14 @@ fn tensor_stack_reshapes_then_concatenates_and_validates_inputs() {
     let empty: [&Tensor; 0] = [];
     let empty_err = backend
         .with_backend_session(|session| Tensor::stack(&empty, 0, session))
+        .unwrap()
         .unwrap_err();
     assert!(empty_err.to_string().contains("at least one input"));
 
     let c = Tensor::from_vec_col_major(vec![3], vec![0.0_f64; 3]).unwrap();
     let shape_err = backend
         .with_backend_session(|session| Tensor::stack(&[&a, &c], 0, session))
+        .unwrap()
         .unwrap_err();
     assert!(matches!(
         shape_err,
@@ -1936,6 +1952,7 @@ fn tensor_stack_reshapes_then_concatenates_and_validates_inputs() {
 
     let axis_err = backend
         .with_backend_session(|session| Tensor::stack(&[&a], 2, session))
+        .unwrap()
         .unwrap_err();
     assert!(axis_err.to_string().contains("axis 2"));
 }

@@ -63,6 +63,7 @@ fn vdot_and_norm_squared_hold_across_thread_counts_and_lengths() {
                 .with_backend_session(|session| {
                     session.vdot_read(TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs))
                 })
+                .unwrap()
                 .unwrap();
             let dot = dot.as_slice::<Complex64>().unwrap()[0];
             assert!(
@@ -74,6 +75,7 @@ fn vdot_and_norm_squared_hold_across_thread_counts_and_lengths() {
                 .with_backend_session(|session| {
                     session.norm_squared_read(TensorRead::from_tensor(&lhs))
                 })
+                .unwrap()
                 .unwrap();
             let norm = norm.as_slice::<f64>().unwrap()[0];
             assert!(
@@ -87,6 +89,7 @@ fn vdot_and_norm_squared_hold_across_thread_counts_and_lengths() {
                 .with_backend_session(|session| {
                     session.vdot_read(flat_view(&lhs, len), flat_view(&rhs, len))
                 })
+                .unwrap()
                 .unwrap();
             let dot = dot.as_slice::<Complex64>().unwrap()[0];
             assert!(
@@ -96,6 +99,7 @@ fn vdot_and_norm_squared_hold_across_thread_counts_and_lengths() {
 
             let norm = backend
                 .with_backend_session(|session| session.norm_squared_read(flat_view(&lhs, len)))
+                .unwrap()
                 .unwrap();
             let norm = norm.as_slice::<f64>().unwrap()[0];
             assert!(

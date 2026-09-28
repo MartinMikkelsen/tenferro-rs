@@ -76,23 +76,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     for case in cases {
         let mut run = || -> Option<Tensor> {
             match case {
-                "shared" => backend.with_backend_session(|session| {
-                    let mut out = None;
-                    for _ in 0..10 {
-                        out = Some(
-                            session
-                                .dot_general_read(
-                                    TensorRead::from_tensor(
-                                        out.as_ref().unwrap_or(black_box(&lhs)),
-                                    ),
-                                    TensorRead::from_tensor(black_box(&rhs)),
-                                    black_box(&config),
-                                )
-                                .unwrap(),
-                        );
-                    }
-                    out
-                }),
+                "shared" => backend
+                    .with_backend_session(|session| {
+                        let mut out = None;
+                        for _ in 0..10 {
+                            out = Some(
+                                session
+                                    .dot_general_read(
+                                        TensorRead::from_tensor(
+                                            out.as_ref().unwrap_or(black_box(&lhs)),
+                                        ),
+                                        TensorRead::from_tensor(black_box(&rhs)),
+                                        black_box(&config),
+                                    )
+                                    .unwrap(),
+                            );
+                        }
+                        out
+                    })
+                    .unwrap(),
                 "per_op" => {
                     let mut out = None;
                     for _ in 0..10 {
@@ -107,6 +109,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         black_box(&config),
                                     )
                                 })
+                                .unwrap()
                                 .unwrap(),
                         );
                     }
@@ -127,9 +130,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 "empty_x10" => {
                     for _ in 0..10 {
-                        backend.with_backend_session(|session| {
-                            black_box(session);
-                        });
+                        backend
+                            .with_backend_session(|session| {
+                                black_box(session);
+                            })
+                            .unwrap();
                     }
                     None
                 }

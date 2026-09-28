@@ -345,6 +345,43 @@ resource access); do not acquire a domain permit and then wait for that owner
 lock. Existing `enter_or_reuse` reuses entered authority through delegation;
 it is not permission for an arbitrary caller to open another public session.
 
+**Implemented mapping (#1938 session phase).** `BackendSessionHost::with_backend_session`
+and `with_backend_session_cached` return `Result<R, SessionEntryError>`; there is
+no infallible sibling. `SessionEntryError` (in `tenferro-tensor`) has five
+variants, all reported before the callback runs: `Reentered` (a CPU execution or
+portable session guard is already active on this thread), `Contended` (a
+resource admission cannot wait for, today a caller-managed CPU domain already
+executing), `IncompatibleContext` (a backend witness that does not match the
+active execution scope), `ResourcePoisoned` (poisoned arbiter state) and
+`Executor` (typed executor-entry failure). Operation families carry it as their
+own source-preserving variant: `tenferro_tensor::Error::SessionEntry`,
+`tenferro_runtime::Error::SessionEntry` and `tenferro_einsum::Error::SessionEntry`,
+so a caller writes `backend.with_backend_session(|s| op(s))??`. The portable
+`with_session_entry_guard` used by CUDA/WebGPU now rejects nesting in every build
+profile rather than through a debug assertion. `CpuBackend::install` became
+`Result`-returning for the same reason. Best-effort recycling
+(`TensorBuffer::reclaim_buffer`, runtime last-use reclaim) drops the tensor
+instead of pooling it when no session can be admitted.
+
+**Deviation: cross-thread contention waits.** The text above asks for
+nonblocking permit acquisition with a typed busy result. The implementation keeps
+the arbiter's FIFO wait for a CPU permit held by *another* thread, by maintainer
+decision on this branch: every default `CpuBackend` requests the whole allowed
+CPU set on the process-global arbiter, so a busy error would make any two
+concurrently used backends (including parallel test threads) fail instead of
+serializing. The lock-order rule is what makes waiting deadlock-free: the eager
+owner lock is taken before admission, and no permit holder waits on that lock.
+Only non-waitable states are typed errors: same-thread reentry, a busy
+caller-managed domain (it has no queue), a scope-witness mismatch, poisoned
+arbiter state and executor-entry failure. Request-id exhaustion stays a wait
+(ids restart once every permit drains). The design council recorded
+nonblocking `Busy` as one valid policy, not the only safe one.
+
+**Unwind reuse.** The engine-resources lock is still recovered after a callback
+unwinds: `BufferPoolLoan` restores in-flight pool accounting on unwind, so the
+next session sees a consistent pool, while pool introspection keeps reporting the
+poison. Arbiter poisoning is not recovered; its lists cannot be trusted.
+
 ### D7. Compact erased operation boundary and bounded native access
 
 **One numerical implementation:** keep object-safe `BackendSession` operations,

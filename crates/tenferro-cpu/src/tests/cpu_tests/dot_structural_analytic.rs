@@ -30,6 +30,7 @@ fn test_dot_general_matmul() {
                 },
             )
         })
+        .unwrap()
         .unwrap();
     assert_eq!(c.shape(), &[2, 4]);
     assert_eq!(get_f64(&c, &[0, 0]), 38.0);
@@ -70,6 +71,7 @@ fn test_dot_general_with_conj_matches_materialized_complex_matmul() {
 
     let out = backend
         .with_backend_session(|__s| __s.dot_general_with_conj(&lhs, &rhs, &config, true, true))
+        .unwrap()
         .unwrap();
 
     let lhs_conj: Vec<Complex64> = lhs_data.iter().map(|value| value.conj()).collect();
@@ -108,17 +110,20 @@ fn test_dot_general_read_accepts_tensor_and_view_inputs() {
                 &config,
             )
         })
+        .unwrap()
         .unwrap();
     assert_eq!(direct.shape(), &[2, 2]);
     assert_eq!(direct.as_slice::<f64>().unwrap(), &[22.0, 28.0, 49.0, 64.0]);
 
-    let session = backend.with_backend_session(|exec| {
-        exec.dot_general_read(
-            TensorRead::from_tensor(&lhs),
-            TensorRead::from_view(rhs_view),
-            &config,
-        )
-    });
+    let session = backend
+        .with_backend_session(|exec| {
+            exec.dot_general_read(
+                TensorRead::from_tensor(&lhs),
+                TensorRead::from_view(rhs_view),
+                &config,
+            )
+        })
+        .unwrap();
     let session = session.unwrap();
     assert_eq!(
         session.as_slice::<f64>().unwrap(),
@@ -150,6 +155,7 @@ fn test_dot_general_read_accepts_transposed_host_view_input() {
                 &config,
             )
         })
+        .unwrap()
         .unwrap();
 
     assert_eq!(out.shape(), &[2, 2]);
@@ -180,6 +186,7 @@ fn test_dot_general_read_into_writes_compact_and_strided_outputs() {
                 TensorWrite::from_tensor(&mut compact),
             )
         })
+        .unwrap()
         .unwrap();
     assert_eq!(
         compact.as_slice::<f64>().unwrap(),
@@ -200,6 +207,7 @@ fn test_dot_general_read_into_writes_compact_and_strided_outputs() {
                     TensorWrite::from_view(out_view),
                 )
             })
+            .unwrap()
             .unwrap();
     }
     assert_eq!(
@@ -232,6 +240,7 @@ fn test_dot_general_read_into_rejects_output_shape_and_dtype_mismatch() {
                 TensorWrite::from_tensor(&mut wrong_shape),
             )
         })
+        .unwrap()
         .unwrap_err();
     assert!(matches!(
         shape_err,
@@ -251,6 +260,7 @@ fn test_dot_general_read_into_rejects_output_shape_and_dtype_mismatch() {
                 TensorWrite::from_tensor(&mut wrong_dtype),
             )
         })
+        .unwrap()
         .unwrap_err();
     assert!(matches!(
         dtype_err,
@@ -293,6 +303,7 @@ fn test_dot_general_read_into_accum_updates_existing_output() {
                 TensorWrite::from_tensor(&mut out),
             )
         })
+        .unwrap()
         .unwrap();
 
     let expected_dot = [22.0, 28.0, 49.0, 64.0];
@@ -322,6 +333,7 @@ fn test_dot_general_read_into_accum_updates_existing_output() {
                     TensorWrite::from_view(out_view),
                 )
             })
+            .unwrap()
             .unwrap();
     }
     assert_eq!(strided_data[0], -1.0);
@@ -397,6 +409,7 @@ fn test_dot_general_read_into_accum_applies_complex_conj_and_scalars() {
                 TensorWrite::from_tensor(&mut out),
             )
         })
+        .unwrap()
         .unwrap();
 
     let lhs_conj: Vec<Complex64> = lhs_data.iter().map(|value| value.conj()).collect();
@@ -439,6 +452,7 @@ fn test_dot_general_read_into_accum_rejects_scalar_dtype_mismatch() {
                 TensorWrite::from_tensor(&mut out),
             )
         })
+        .unwrap()
         .unwrap_err();
 
     assert!(matches!(
@@ -477,6 +491,7 @@ fn test_dot_general_read_into_accum_covers_supported_scalar_dtypes() {
                 TensorWrite::from_tensor(&mut out_f32),
             )
         })
+        .unwrap()
         .unwrap();
     let out_f32 = out_f32.as_slice::<f32>().unwrap();
     assert!((out_f32[0] - 42.5).abs() < 1.0e-5);
@@ -516,6 +531,7 @@ fn test_dot_general_read_into_accum_covers_supported_scalar_dtypes() {
                 TensorWrite::from_tensor(&mut out_c32),
             )
         })
+        .unwrap()
         .unwrap();
     let dot = lhs_c32.as_slice::<Complex32>().unwrap()[0].conj()
         * rhs_c32.as_slice::<Complex32>().unwrap()[0]
@@ -547,13 +563,15 @@ fn test_dot_general_read_blas_negative_stride_view_falls_back() {
     };
     let mut backend = CpuBackend::with_kind(CpuBackendKind::Blas).unwrap();
 
-    let out = backend
-        .dot_general_read(
+    let out = tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |session| {
+        session.dot_general_read(
             TensorRead::from_view(TensorView::F64(lhs_view)),
             TensorRead::from_tensor(&rhs),
             &config,
         )
-        .unwrap();
+    })
+    .unwrap()
+    .unwrap();
 
     assert_eq!(out.shape(), &[2, 2]);
     assert_eq!(out.as_slice::<f64>().unwrap(), &[68.0, 92.0, 95.0, 128.0]);
@@ -581,6 +599,7 @@ fn test_dot_general_inner_product_returns_rank0_scalar() {
                 },
             )
         })
+        .unwrap()
         .unwrap();
     assert!(c.shape().is_empty());
     assert_eq!(get_f64(&c, &[]), 32.0);
@@ -606,6 +625,7 @@ fn test_dot_general_zero_sized_matmul_returns_empty_matrix() {
                 },
             )
         })
+        .unwrap()
         .unwrap();
 
     assert_eq!(c.shape(), &[0, 0]);
@@ -637,6 +657,7 @@ fn test_dot_general_zero_contracting_dim_returns_zero_filled_output() {
                 },
             )
         })
+        .unwrap()
         .unwrap();
 
     assert_eq!(c.shape(), &[2, 3]);
@@ -684,6 +705,7 @@ fn test_dot_general_falls_back_for_unfusable_lhs_batch_layout() {
                 },
             )
         })
+        .unwrap()
         .unwrap();
 
     assert_eq!(c.shape(), &[2, 2, 2, 2]);
@@ -729,6 +751,7 @@ fn test_dot_general_falls_back_for_mixed_batch_orders() {
                 &config,
             )
         })
+        .unwrap()
         .unwrap();
 
     assert_eq!(output.shape(), &[1, 1, 2, 3]);
@@ -957,6 +980,7 @@ fn test_cpu_backend_analytic_ops_real() {
     );
     let exp_out = backend
         .with_backend_session(|__s| __s.exp_read(TensorRead::from_tensor(&exp_input)))
+        .unwrap()
         .unwrap();
     assert_f64_close(get_f64(&exp_out, &[0]), 1.0);
     assert_f64_close(get_f64(&exp_out, &[1]), std::f64::consts::E);
@@ -966,6 +990,7 @@ fn test_cpu_backend_analytic_ops_real() {
     );
     let log_out = backend
         .with_backend_session(|__s| __s.log_read(TensorRead::from_tensor(&log_input)))
+        .unwrap()
         .unwrap();
     assert_f64_close(get_f64(&log_out, &[0]), 0.0);
     assert_f64_close(get_f64(&log_out, &[1]), 4.0_f64.ln());
@@ -975,9 +1000,11 @@ fn test_cpu_backend_analytic_ops_real() {
     );
     let sin_out = backend
         .with_backend_session(|__s| __s.sin_read(TensorRead::from_tensor(&trig_input)))
+        .unwrap()
         .unwrap();
     let cos_out = backend
         .with_backend_session(|__s| __s.cos_read(TensorRead::from_tensor(&trig_input)))
+        .unwrap()
         .unwrap();
     assert_f64_close(get_f64(&sin_out, &[0]), 0.0);
     assert_f64_close(get_f64(&sin_out, &[1]), 1.0);
@@ -989,6 +1016,7 @@ fn test_cpu_backend_analytic_ops_real() {
     );
     let tanh_out = backend
         .with_backend_session(|__s| __s.tanh_read(TensorRead::from_tensor(&tanh_input)))
+        .unwrap()
         .unwrap();
     assert_f64_close(get_f64(&tanh_out, &[0]), 0.0);
     assert_f64_close(get_f64(&tanh_out, &[1]), 1.0_f64.tanh());
@@ -998,9 +1026,11 @@ fn test_cpu_backend_analytic_ops_real() {
     );
     let sqrt_out = backend
         .with_backend_session(|__s| __s.sqrt_read(TensorRead::from_tensor(&sqrt_input)))
+        .unwrap()
         .unwrap();
     let rsqrt_out = backend
         .with_backend_session(|__s| __s.rsqrt_read(TensorRead::from_tensor(&sqrt_input)))
+        .unwrap()
         .unwrap();
     assert_f64_close(get_f64(&sqrt_out, &[0]), 1.0);
     assert_f64_close(get_f64(&sqrt_out, &[1]), 2.0);
@@ -1011,9 +1041,11 @@ fn test_cpu_backend_analytic_ops_real() {
         .with_backend_session(|__s| {
             __s.expm1_read(tenferro_tensor::TensorRead::from_tensor(&exp_input))
         })
+        .unwrap()
         .unwrap();
     let log1p_out = backend
         .with_backend_session(|__s| __s.log1p_read(TensorRead::from_tensor(&log_input)))
+        .unwrap()
         .unwrap();
     assert_f64_close(get_f64(&expm1_out, &[0]), 0.0);
     assert_f64_close(get_f64(&expm1_out, &[1]), 1.0_f64.exp_m1());
@@ -1033,6 +1065,7 @@ fn test_cpu_backend_analytic_ops_real() {
                 TensorRead::from_tensor(&pow_exp),
             )
         })
+        .unwrap()
         .unwrap();
     assert_f64_close(get_f64(&pow_out, &[0]), 8.0);
     assert_f64_close(get_f64(&pow_out, &[1]), 3.0);
@@ -1051,6 +1084,7 @@ fn test_cpu_backend_analytic_ops_complex() {
     );
     let exp_out = backend
         .with_backend_session(|__s| __s.exp_read(TensorRead::from_tensor(&exp_input)))
+        .unwrap()
         .unwrap();
     assert_c64_close(get_c64(&exp_out, &[0]), Complex64::new(1.0, 0.0));
     assert_c64_close(get_c64(&exp_out, &[1]), Complex64::new(1.0, 1.0).exp());
@@ -1064,6 +1098,7 @@ fn test_cpu_backend_analytic_ops_complex() {
     );
     let log_out = backend
         .with_backend_session(|__s| __s.log_read(TensorRead::from_tensor(&log_input)))
+        .unwrap()
         .unwrap();
     assert_c64_close(get_c64(&log_out, &[0]), Complex64::new(1.0, 0.0).ln());
     assert_c64_close(get_c64(&log_out, &[1]), Complex64::new(2.0, -0.5).ln());
@@ -1077,12 +1112,15 @@ fn test_cpu_backend_analytic_ops_complex() {
     );
     let sin_out = backend
         .with_backend_session(|__s| __s.sin_read(TensorRead::from_tensor(&trig_input)))
+        .unwrap()
         .unwrap();
     let cos_out = backend
         .with_backend_session(|__s| __s.cos_read(TensorRead::from_tensor(&trig_input)))
+        .unwrap()
         .unwrap();
     let tanh_out = backend
         .with_backend_session(|__s| __s.tanh_read(TensorRead::from_tensor(&trig_input)))
+        .unwrap()
         .unwrap();
     assert_c64_close(get_c64(&sin_out, &[0]), Complex64::new(0.0, 0.0).sin());
     assert_c64_close(get_c64(&sin_out, &[1]), Complex64::new(0.5, -0.25).sin());
@@ -1100,9 +1138,11 @@ fn test_cpu_backend_analytic_ops_complex() {
     );
     let sqrt_out = backend
         .with_backend_session(|__s| __s.sqrt_read(TensorRead::from_tensor(&sqrt_input)))
+        .unwrap()
         .unwrap();
     let rsqrt_out = backend
         .with_backend_session(|__s| __s.rsqrt_read(TensorRead::from_tensor(&sqrt_input)))
+        .unwrap()
         .unwrap();
     assert_c64_close(get_c64(&sqrt_out, &[0]), Complex64::new(1.0, 0.0).sqrt());
     assert_c64_close(get_c64(&sqrt_out, &[1]), Complex64::new(4.0, 3.0).sqrt());
@@ -1121,9 +1161,11 @@ fn test_cpu_backend_analytic_ops_complex() {
         .with_backend_session(|__s| {
             __s.expm1_read(tenferro_tensor::TensorRead::from_tensor(&exp_input))
         })
+        .unwrap()
         .unwrap();
     let log1p_out = backend
         .with_backend_session(|__s| __s.log1p_read(TensorRead::from_tensor(&log_input)))
+        .unwrap()
         .unwrap();
     assert_c64_close(
         get_c64(&expm1_out, &[0]),
@@ -1163,6 +1205,7 @@ fn test_cpu_backend_analytic_ops_complex() {
                 TensorRead::from_tensor(&pow_exp),
             )
         })
+        .unwrap()
         .unwrap();
     assert_c64_close(
         get_c64(&pow_out, &[0]),
@@ -1227,6 +1270,7 @@ fn test_cpu_backend_dispatches_tensor_backend_ops() {
         .with_backend_session(|__s| {
             __s.add_read(TensorRead::from_tensor(&a), TensorRead::from_tensor(&b))
         })
+        .unwrap()
         .unwrap();
     assert_eq!(get_f64(&out, &[0]), 4.0);
     assert_eq!(get_f64(&out, &[1]), 6.0);
@@ -1261,6 +1305,7 @@ fn test_tier2_elementwise_ops_real() {
         .with_backend_session(|__s| {
             __s.div_read(TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs))
         })
+        .unwrap()
         .unwrap();
     assert_eq!(get_f64(&div, &[0]), 4.0);
     assert_eq!(get_f64(&div, &[1]), -0.4);
@@ -1268,6 +1313,7 @@ fn test_tier2_elementwise_ops_real() {
 
     let abs = backend
         .with_backend_session(|__s| __s.abs_read(TensorRead::from_tensor(&lhs)))
+        .unwrap()
         .unwrap();
     assert_eq!(get_f64(&abs, &[0]), 8.0);
     assert_eq!(get_f64(&abs, &[1]), 2.0);
@@ -1275,6 +1321,7 @@ fn test_tier2_elementwise_ops_real() {
 
     let sign = backend
         .with_backend_session(|__s| __s.sign_read(TensorRead::from_tensor(&lhs)))
+        .unwrap()
         .unwrap();
     assert_eq!(get_f64(&sign, &[0]), 1.0);
     assert_eq!(get_f64(&sign, &[1]), -1.0);
@@ -1284,6 +1331,7 @@ fn test_tier2_elementwise_ops_real() {
         .with_backend_session(|__s| {
             __s.maximum_read(TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs))
         })
+        .unwrap()
         .unwrap();
     assert_eq!(get_f64(&maximum, &[0]), 8.0);
     assert_eq!(get_f64(&maximum, &[1]), 5.0);
@@ -1293,6 +1341,7 @@ fn test_tier2_elementwise_ops_real() {
         .with_backend_session(|__s| {
             __s.minimum_read(TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs))
         })
+        .unwrap()
         .unwrap();
     assert_eq!(get_f64(&minimum, &[0]), 2.0);
     assert_eq!(get_f64(&minimum, &[1]), -2.0);
@@ -1306,6 +1355,7 @@ fn test_tier2_elementwise_ops_real() {
                 &CompareDir::Eq,
             )
         })
+        .unwrap()
         .unwrap();
     assert!(!get_bool(&eq, &[0]));
     assert!(!get_bool(&eq, &[1]));
@@ -1319,6 +1369,7 @@ fn test_tier2_elementwise_ops_real() {
                 &CompareDir::Lt,
             )
         })
+        .unwrap()
         .unwrap();
     assert!(!get_bool(&lt, &[0]));
     assert!(get_bool(&lt, &[1]));
@@ -1332,6 +1383,7 @@ fn test_tier2_elementwise_ops_real() {
                 &CompareDir::Le,
             )
         })
+        .unwrap()
         .unwrap();
     assert!(!get_bool(&le, &[0]));
     assert!(get_bool(&le, &[1]));
@@ -1345,6 +1397,7 @@ fn test_tier2_elementwise_ops_real() {
                 &CompareDir::Gt,
             )
         })
+        .unwrap()
         .unwrap();
     assert!(get_bool(&gt, &[0]));
     assert!(!get_bool(&gt, &[1]));
@@ -1358,6 +1411,7 @@ fn test_tier2_elementwise_ops_real() {
                 &CompareDir::Ge,
             )
         })
+        .unwrap()
         .unwrap();
     assert!(get_bool(&ge, &[0]));
     assert!(!get_bool(&ge, &[1]));
@@ -1371,6 +1425,7 @@ fn test_tier2_elementwise_ops_real() {
                 TensorRead::from_tensor(&on_false),
             )
         })
+        .unwrap()
         .unwrap();
     assert_eq!(get_f64(&select, &[0]), 1.0);
     assert_eq!(get_f64(&select, &[1]), 20.0);
@@ -1384,6 +1439,7 @@ fn test_tier2_elementwise_ops_real() {
                 TensorRead::from_tensor(&upper),
             )
         })
+        .unwrap()
         .unwrap();
     assert_eq!(get_f64(&clamp, &[0]), 1.0);
     assert_eq!(get_f64(&clamp, &[1]), -1.0);
@@ -1417,6 +1473,7 @@ fn test_tier2_elementwise_ops_complex() {
 
     let abs = backend
         .with_backend_session(|__s| __s.abs_read(TensorRead::from_tensor(&input)))
+        .unwrap()
         .unwrap();
     assert_eq!(abs.dtype(), DType::F64);
     assert_eq!(get_f64(&abs, &[0]), 5.0);
@@ -1424,19 +1481,20 @@ fn test_tier2_elementwise_ops_complex() {
 
     let sign = backend
         .with_backend_session(|__s| __s.sign_read(TensorRead::from_tensor(&input)))
+        .unwrap()
         .unwrap();
     assert_c64_close(get_c64(&sign, &[0]), Complex64::new(0.6, 0.8));
     assert_c64_close(get_c64(&sign, &[1]), Complex64::new(0.0, 0.0));
 
     assert!(matches!(
-        backend.with_backend_session(|__s| __s.maximum_read(TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs))),
+        backend.with_backend_session(|__s| __s.maximum_read(TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs))).unwrap(),
         Err(crate::Error::Unsupported {
             op: "maximum",
             message,
         }) if message.contains("total order")
     ));
     assert!(matches!(
-        backend.with_backend_session(|__s| __s.minimum_read(TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs))),
+        backend.with_backend_session(|__s| __s.minimum_read(TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs))).unwrap(),
         Err(crate::Error::Unsupported {
             op: "minimum",
             message,

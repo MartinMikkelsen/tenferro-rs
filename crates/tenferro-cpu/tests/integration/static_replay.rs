@@ -33,21 +33,35 @@ fn static_analytic_replay_preserves_owned_and_reversed_values() {
             })
             .collect();
         let output = match op {
-            0 => backend.with_backend_session(|__s| __s.exp_read(TensorRead::from_tensor(&owned))),
-            1 => backend.with_backend_session(|__s| __s.log_read(TensorRead::from_tensor(&owned))),
-            2 => backend.with_backend_session(|__s| __s.sin_read(TensorRead::from_tensor(&owned))),
-            3 => backend.with_backend_session(|__s| __s.cos_read(TensorRead::from_tensor(&owned))),
-            4 => backend.with_backend_session(|__s| __s.tanh_read(TensorRead::from_tensor(&owned))),
-            5 => backend.with_backend_session(|__s| __s.sqrt_read(TensorRead::from_tensor(&owned))),
-            6 => {
-                backend.with_backend_session(|__s| __s.rsqrt_read(TensorRead::from_tensor(&owned)))
-            }
-            7 => backend.with_backend_session(|__s| {
-                __s.expm1_read(tenferro_tensor::TensorRead::from_tensor(&owned))
-            }),
-            8 => {
-                backend.with_backend_session(|__s| __s.log1p_read(TensorRead::from_tensor(&owned)))
-            }
+            0 => backend
+                .with_backend_session(|__s| __s.exp_read(TensorRead::from_tensor(&owned)))
+                .unwrap(),
+            1 => backend
+                .with_backend_session(|__s| __s.log_read(TensorRead::from_tensor(&owned)))
+                .unwrap(),
+            2 => backend
+                .with_backend_session(|__s| __s.sin_read(TensorRead::from_tensor(&owned)))
+                .unwrap(),
+            3 => backend
+                .with_backend_session(|__s| __s.cos_read(TensorRead::from_tensor(&owned)))
+                .unwrap(),
+            4 => backend
+                .with_backend_session(|__s| __s.tanh_read(TensorRead::from_tensor(&owned)))
+                .unwrap(),
+            5 => backend
+                .with_backend_session(|__s| __s.sqrt_read(TensorRead::from_tensor(&owned)))
+                .unwrap(),
+            6 => backend
+                .with_backend_session(|__s| __s.rsqrt_read(TensorRead::from_tensor(&owned)))
+                .unwrap(),
+            7 => backend
+                .with_backend_session(|__s| {
+                    __s.expm1_read(tenferro_tensor::TensorRead::from_tensor(&owned))
+                })
+                .unwrap(),
+            8 => backend
+                .with_backend_session(|__s| __s.log1p_read(TensorRead::from_tensor(&owned)))
+                .unwrap(),
             _ => unreachable!(),
         }
         .unwrap();
@@ -55,15 +69,33 @@ fn static_analytic_replay_preserves_owned_and_reversed_values() {
         backend.reclaim_buffer(output);
         let read = TensorRead::from_view(TensorView::F64(reversed.clone()));
         let output = match op {
-            0 => backend.with_backend_session(|__s| __s.exp_read(read)),
-            1 => backend.with_backend_session(|__s| __s.log_read(read)),
-            2 => backend.with_backend_session(|__s| __s.sin_read(read)),
-            3 => backend.with_backend_session(|__s| __s.cos_read(read)),
-            4 => backend.with_backend_session(|__s| __s.tanh_read(read)),
-            5 => backend.with_backend_session(|__s| __s.sqrt_read(read)),
-            6 => backend.with_backend_session(|__s| __s.rsqrt_read(read)),
-            7 => backend.with_backend_session(|__s| __s.expm1_read(read)),
-            8 => backend.with_backend_session(|__s| __s.log1p_read(read)),
+            0 => backend
+                .with_backend_session(|__s| __s.exp_read(read))
+                .unwrap(),
+            1 => backend
+                .with_backend_session(|__s| __s.log_read(read))
+                .unwrap(),
+            2 => backend
+                .with_backend_session(|__s| __s.sin_read(read))
+                .unwrap(),
+            3 => backend
+                .with_backend_session(|__s| __s.cos_read(read))
+                .unwrap(),
+            4 => backend
+                .with_backend_session(|__s| __s.tanh_read(read))
+                .unwrap(),
+            5 => backend
+                .with_backend_session(|__s| __s.sqrt_read(read))
+                .unwrap(),
+            6 => backend
+                .with_backend_session(|__s| __s.rsqrt_read(read))
+                .unwrap(),
+            7 => backend
+                .with_backend_session(|__s| __s.expm1_read(read))
+                .unwrap(),
+            8 => backend
+                .with_backend_session(|__s| __s.log1p_read(read))
+                .unwrap(),
             _ => unreachable!(),
         }
         .unwrap();
@@ -91,6 +123,7 @@ fn static_pow_replay_preserves_wrapping_and_domain_checks() {
         .with_backend_session(|__s| {
             __s.pow_read(TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs))
         })
+        .unwrap()
         .unwrap();
     assert_eq!(out.as_slice::<i64>().unwrap(), expected);
     backend.reclaim_buffer(out);
@@ -98,6 +131,7 @@ fn static_pow_replay_preserves_wrapping_and_domain_checks() {
         .with_backend_session(|__s| {
             __s.pow_read(TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs))
         })
+        .unwrap()
         .unwrap();
     assert_eq!(out.as_slice::<i64>().unwrap(), expected);
     backend.reclaim_buffer(out);
@@ -107,12 +141,14 @@ fn static_pow_replay_preserves_wrapping_and_domain_checks() {
             TensorRead::from_tensor(&lhs),
             TensorRead::from_tensor(&negative)
         ))
+        .unwrap()
         .is_err());
     assert!(backend
         .with_backend_session(|__s| __s.pow_read(
             TensorRead::from_tensor(&lhs),
             TensorRead::from_tensor(&negative)
         ))
+        .unwrap()
         .is_err());
 }
 

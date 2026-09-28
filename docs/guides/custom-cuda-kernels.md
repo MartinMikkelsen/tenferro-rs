@@ -188,7 +188,7 @@ The launch code is identical for PTX, CUBIN, and NVRTC modules:
                 })
             })
             .ok_or_else(|| Error::runtime_state("custom_cuda.add", "backend session is not CUDA"))?
-        })
+        })?
     }
 ```
 <!-- end-snippet-source -->

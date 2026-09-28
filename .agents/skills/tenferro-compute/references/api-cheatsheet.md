@@ -27,7 +27,7 @@ let weights = TypedTensor::<f64>::from_vec_col_major(
     vec![3, 2],
     vec![0.5, -1.0, 1.5, 1.0, 2.0, -0.5],
 )?;
-let projected = backend.with_backend_session(|session| x.matmul(&weights, session))?;
+let projected = backend.with_backend_session(|session| x.matmul(&weights, session))??;
 assert_eq!(projected.shape(), &[2, 2]);
 assert_eq!(projected.host_data()?, &[3.0, 6.0, 3.5, 11.0]);
 ```

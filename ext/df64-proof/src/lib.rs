@@ -42,8 +42,7 @@ tenferro_tensor::define_scalar_set! {
     ///
     /// ```rust
     /// use tenferro_df64_proof::{Df64, ExtendedSet, ExtendedTag};
-    /// use tenferro_tensor_core::{ScalarSet};
-    /// use tenferro_tensor::{HostTensor};
+    /// use tenferro_tensor::{HostTensor, ScalarSet};
     ///
     /// let value = ExtendedSet::Df64(
     ///     HostTensor::from_vec_col_major(vec![1], vec![Df64::from_f64(2.0)])?,

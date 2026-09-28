@@ -23,7 +23,7 @@ fn main() {
     let b = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]).unwrap();
 
     let out = backend
-        .with_backend_session(|session| add_twice(session, &a, &b))
+        .with_backend_session(|session| add_twice(session, &a, &b)).unwrap()
         .unwrap();
 
     assert_eq!(out.as_slice::<f64>().unwrap(), &[7.0, 10.0]);

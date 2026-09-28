@@ -42,7 +42,7 @@ let mut backend = CpuBackend::new();
 // Ordinary execution: no explicit preparation needed.
 let ordinary = backend.with_backend_session(|session| {
     [&lhs, &rhs].einsum("ij,jk->ik", session)
-})?;
+})??;
 assert_eq!(ordinary.as_slice::<f64>()?, &[2.0, 4.0, 7.0, 10.0]);
 
 // Strings are fine for one-time preparation. The plan does not retain inputs.
@@ -54,7 +54,7 @@ for (data, expected) in [
     let next_lhs = Tensor::from_vec_col_major([2, 2], data)?;
     let result = backend.with_backend_session(|session| {
         plan.execute([&next_lhs, &rhs], session)
-    })?;
+    })??;
     assert_eq!(result.as_slice::<f64>()?, &expected);
 }
 
@@ -62,7 +62,7 @@ for (data, expected) in [
 let equation = EinsumSubscripts::new(&[&[0, 1], &[1, 2]], &[0, 2]);
 let structured = backend.with_backend_session(|session| {
     [&lhs, &rhs].einsum_subscripts(&equation, session)
-})?;
+})??;
 assert_eq!(structured.as_slice::<f64>()?, &[2.0, 4.0, 7.0, 10.0]);
 ```
 <!-- end-snippet-source -->

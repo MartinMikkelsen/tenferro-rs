@@ -71,7 +71,7 @@ macro_rules! test_backend_impls {
 
         impl TensorStructural for $ty {
             fn to_contiguous_read(&mut self, input: TensorRead<'_>) -> TensorResult {
-                CpuBackend::new().with_backend_session(|__s| __s.to_contiguous_read(input))
+                CpuBackend::new().with_backend_session(|__s| __s.to_contiguous_read(input)).unwrap()
             }
 
             fn copy_read_into(
@@ -79,7 +79,7 @@ macro_rules! test_backend_impls {
                 src: TensorRead<'_>,
                 dst: TensorWrite<'_>,
             ) -> tenferro_tensor::Result<()> {
-                CpuBackend::new().with_backend_session(|__s| __s.copy_read_into(src, dst))
+                CpuBackend::new().with_backend_session(|__s| __s.copy_read_into(src, dst)).unwrap()
             }
 
             panic_backend_methods! {
@@ -433,23 +433,28 @@ impl TensorDot for SessionCountingBackend {
         config: &DotGeneralConfig,
     ) -> TensorResult {
         match (lhs.as_tensor(), rhs.as_tensor()) {
-            (Some(lhs), Some(rhs)) => self.inner.with_backend_session(|__s| {
-                __s.dot_general_read(
-                    TensorRead::from_tensor(lhs),
-                    TensorRead::from_tensor(rhs),
-                    config,
-                )
-            }),
-            _ => {
-                let lhs = self.to_contiguous_read(lhs)?;
-                let rhs = self.to_contiguous_read(rhs)?;
-                self.inner.with_backend_session(|__s| {
+            (Some(lhs), Some(rhs)) => self
+                .inner
+                .with_backend_session(|__s| {
                     __s.dot_general_read(
-                        TensorRead::from_tensor(&lhs),
-                        TensorRead::from_tensor(&rhs),
+                        TensorRead::from_tensor(lhs),
+                        TensorRead::from_tensor(rhs),
                         config,
                     )
                 })
+                .unwrap(),
+            _ => {
+                let lhs = self.to_contiguous_read(lhs)?;
+                let rhs = self.to_contiguous_read(rhs)?;
+                self.inner
+                    .with_backend_session(|__s| {
+                        __s.dot_general_read(
+                            TensorRead::from_tensor(&lhs),
+                            TensorRead::from_tensor(&rhs),
+                            config,
+                        )
+                    })
+                    .unwrap()
             }
         }
     }
@@ -464,6 +469,7 @@ impl TensorElementwise for SessionCountingBackend {
     ) -> tenferro_tensor::Result<()> {
         self.inner
             .with_backend_session(|__s| __s.elementwise_read_into(op, inputs, out))
+            .unwrap()
     }
 
     // Reproduce the previous read-half default: delegate an owned tensor and
@@ -700,7 +706,7 @@ impl BackendSessionHost for SessionCountingBackend {
     fn with_backend_session<R: Send>(
         &mut self,
         f: impl FnOnce(&mut dyn BackendSession) -> R + Send,
-    ) -> R {
+    ) -> Result<R, tenferro_tensor::SessionEntryError> {
         self.entries.set(self.entries.get() + 1);
         self.inner.with_backend_session(f)
     }
@@ -743,8 +749,8 @@ impl BackendSessionHost for WrongDTypeSessionBackend {
     fn with_backend_session<R: Send>(
         &mut self,
         f: impl FnOnce(&mut dyn tenferro_tensor::BackendSession) -> R + Send,
-    ) -> R {
-        tenferro_tensor::with_session_entry_guard(|| f(self))
+    ) -> Result<R, tenferro_tensor::SessionEntryError> {
+        tenferro_tensor::with_session_entry_guard("test backend", || f(self))
     }
 }
 
@@ -774,6 +780,7 @@ fn einsum_plan_mixed_chain_enters_one_session() {
             }
             Ok(x)
         })
+        .unwrap()
         .unwrap();
     assert_eq!(
         backend.entries.get(),
@@ -808,12 +815,14 @@ fn einsum_plan_execute_in_session_adds_no_nested_entry_to_caller_session() {
     let plan = ConcreteEinsumPlan::prepare([&lhs, &rhs], "ij,jk->ik").unwrap();
 
     backend.entries.set(0);
-    let result = backend.with_backend_session(|session| {
-        let x = plan
-            .execute([&lhs, &rhs], session)
-            .expect("einsum plan should execute inside the session");
-        x.exp(session).expect("exp should run in the session")
-    });
+    let result = backend
+        .with_backend_session(|session| {
+            let x = plan
+                .execute([&lhs, &rhs], session)
+                .expect("einsum plan should execute inside the session");
+            x.exp(session).expect("exp should run in the session")
+        })
+        .unwrap();
     assert_eq!(
         backend.entries.get(),
         1,
@@ -841,6 +850,7 @@ fn einsum_plan_typed_execute_rejects_wrong_backend_dtype() {
     // the typed session surface must reject it through into_typed_result.
     let in_session = backend
         .with_backend_session(|session| plan.execute_typed([&typed_lhs, &typed_rhs], session))
+        .unwrap()
         .unwrap_err();
     assert!(matches!(
         in_session,

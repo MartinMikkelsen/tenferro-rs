@@ -71,6 +71,7 @@ fn cuda_prepared_state_is_consumed_by_the_exact_binding_without_host_mapping() {
             })
             .expect("CUDA session")
         })
+        .unwrap()
         .expect("the CUDA binding must consume the provider-prepared state");
     drop(binding);
 }
@@ -87,6 +88,7 @@ fn cuda_duplicate_is_explicit_same_placement_allocation() {
 
     let duplicate = backend
         .with_backend_session(|__s| __s.to_contiguous_read(TensorRead::from_tensor(&input)))
+        .unwrap()
         .unwrap();
     let (duplicate_domain, duplicate_allocation) = identity(&duplicate);
     assert_eq!(duplicate_domain, domain);

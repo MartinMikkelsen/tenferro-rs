@@ -240,12 +240,14 @@ fn run_cpu(
 ) -> Result<Record, String> {
     let mut backend =
         CpuBackend::with_threads_and_kind(1, kind).map_err(|error| error.to_string())?;
-    backend.with_backend_session(|session| {
-        with_cpu_exec_session(session, |session| {
-            run_session(config, session, initial, blocks, accumulated)
+    backend
+        .with_backend_session(|session| {
+            with_cpu_exec_session(session, |session| {
+                run_session(config, session, initial, blocks, accumulated)
+            })
+            .ok_or_else(|| "CPU execution session unavailable".to_string())?
         })
-        .ok_or_else(|| "CPU execution session unavailable".to_string())?
-    })
+        .unwrap()
 }
 
 #[cfg(feature = "cuda")]
@@ -267,12 +269,14 @@ fn run_cuda(
         .collect::<Result<Vec<_>, _>>()?;
     let accumulated_device =
         upload_tensor(backend.runtime(), accumulated).map_err(|error| error.to_string())?;
-    let (mut record, q, r, reference_r) = backend.with_backend_session(|session| {
-        with_cuda_exec_session(session, |session| {
-            run_session_outputs(config, session, &initial, &blocks, &accumulated_device)
+    let (mut record, q, r, reference_r) = backend
+        .with_backend_session(|session| {
+            with_cuda_exec_session(session, |session| {
+                run_session_outputs(config, session, &initial, &blocks, &accumulated_device)
+            })
+            .ok_or_else(|| "CUDA execution session unavailable".to_string())?
         })
-        .ok_or_else(|| "CUDA execution session unavailable".to_string())?
-    })?;
+        .unwrap()?;
     let q = download_tensor(backend.runtime(), &q).map_err(|error| error.to_string())?;
     let r = download_tensor(backend.runtime(), &r).map_err(|error| error.to_string())?;
     let reference_r =

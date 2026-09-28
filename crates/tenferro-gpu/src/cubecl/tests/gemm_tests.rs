@@ -37,6 +37,7 @@ fn compare_rows_matmul(
                 &matmul_config(),
             )
         })
+        .unwrap()
         .unwrap();
     let lhs_gpu = upload(gpu, &lhs);
     let rhs_gpu = upload(gpu, &rhs);
@@ -48,6 +49,7 @@ fn compare_rows_matmul(
                 &matmul_config(),
             )
         })
+        .unwrap()
         .unwrap();
     (actual, expected)
 }
@@ -64,6 +66,7 @@ fn run_dot_general_case(lhs: Tensor, rhs: Tensor, config: DotGeneralConfig, tol:
                 &config,
             )
         })
+        .unwrap()
         .unwrap();
     let gpu_lhs = upload(&gpu, &lhs);
     let gpu_rhs = upload(&gpu, &rhs);
@@ -75,6 +78,7 @@ fn run_dot_general_case(lhs: Tensor, rhs: Tensor, config: DotGeneralConfig, tol:
                 &config,
             )
         })
+        .unwrap()
         .unwrap();
     let actual = download(&gpu, &actual_gpu);
 
@@ -102,6 +106,7 @@ fn cuda_cutensor_cache_eviction_keeps_inflight_workspace_valid() {
                 &matmul_config(),
             )
         })
+        .unwrap()
         .unwrap();
     let expected_b = cpu
         .with_backend_session(|__s| {
@@ -111,6 +116,7 @@ fn cuda_cutensor_cache_eviction_keeps_inflight_workspace_valid() {
                 &matmul_config(),
             )
         })
+        .unwrap()
         .unwrap();
 
     let gpu_lhs_a = upload(&gpu, &lhs_a);
@@ -125,6 +131,7 @@ fn cuda_cutensor_cache_eviction_keeps_inflight_workspace_valid() {
                 &matmul_config(),
             )
         })
+        .unwrap()
         .unwrap();
     assert!(
         gpu.cutensor_workspace_bytes().unwrap() > 0,
@@ -139,6 +146,7 @@ fn cuda_cutensor_cache_eviction_keeps_inflight_workspace_valid() {
                 &matmul_config(),
             )
         })
+        .unwrap()
         .unwrap();
     let cache_stats = gpu.cutensor_plan_cache_stats().unwrap();
     assert_eq!(cache_stats.entries, 1);

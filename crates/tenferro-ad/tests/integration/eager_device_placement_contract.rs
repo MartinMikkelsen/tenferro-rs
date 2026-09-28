@@ -76,7 +76,7 @@ fn eager_generated_constant_and_shape_outputs_are_uploaded_before_backend_ops() 
         "fn exec_standard_op_on_tensor_reads<B: BackendSessionHost>",
         "pub(crate) fn exec_standard_op_on_tensor_reads_in_session",
     );
-    assert!(read_path.contains("backend.with_backend_session(|exec|"));
+    assert!(read_path.contains(".with_backend_session(|exec|"));
     assert!(read_path.contains("exec_standard_op_on_tensor_reads_with_session(op, inputs, exec)"));
 
     let tensor_path = source_section(
@@ -84,7 +84,7 @@ fn eager_generated_constant_and_shape_outputs_are_uploaded_before_backend_ops() 
         "fn exec_standard_op_on_tensors<B: BackendSessionHost>",
         "pub(crate) fn exec_standard_op_on_tensors_in_session",
     );
-    assert!(tensor_path.contains("backend.with_backend_session(|exec|"));
+    assert!(tensor_path.contains(".with_backend_session(|exec|"));
     assert!(tensor_path.contains("exec_standard_op_on_tensors_with_session(op, inputs, exec)"));
 }
 

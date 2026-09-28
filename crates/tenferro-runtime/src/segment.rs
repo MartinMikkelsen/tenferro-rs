@@ -290,7 +290,7 @@ pub(crate) fn eval_exec_segmented_slots_with_cache_and_workspace<
                         region_inst_idx += segment_instruction_count(segment);
                     }
                     Ok::<(), crate::error::Error>(())
-                })?;
+                })??;
             }
             if segment_idx < segments.len() {
                 let Segment::Ffi(inst) = &segments[segment_idx] else {
@@ -312,7 +312,7 @@ pub(crate) fn eval_exec_segmented_slots_with_cache_and_workspace<
             }
         }
 
-        backend.with_backend_session(|exec| collect_outputs_from(program, slots, exec))
+        backend.with_backend_session(|exec| collect_outputs_from(program, slots, exec))?
     })();
     slots.clear();
     result
@@ -396,7 +396,7 @@ pub(crate) fn eval_exec_segmented_slot_values_with_cache_and_workspace<
                         region_inst_idx += segment_instruction_count(segment);
                     }
                     Ok::<(), crate::error::Error>(())
-                })?;
+                })??;
             }
             if segment_idx < segments.len() {
                 let Segment::Ffi(inst) = &segments[segment_idx] else {
@@ -421,7 +421,7 @@ pub(crate) fn eval_exec_segmented_slot_values_with_cache_and_workspace<
                             reclaim_last_use_inputs_exec(slots, inst, exec);
                         }
                         Ok(handled)
-                    })?
+                    })??
                 } else {
                     false
                 };
@@ -439,7 +439,7 @@ pub(crate) fn eval_exec_segmented_slot_values_with_cache_and_workspace<
             }
         }
 
-        backend.with_backend_session(|exec| collect_output_values_from(program, slots, exec))
+        backend.with_backend_session(|exec| collect_output_values_from(program, slots, exec))?
     })();
     slots.clear();
     result
@@ -503,7 +503,7 @@ fn eval_exec_segmented_session_regions_slots_with_workspace<'input, B: TensorBac
                         region_inst_idx += segment_instruction_count(segment);
                     }
                     Ok::<(), crate::error::Error>(())
-                })?;
+                })??;
                 inst_idx = instruction_start
                     + segments[region_start..region_end]
                         .iter()
@@ -529,7 +529,7 @@ fn eval_exec_segmented_session_regions_slots_with_workspace<'input, B: TensorBac
             }
         }
 
-        backend.with_backend_session(|exec| collect_outputs_from(program, slots, exec))
+        backend.with_backend_session(|exec| collect_outputs_from(program, slots, exec))?
     })();
     slots.clear();
     result
@@ -581,7 +581,7 @@ fn eval_exec_segmented_session_regions_slot_values_with_workspace<
                         region_inst_idx += segment_instruction_count(segment);
                     }
                     Ok::<(), crate::error::Error>(())
-                })?;
+                })??;
                 inst_idx = instruction_start
                     + segments[region_start..region_end]
                         .iter()
@@ -607,7 +607,7 @@ fn eval_exec_segmented_session_regions_slot_values_with_workspace<
                             reclaim_last_use_inputs_exec(slots, inst, exec);
                         }
                         Ok(handled)
-                    })?
+                    })??
                 } else {
                     false
                 };
@@ -625,7 +625,7 @@ fn eval_exec_segmented_session_regions_slot_values_with_workspace<
             }
         }
 
-        backend.with_backend_session(|exec| collect_output_values_from(program, slots, exec))
+        backend.with_backend_session(|exec| collect_output_values_from(program, slots, exec))?
     })();
     slots.clear();
     result
@@ -761,7 +761,7 @@ fn eval_exec_segmented_single_session_slots_with_workspace<'input, B: TensorBack
                 };
             }
             collect_outputs_from(program, slots, exec)
-        })
+        })?
     })();
     slots.clear();
     result
@@ -833,7 +833,7 @@ fn eval_exec_segmented_single_session_slot_values_with_workspace<'input, B: Tens
                 };
             }
             collect_output_values_from(program, slots, exec)
-        })
+        })?
     })();
     slots.clear();
     result

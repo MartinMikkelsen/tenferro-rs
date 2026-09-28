@@ -270,7 +270,7 @@ macro_rules! delegate_recording_backend_methods {
         $(
             fn $method(&mut self, $($arg: $ty),*) -> $ret {
                 self.inner
-                    .with_backend_session(|__s| __s.$method($($arg),*))
+                    .with_backend_session(|__s| __s.$method($($arg),*))?
             }
         )*
     };
@@ -301,7 +301,7 @@ impl TensorElementwise for RecordingBackend {
         out: TensorWrite<'_>,
     ) -> TensorResult<()> {
         self.inner
-            .with_backend_session(|__s| __s.elementwise_read_into(op, inputs, out))
+            .with_backend_session(|__s| __s.elementwise_read_into(op, inputs, out))?
     }
 
     delegate_recording_backend_methods! {
@@ -314,7 +314,7 @@ impl TensorElementwise for RecordingBackend {
         let rhs = tenferro_tensor::backend::read_owned_tensor("add", rhs)?;
         self.inner.with_backend_session(|__s| {
             __s.add_read(TensorRead::from_tensor(lhs), TensorRead::from_tensor(rhs))
-        })
+        })?
     }
 
     // Reproduce the previous read-half default: delegate an owned tensor and
@@ -324,7 +324,7 @@ impl TensorElementwise for RecordingBackend {
         let rhs = tenferro_tensor::backend::read_owned_tensor("sub", rhs)?;
         self.inner.with_backend_session(|__s| {
             __s.sub_read(TensorRead::from_tensor(lhs), TensorRead::from_tensor(rhs))
-        })
+        })?
     }
 
     // Reproduce the previous read-half default: delegate an owned tensor and
@@ -332,7 +332,7 @@ impl TensorElementwise for RecordingBackend {
     fn neg_read(&mut self, input: TensorRead<'_>) -> TensorResult<Tensor> {
         let input = tenferro_tensor::backend::read_owned_tensor("neg", input)?;
         self.inner
-            .with_backend_session(|__s| __s.neg_read(TensorRead::from_tensor(input)))
+            .with_backend_session(|__s| __s.neg_read(TensorRead::from_tensor(input)))?
     }
 
     // Reproduce the previous read-half default: delegate an owned tensor and
@@ -340,7 +340,7 @@ impl TensorElementwise for RecordingBackend {
     fn conj_read(&mut self, input: TensorRead<'_>) -> TensorResult<Tensor> {
         let input = tenferro_tensor::backend::read_owned_tensor("conj", input)?;
         self.inner
-            .with_backend_session(|__s| __s.conj_read(TensorRead::from_tensor(input)))
+            .with_backend_session(|__s| __s.conj_read(TensorRead::from_tensor(input)))?
     }
 
     // Reproduce the previous read-half default: delegate an owned tensor and
@@ -350,7 +350,7 @@ impl TensorElementwise for RecordingBackend {
         let rhs = tenferro_tensor::backend::read_owned_tensor("div", rhs)?;
         self.inner.with_backend_session(|__s| {
             __s.div_read(TensorRead::from_tensor(lhs), TensorRead::from_tensor(rhs))
-        })
+        })?
     }
 
     // Reproduce the previous read-half default: delegate an owned tensor and
@@ -358,7 +358,7 @@ impl TensorElementwise for RecordingBackend {
     fn abs_read(&mut self, input: TensorRead<'_>) -> TensorResult<Tensor> {
         let input = tenferro_tensor::backend::read_owned_tensor("abs", input)?;
         self.inner
-            .with_backend_session(|__s| __s.abs_read(TensorRead::from_tensor(input)))
+            .with_backend_session(|__s| __s.abs_read(TensorRead::from_tensor(input)))?
     }
 
     // Reproduce the previous read-half default: delegate an owned tensor and
@@ -366,7 +366,7 @@ impl TensorElementwise for RecordingBackend {
     fn sign_read(&mut self, input: TensorRead<'_>) -> TensorResult<Tensor> {
         let input = tenferro_tensor::backend::read_owned_tensor("sign", input)?;
         self.inner
-            .with_backend_session(|__s| __s.sign_read(TensorRead::from_tensor(input)))
+            .with_backend_session(|__s| __s.sign_read(TensorRead::from_tensor(input)))?
     }
 
     // Reproduce the previous read-half default: delegate an owned tensor and
@@ -376,7 +376,7 @@ impl TensorElementwise for RecordingBackend {
         let rhs = tenferro_tensor::backend::read_owned_tensor("maximum", rhs)?;
         self.inner.with_backend_session(|__s| {
             __s.maximum_read(TensorRead::from_tensor(lhs), TensorRead::from_tensor(rhs))
-        })
+        })?
     }
 
     // Reproduce the previous read-half default: delegate an owned tensor and
@@ -386,7 +386,7 @@ impl TensorElementwise for RecordingBackend {
         let rhs = tenferro_tensor::backend::read_owned_tensor("minimum", rhs)?;
         self.inner.with_backend_session(|__s| {
             __s.minimum_read(TensorRead::from_tensor(lhs), TensorRead::from_tensor(rhs))
-        })
+        })?
     }
 
     // Reproduce the previous read-half default: delegate an owned tensor and
@@ -405,7 +405,7 @@ impl TensorElementwise for RecordingBackend {
                 TensorRead::from_tensor(rhs),
                 dir,
             )
-        })
+        })?
     }
 
     // Reproduce the previous read-half default: delegate an owned tensor and
@@ -425,7 +425,7 @@ impl TensorElementwise for RecordingBackend {
                 TensorRead::from_tensor(on_true),
                 TensorRead::from_tensor(on_false),
             )
-        })
+        })?
     }
 
     // Reproduce the previous read-half default: delegate an owned tensor and
@@ -445,7 +445,7 @@ impl TensorElementwise for RecordingBackend {
                 TensorRead::from_tensor(lower),
                 TensorRead::from_tensor(upper),
             )
-        })
+        })?
     }
 }
 
@@ -456,7 +456,7 @@ impl TensorAnalytic for RecordingBackend {
     fn exp_read(&mut self, input: tenferro_tensor::TensorRead<'_>) -> TensorResult<Tensor> {
         let input = tenferro_tensor::backend::read_owned_tensor("exp", input)?;
         self.inner
-            .with_backend_session(|__s| __s.exp_read(TensorRead::from_tensor(input)))
+            .with_backend_session(|__s| __s.exp_read(TensorRead::from_tensor(input)))?
     }
 
     // Reproduce the previous read-half default: delegate an owned tensor and
@@ -464,7 +464,7 @@ impl TensorAnalytic for RecordingBackend {
     fn log_read(&mut self, input: tenferro_tensor::TensorRead<'_>) -> TensorResult<Tensor> {
         let input = tenferro_tensor::backend::read_owned_tensor("log", input)?;
         self.inner
-            .with_backend_session(|__s| __s.log_read(TensorRead::from_tensor(input)))
+            .with_backend_session(|__s| __s.log_read(TensorRead::from_tensor(input)))?
     }
 
     // Reproduce the previous read-half default: delegate an owned tensor and
@@ -472,7 +472,7 @@ impl TensorAnalytic for RecordingBackend {
     fn sin_read(&mut self, input: tenferro_tensor::TensorRead<'_>) -> TensorResult<Tensor> {
         let input = tenferro_tensor::backend::read_owned_tensor("sin", input)?;
         self.inner
-            .with_backend_session(|__s| __s.sin_read(TensorRead::from_tensor(input)))
+            .with_backend_session(|__s| __s.sin_read(TensorRead::from_tensor(input)))?
     }
 
     // Reproduce the previous read-half default: delegate an owned tensor and
@@ -480,7 +480,7 @@ impl TensorAnalytic for RecordingBackend {
     fn cos_read(&mut self, input: tenferro_tensor::TensorRead<'_>) -> TensorResult<Tensor> {
         let input = tenferro_tensor::backend::read_owned_tensor("cos", input)?;
         self.inner
-            .with_backend_session(|__s| __s.cos_read(TensorRead::from_tensor(input)))
+            .with_backend_session(|__s| __s.cos_read(TensorRead::from_tensor(input)))?
     }
 
     // Reproduce the previous read-half default: delegate an owned tensor and
@@ -488,7 +488,7 @@ impl TensorAnalytic for RecordingBackend {
     fn tanh_read(&mut self, input: tenferro_tensor::TensorRead<'_>) -> TensorResult<Tensor> {
         let input = tenferro_tensor::backend::read_owned_tensor("tanh", input)?;
         self.inner
-            .with_backend_session(|__s| __s.tanh_read(TensorRead::from_tensor(input)))
+            .with_backend_session(|__s| __s.tanh_read(TensorRead::from_tensor(input)))?
     }
 
     // Reproduce the previous read-half default: delegate an owned tensor and
@@ -496,7 +496,7 @@ impl TensorAnalytic for RecordingBackend {
     fn sqrt_read(&mut self, input: tenferro_tensor::TensorRead<'_>) -> TensorResult<Tensor> {
         let input = tenferro_tensor::backend::read_owned_tensor("sqrt", input)?;
         self.inner
-            .with_backend_session(|__s| __s.sqrt_read(TensorRead::from_tensor(input)))
+            .with_backend_session(|__s| __s.sqrt_read(TensorRead::from_tensor(input)))?
     }
 
     // Reproduce the previous read-half default: delegate an owned tensor and
@@ -504,7 +504,7 @@ impl TensorAnalytic for RecordingBackend {
     fn rsqrt_read(&mut self, input: tenferro_tensor::TensorRead<'_>) -> TensorResult<Tensor> {
         let input = tenferro_tensor::backend::read_owned_tensor("rsqrt", input)?;
         self.inner
-            .with_backend_session(|__s| __s.rsqrt_read(TensorRead::from_tensor(input)))
+            .with_backend_session(|__s| __s.rsqrt_read(TensorRead::from_tensor(input)))?
     }
 
     // Reproduce the previous read-half default: delegate an owned tensor and
@@ -518,7 +518,7 @@ impl TensorAnalytic for RecordingBackend {
         let rhs = tenferro_tensor::backend::read_owned_tensor("pow", rhs)?;
         self.inner.with_backend_session(|__s| {
             __s.pow_read(TensorRead::from_tensor(lhs), TensorRead::from_tensor(rhs))
-        })
+        })?
     }
 
     // Reproduce the previous read-half default: delegate an owned tensor and
@@ -526,7 +526,7 @@ impl TensorAnalytic for RecordingBackend {
     fn expm1_read(&mut self, input: tenferro_tensor::TensorRead<'_>) -> TensorResult<Tensor> {
         let input = tenferro_tensor::backend::read_owned_tensor("expm1", input)?;
         self.inner
-            .with_backend_session(|__s| __s.expm1_read(TensorRead::from_tensor(input)))
+            .with_backend_session(|__s| __s.expm1_read(TensorRead::from_tensor(input)))?
     }
 
     // Reproduce the previous read-half default: delegate an owned tensor and
@@ -534,7 +534,7 @@ impl TensorAnalytic for RecordingBackend {
     fn log1p_read(&mut self, input: tenferro_tensor::TensorRead<'_>) -> TensorResult<Tensor> {
         let input = tenferro_tensor::backend::read_owned_tensor("log1p", input)?;
         self.inner
-            .with_backend_session(|__s| __s.log1p_read(TensorRead::from_tensor(input)))
+            .with_backend_session(|__s| __s.log1p_read(TensorRead::from_tensor(input)))?
     }
 }
 
@@ -543,12 +543,12 @@ impl TensorStructural for RecordingBackend {
     fn to_contiguous_read(&mut self, input: TensorRead<'_>) -> TensorResult<Tensor> {
         self.materializations.fetch_add(1, Ordering::Relaxed);
         self.inner
-            .with_backend_session(|__s| __s.to_contiguous_read(input))
+            .with_backend_session(|__s| __s.to_contiguous_read(input))?
     }
 
     fn copy_read_into(&mut self, src: TensorRead<'_>, dst: TensorWrite<'_>) -> TensorResult<()> {
         self.inner
-            .with_backend_session(|__s| __s.copy_read_into(src, dst))
+            .with_backend_session(|__s| __s.copy_read_into(src, dst))?
     }
 
     delegate_recording_backend_methods! {
@@ -565,7 +565,7 @@ impl TensorStructural for RecordingBackend {
     fn transpose_read(&mut self, input: TensorRead<'_>, perm: &[usize]) -> TensorResult<Tensor> {
         let input = tenferro_tensor::backend::read_owned_tensor("transpose", input)?;
         self.inner
-            .with_backend_session(|__s| __s.transpose_read(TensorRead::from_tensor(input), perm))
+            .with_backend_session(|__s| __s.transpose_read(TensorRead::from_tensor(input), perm))?
     }
 
     // The previous read-half default delegated owned tensors to the one-shot
@@ -574,7 +574,7 @@ impl TensorStructural for RecordingBackend {
     fn reshape_read(&mut self, input: TensorRead<'_>, shape: &[usize]) -> TensorResult<Tensor> {
         let input = tenferro_tensor::backend::read_owned_tensor("reshape", input)?;
         self.inner
-            .with_backend_session(|__s| __s.reshape_read(TensorRead::from_tensor(input), shape))
+            .with_backend_session(|__s| __s.reshape_read(TensorRead::from_tensor(input), shape))?
     }
 
     // The previous read-half default delegated owned tensors to the one-shot
@@ -589,7 +589,7 @@ impl TensorStructural for RecordingBackend {
         let input = tenferro_tensor::backend::read_owned_tensor("broadcast_in_dim", input)?;
         self.inner.with_backend_session(|__s| {
             __s.broadcast_in_dim_read(TensorRead::from_tensor(input), shape, dims)
-        })
+        })?
     }
 }
 
@@ -605,25 +605,26 @@ impl TensorReduction for RecordingBackend {
     fn reduce_sum_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> TensorResult<Tensor> {
         let input = tenferro_tensor::backend::read_owned_tensor("reduce_sum", input)?;
         self.inner
-            .with_backend_session(|__s| __s.reduce_sum_read(TensorRead::from_tensor(input), axes))
+            .with_backend_session(|__s| __s.reduce_sum_read(TensorRead::from_tensor(input), axes))?
     }
 
     fn reduce_prod_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> TensorResult<Tensor> {
         let input = tenferro_tensor::backend::read_owned_tensor("reduce_prod", input)?;
-        self.inner
-            .with_backend_session(|__s| __s.reduce_prod_read(TensorRead::from_tensor(input), axes))
+        self.inner.with_backend_session(|__s| {
+            __s.reduce_prod_read(TensorRead::from_tensor(input), axes)
+        })?
     }
 
     fn reduce_max_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> TensorResult<Tensor> {
         let input = tenferro_tensor::backend::read_owned_tensor("reduce_max", input)?;
         self.inner
-            .with_backend_session(|__s| __s.reduce_max_read(TensorRead::from_tensor(input), axes))
+            .with_backend_session(|__s| __s.reduce_max_read(TensorRead::from_tensor(input), axes))?
     }
 
     fn reduce_min_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> TensorResult<Tensor> {
         let input = tenferro_tensor::backend::read_owned_tensor("reduce_min", input)?;
         self.inner
-            .with_backend_session(|__s| __s.reduce_min_read(TensorRead::from_tensor(input), axes))
+            .with_backend_session(|__s| __s.reduce_min_read(TensorRead::from_tensor(input), axes))?
     }
 }
 
@@ -659,7 +660,7 @@ impl TensorDot for RecordingBackend {
                     TensorRead::from_tensor(rhs),
                     config,
                 )
-            }),
+            })?,
             _ => {
                 let lhs = self.to_contiguous_read(lhs)?;
                 let rhs = self.to_contiguous_read(rhs)?;
@@ -669,7 +670,7 @@ impl TensorDot for RecordingBackend {
                         TensorRead::from_tensor(&rhs),
                         config,
                     )
-                })
+                })?
             }
         }
     }
@@ -696,9 +697,9 @@ impl BackendSessionHost for RecordingBackend {
     fn with_backend_session<R: Send>(
         &mut self,
         f: impl FnOnce(&mut dyn BackendSession) -> R + Send,
-    ) -> R {
+    ) -> Result<R, tenferro_tensor::SessionEntryError> {
         self.sessions.fetch_add(1, Ordering::Relaxed);
-        f(self)
+        Ok(f(self))
     }
 }
 #[cfg(test)]
@@ -712,7 +713,7 @@ impl BackendSessionHost for EagerBackend {
     fn with_backend_session<R: Send>(
         &mut self,
         f: impl FnOnce(&mut dyn BackendSession) -> R + Send,
-    ) -> R {
+    ) -> Result<R, tenferro_tensor::SessionEntryError> {
         // Hand the caller the *concrete* backend's session. The composite enum
         // is not a session: its read halves deliberately reproduce the
         // read-boundary policy (owned inputs only), while the concrete sessions

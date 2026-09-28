@@ -76,100 +76,102 @@ fn same_shape_wrappers_do_not_allocate_operand_copies() {
     let b = Tensor::from_vec_col_major([LEN], vec![3.0_f64; LEN]).unwrap();
     let mut backend = CpuBackend::with_threads(1).unwrap();
     assert_eq!(backend.num_threads(), 1);
-    backend.with_backend_session(|session: &mut dyn BackendSession| {
-        macro_rules! check {
-            ($name:ident, $read:ident) => {{
-                drop(
-                    session
-                        .$read(TensorRead::from_tensor(&a), TensorRead::from_tensor(&b))
-                        .unwrap(),
-                );
-                eprintln!(
-                    "{}: raw then public (effective backend threads=1)",
-                    stringify!($name)
-                );
-                let (raw, baseline) = allocations(|| {
-                    session
-                        .$read(TensorRead::from_tensor(&a), TensorRead::from_tensor(&b))
-                        .unwrap()
-                });
-                let (public, actual) = allocations(|| a.$name(&b, session).unwrap());
-                assert_eq!(
-                    public.as_slice::<f64>().unwrap(),
-                    raw.as_slice::<f64>().unwrap()
-                );
-                assert!(
-                    actual <= baseline,
-                    "{}: public={actual}, backend={baseline}",
-                    stringify!($name)
-                );
-            }};
-        }
-        check!(add, add_read);
-        check!(sub, sub_read);
-        check!(mul, mul_read);
-        check!(div, div_read);
-        check!(rem, rem_read);
-        check!(pow, pow_read);
-        check!(maximum, maximum_read);
-        check!(minimum, minimum_read);
-        eprintln!("compare: raw then public");
-        let (raw, baseline) = allocations(|| {
-            session
-                .compare_read(
-                    TensorRead::from_tensor(&a),
-                    TensorRead::from_tensor(&b),
-                    &CompareDir::Lt,
-                )
-                .unwrap()
-        });
-        let (public, actual) = allocations(|| a.compare(&b, CompareDir::Lt, session).unwrap());
-        assert_eq!(
-            public.as_slice::<bool>().unwrap(),
-            raw.as_slice::<bool>().unwrap()
-        );
-        assert!(
-            actual <= baseline,
-            "compare: public={actual}, backend={baseline}"
-        );
-        eprintln!("clamp: raw then public");
-        let (raw, baseline) = allocations(|| {
-            session
-                .clamp_read(
-                    TensorRead::from_tensor(&a),
-                    TensorRead::from_tensor(&a),
-                    TensorRead::from_tensor(&b),
-                )
-                .unwrap()
-        });
-        let (public, actual) = allocations(|| a.clamp(&a, &b, session).unwrap());
-        assert_eq!(
-            public.as_slice::<f64>().unwrap(),
-            raw.as_slice::<f64>().unwrap()
-        );
-        assert!(
-            actual <= baseline,
-            "clamp: public={actual}, backend={baseline}"
-        );
-        let condition = Tensor::from_vec_col_major([LEN], vec![true; LEN]).unwrap();
-        eprintln!("select: raw then public");
-        let (raw, baseline) = allocations(|| {
-            session
-                .select_read(
-                    tenferro_tensor::TensorRead::from_tensor(&condition),
-                    tenferro_tensor::TensorRead::from_tensor(&a),
-                    tenferro_tensor::TensorRead::from_tensor(&b),
-                )
-                .unwrap()
-        });
-        let (public, actual) = allocations(|| condition.where_select(&a, &b, session).unwrap());
-        assert_eq!(
-            public.as_slice::<f64>().unwrap(),
-            raw.as_slice::<f64>().unwrap()
-        );
-        assert!(
-            actual <= baseline,
-            "select: public={actual}, backend={baseline}"
-        );
-    });
+    backend
+        .with_backend_session(|session: &mut dyn BackendSession| {
+            macro_rules! check {
+                ($name:ident, $read:ident) => {{
+                    drop(
+                        session
+                            .$read(TensorRead::from_tensor(&a), TensorRead::from_tensor(&b))
+                            .unwrap(),
+                    );
+                    eprintln!(
+                        "{}: raw then public (effective backend threads=1)",
+                        stringify!($name)
+                    );
+                    let (raw, baseline) = allocations(|| {
+                        session
+                            .$read(TensorRead::from_tensor(&a), TensorRead::from_tensor(&b))
+                            .unwrap()
+                    });
+                    let (public, actual) = allocations(|| a.$name(&b, session).unwrap());
+                    assert_eq!(
+                        public.as_slice::<f64>().unwrap(),
+                        raw.as_slice::<f64>().unwrap()
+                    );
+                    assert!(
+                        actual <= baseline,
+                        "{}: public={actual}, backend={baseline}",
+                        stringify!($name)
+                    );
+                }};
+            }
+            check!(add, add_read);
+            check!(sub, sub_read);
+            check!(mul, mul_read);
+            check!(div, div_read);
+            check!(rem, rem_read);
+            check!(pow, pow_read);
+            check!(maximum, maximum_read);
+            check!(minimum, minimum_read);
+            eprintln!("compare: raw then public");
+            let (raw, baseline) = allocations(|| {
+                session
+                    .compare_read(
+                        TensorRead::from_tensor(&a),
+                        TensorRead::from_tensor(&b),
+                        &CompareDir::Lt,
+                    )
+                    .unwrap()
+            });
+            let (public, actual) = allocations(|| a.compare(&b, CompareDir::Lt, session).unwrap());
+            assert_eq!(
+                public.as_slice::<bool>().unwrap(),
+                raw.as_slice::<bool>().unwrap()
+            );
+            assert!(
+                actual <= baseline,
+                "compare: public={actual}, backend={baseline}"
+            );
+            eprintln!("clamp: raw then public");
+            let (raw, baseline) = allocations(|| {
+                session
+                    .clamp_read(
+                        TensorRead::from_tensor(&a),
+                        TensorRead::from_tensor(&a),
+                        TensorRead::from_tensor(&b),
+                    )
+                    .unwrap()
+            });
+            let (public, actual) = allocations(|| a.clamp(&a, &b, session).unwrap());
+            assert_eq!(
+                public.as_slice::<f64>().unwrap(),
+                raw.as_slice::<f64>().unwrap()
+            );
+            assert!(
+                actual <= baseline,
+                "clamp: public={actual}, backend={baseline}"
+            );
+            let condition = Tensor::from_vec_col_major([LEN], vec![true; LEN]).unwrap();
+            eprintln!("select: raw then public");
+            let (raw, baseline) = allocations(|| {
+                session
+                    .select_read(
+                        tenferro_tensor::TensorRead::from_tensor(&condition),
+                        tenferro_tensor::TensorRead::from_tensor(&a),
+                        tenferro_tensor::TensorRead::from_tensor(&b),
+                    )
+                    .unwrap()
+            });
+            let (public, actual) = allocations(|| condition.where_select(&a, &b, session).unwrap());
+            assert_eq!(
+                public.as_slice::<f64>().unwrap(),
+                raw.as_slice::<f64>().unwrap()
+            );
+            assert!(
+                actual <= baseline,
+                "select: public={actual}, backend={baseline}"
+            );
+        })
+        .unwrap();
 }

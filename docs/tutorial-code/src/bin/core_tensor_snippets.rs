@@ -89,7 +89,7 @@ let (sum, product, negated) = backend.with_backend_session(|session| {
     let product = a.mul(&b, session).unwrap();
     let negated = a.neg(session).unwrap();
     (sum, product, negated)
-});
+})?;
 
 assert_eq!(sum.as_slice::<f64>().unwrap(), &[5.0, 7.0, 9.0]);
 assert_eq!(product.as_slice::<f64>().unwrap(), &[4.0, 10.0, 18.0]);
@@ -126,7 +126,7 @@ backend.with_backend_session(|session| {
     assert_eq!(eigh.0.shape(), &[3]);
     assert_eq!(eigh.1.shape(), &[3, 3]);
     assert_eq!(x.shape(), &[3]);
-});
+})?;
         // snippet-end:eager_operations_5
         Ok(())
     }
@@ -149,7 +149,7 @@ let (at, flat, col_sum) = backend.with_backend_session(|session| {
     let flat = a.reshape(&[6], session).unwrap();
     let col_sum = a.reduce_sum(&[0], session).unwrap();
     (at, flat, col_sum)
-});
+})?;
 assert_eq!(at.shape(), &[3, 2]);
 assert_eq!(flat.shape(), &[6]);
 assert_eq!(col_sum.shape(), &[3]);
@@ -429,7 +429,7 @@ let (sum, product, total, mask, selected) = backend.with_backend_session(|sessio
     let mask = sum.compare(&product, CompareDir::Lt, session).unwrap();
     let selected = mask.where_select(&sum, &product, session).unwrap();
     (sum, product, total, mask, selected)
-});
+})?;
 
 assert_eq!(sum.as_slice().unwrap(), &[5.0, 7.0, 9.0]);
 assert_eq!(product.as_slice().unwrap(), &[4.0, 10.0, 18.0]);
@@ -473,7 +473,7 @@ let (sum, product) = backend.with_backend_session(|session| {
     let sum = a.add(&b, session).unwrap();
     let product = a.mul(&b, session).unwrap();
     (sum, product)
-});
+})?;
 
 assert_eq!(sum.as_slice::<f64>().unwrap(), &[5.0, 7.0, 9.0]);
 assert_eq!(product.as_slice::<f64>().unwrap(), &[4.0, 10.0, 18.0]);
@@ -596,7 +596,7 @@ let (reshaped, transposed) = backend.with_backend_session(|session| {
     let reshaped = a.reshape(&[6], session).unwrap();
     let transposed = a.transpose(&[1, 0], session).unwrap();
     (reshaped, transposed)
-});
+})?;
 
 assert_eq!(reshaped.shape(), &[6]);
 assert_eq!(reshaped.as_slice::<f64>().unwrap(), &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
@@ -647,7 +647,7 @@ let (row_sums, total) = backend.with_backend_session(|session| {
     let row_sums = a.reduce_sum(&[1], session).unwrap();
     let total = a.reduce_sum(&[0, 1], session).unwrap();
     (row_sums, total)
-});
+})?;
 
 assert_eq!(row_sums.shape(), &[2]);
 assert_eq!(row_sums.as_slice::<f64>().unwrap(), &[9.0, 12.0]);

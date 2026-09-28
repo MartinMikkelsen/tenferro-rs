@@ -32,6 +32,7 @@ fn typed_tensor_reduction_and_structural_wrappers_preserve_values() {
                 ])
             },
         )
+        .unwrap()
         .unwrap();
     assert_eq!(row_sums.shape(), &[2]);
     assert_close(row_sums.host_data().unwrap(), &[6.0, 15.0]);
@@ -62,6 +63,7 @@ fn typed_tensor_matmul_rejects_non_matrix_inputs_without_rank_underflow() {
 
     let err = backend
         .with_backend_session(|session| scalar.matmul(&vector, session))
+        .unwrap()
         .unwrap_err();
 
     assert!(matches!(
@@ -84,6 +86,7 @@ fn direct_tensor_broadcast_uses_the_shared_shape_payload() {
 
     let error = backend
         .with_backend_session(|session| lhs.add(&rhs, session))
+        .unwrap()
         .unwrap_err();
 
     assert!(matches!(

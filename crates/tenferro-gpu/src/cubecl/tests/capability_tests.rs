@@ -235,42 +235,51 @@ fn run_supported_case(
             b.with_backend_session(|__s| {
                 __s.add_read(TensorRead::from_tensor(l), TensorRead::from_tensor(r))
             })
+            .unwrap()
         }),
         PrimitiveOpKind::Sub => assert_binary_matches(cpu, gpu, entry, |b, l, r| {
             b.with_backend_session(|__s| {
                 __s.sub_read(TensorRead::from_tensor(l), TensorRead::from_tensor(r))
             })
+            .unwrap()
         }),
         PrimitiveOpKind::Mul => assert_binary_matches(cpu, gpu, entry, |b, l, r| {
             b.with_backend_session(|__s| {
                 __s.mul_read(TensorRead::from_tensor(l), TensorRead::from_tensor(r))
             })
+            .unwrap()
         }),
         PrimitiveOpKind::Neg => assert_unary_matches(cpu, gpu, entry, |b, x| {
             b.with_backend_session(|__s| __s.neg_read(TensorRead::from_tensor(x)))
+                .unwrap()
         }),
         PrimitiveOpKind::Conj => assert_unary_matches(cpu, gpu, entry, |b, x| {
             b.with_backend_session(|__s| __s.conj_read(TensorRead::from_tensor(x)))
+                .unwrap()
         }),
         PrimitiveOpKind::Div => assert_binary_matches(cpu, gpu, entry, |b, l, r| {
             b.with_backend_session(|__s| {
                 __s.div_read(TensorRead::from_tensor(l), TensorRead::from_tensor(r))
             })
+            .unwrap()
         }),
         PrimitiveOpKind::Rem => assert_binary_matches(cpu, gpu, entry, |b, l, r| {
-            b.with_backend_session(|__s| __s.rem(l, r))
+            b.with_backend_session(|__s| __s.rem(l, r)).unwrap()
         }),
         PrimitiveOpKind::Abs => assert_unary_matches(cpu, gpu, entry, |b, x| {
             b.with_backend_session(|__s| __s.abs_read(TensorRead::from_tensor(x)))
+                .unwrap()
         }),
         PrimitiveOpKind::Sign => assert_unary_matches(cpu, gpu, entry, |b, x| {
             b.with_backend_session(|__s| __s.sign_read(TensorRead::from_tensor(x)))
+                .unwrap()
         }),
         PrimitiveOpKind::Maximum => {
             assert_binary_matches(cpu, gpu, entry, |b, l, r| {
                 b.with_backend_session(|__s| {
                     __s.maximum_read(TensorRead::from_tensor(l), TensorRead::from_tensor(r))
                 })
+                .unwrap()
             });
         }
         PrimitiveOpKind::Minimum => {
@@ -278,6 +287,7 @@ fn run_supported_case(
                 b.with_backend_session(|__s| {
                     __s.minimum_read(TensorRead::from_tensor(l), TensorRead::from_tensor(r))
                 })
+                .unwrap()
             });
         }
         PrimitiveOpKind::Compare => assert_compare_matches(cpu, gpu, entry),
@@ -285,56 +295,71 @@ fn run_supported_case(
         PrimitiveOpKind::Clamp => assert_clamp_matches(cpu, gpu, entry),
         PrimitiveOpKind::Exp => assert_unary_matches(cpu, gpu, entry, |b, x| {
             b.with_backend_session(|__s| __s.exp_read(TensorRead::from_tensor(x)))
+                .unwrap()
         }),
         PrimitiveOpKind::Log => assert_unary_matches(cpu, gpu, entry, |b, x| {
             b.with_backend_session(|__s| __s.log_read(TensorRead::from_tensor(x)))
+                .unwrap()
         }),
         PrimitiveOpKind::Sin => assert_unary_matches(cpu, gpu, entry, |b, x| {
             b.with_backend_session(|__s| __s.sin_read(TensorRead::from_tensor(x)))
+                .unwrap()
         }),
         PrimitiveOpKind::Cos => assert_unary_matches(cpu, gpu, entry, |b, x| {
             b.with_backend_session(|__s| __s.cos_read(TensorRead::from_tensor(x)))
+                .unwrap()
         }),
         PrimitiveOpKind::Tanh => assert_unary_matches(cpu, gpu, entry, |b, x| {
             b.with_backend_session(|__s| __s.tanh_read(TensorRead::from_tensor(x)))
+                .unwrap()
         }),
         PrimitiveOpKind::Sqrt => assert_unary_matches(cpu, gpu, entry, |b, x| {
             b.with_backend_session(|__s| __s.sqrt_read(TensorRead::from_tensor(x)))
+                .unwrap()
         }),
         PrimitiveOpKind::Rsqrt => assert_unary_matches(cpu, gpu, entry, |b, x| {
             b.with_backend_session(|__s| __s.rsqrt_read(TensorRead::from_tensor(x)))
+                .unwrap()
         }),
         PrimitiveOpKind::Pow => assert_binary_matches(cpu, gpu, entry, |b, l, r| {
             b.with_backend_session(|__s| {
                 __s.pow_read(TensorRead::from_tensor(l), TensorRead::from_tensor(r))
             })
+            .unwrap()
         }),
         PrimitiveOpKind::Expm1 => assert_unary_matches(cpu, gpu, entry, |b, x| {
             b.with_backend_session(|__s| {
                 __s.expm1_read(tenferro_tensor::TensorRead::from_tensor(x))
             })
+            .unwrap()
         }),
         PrimitiveOpKind::Log1p => assert_unary_matches(cpu, gpu, entry, |b, x| {
             b.with_backend_session(|__s| __s.log1p_read(TensorRead::from_tensor(x)))
+                .unwrap()
         }),
         PrimitiveOpKind::ReduceSum => assert_reduction_matches(cpu, gpu, entry, |b, x, axes| {
             b.with_backend_session(|__s| __s.reduce_sum_read(TensorRead::from_tensor(x), axes))
+                .unwrap()
         }),
         PrimitiveOpKind::ReduceSumSquares => {
             assert_reduction_matches(cpu, gpu, entry, |b, x, axes| {
                 b.with_backend_session(|__s| {
                     __s.reduce_sum_squares_read(TensorRead::from_tensor(x), axes)
                 })
+                .unwrap()
             })
         }
         PrimitiveOpKind::ReduceProd => assert_reduction_matches(cpu, gpu, entry, |b, x, axes| {
             b.with_backend_session(|__s| __s.reduce_prod_read(TensorRead::from_tensor(x), axes))
+                .unwrap()
         }),
         PrimitiveOpKind::ReduceMax => assert_reduction_matches(cpu, gpu, entry, |b, x, axes| {
             b.with_backend_session(|__s| __s.reduce_max_read(TensorRead::from_tensor(x), axes))
+                .unwrap()
         }),
         PrimitiveOpKind::ReduceMin => assert_reduction_matches(cpu, gpu, entry, |b, x, axes| {
             b.with_backend_session(|__s| __s.reduce_min_read(TensorRead::from_tensor(x), axes))
+                .unwrap()
         }),
         PrimitiveOpKind::DotGeneral => assert_dot_matches(cpu, gpu, entry),
         _ => panic!(
@@ -406,6 +431,7 @@ fn assert_compare_matches(
                 &CompareDir::Ge,
             )
         })
+        .unwrap()
         .unwrap();
     let gpu_output = gpu
         .with_backend_session(|__s| {
@@ -415,6 +441,7 @@ fn assert_compare_matches(
                 &CompareDir::Ge,
             )
         })
+        .unwrap()
         .unwrap();
     let actual = download(gpu, &gpu_output);
     assert_tensor_close(&actual, &expected, 0.0);
@@ -439,6 +466,7 @@ fn assert_select_matches(
                 TensorRead::from_tensor(&rhs),
             )
         })
+        .unwrap()
         .unwrap();
     let gpu_output = gpu
         .with_backend_session(|__s| {
@@ -448,6 +476,7 @@ fn assert_select_matches(
                 TensorRead::from_tensor(&gpu_rhs),
             )
         })
+        .unwrap()
         .unwrap();
     let actual = download(gpu, &gpu_output);
     assert_tensor_close(&actual, &expected, tolerance(entry.dtype));
@@ -472,6 +501,7 @@ fn assert_clamp_matches(
                 TensorRead::from_tensor(&upper),
             )
         })
+        .unwrap()
         .unwrap();
     let gpu_output = gpu
         .with_backend_session(|__s| {
@@ -481,6 +511,7 @@ fn assert_clamp_matches(
                 TensorRead::from_tensor(&gpu_upper),
             )
         })
+        .unwrap()
         .unwrap();
     let actual = download(gpu, &gpu_output);
     assert_tensor_close(&actual, &expected, tolerance(entry.dtype));
@@ -506,6 +537,7 @@ fn assert_dot_matches(
                 &config,
             )
         })
+        .unwrap()
         .unwrap();
     let gpu_lhs = upload(gpu, &lhs);
     let gpu_rhs = upload(gpu, &rhs);
@@ -517,6 +549,7 @@ fn assert_dot_matches(
                 &config,
             )
         })
+        .unwrap()
         .unwrap();
     let actual = download(gpu, &gpu_output);
     assert_tensor_close(&actual, &expected, tolerance(entry.dtype));
@@ -528,45 +561,47 @@ fn run_cpu_unary(
     input: &Tensor,
 ) -> Tensor {
     match op {
-        PrimitiveOpKind::Neg => {
-            cpu.with_backend_session(|__s| __s.neg_read(TensorRead::from_tensor(input)))
-        }
-        PrimitiveOpKind::Conj => {
-            cpu.with_backend_session(|__s| __s.conj_read(TensorRead::from_tensor(input)))
-        }
-        PrimitiveOpKind::Abs => {
-            cpu.with_backend_session(|__s| __s.abs_read(TensorRead::from_tensor(input)))
-        }
-        PrimitiveOpKind::Sign => {
-            cpu.with_backend_session(|__s| __s.sign_read(TensorRead::from_tensor(input)))
-        }
-        PrimitiveOpKind::Exp => {
-            cpu.with_backend_session(|__s| __s.exp_read(TensorRead::from_tensor(input)))
-        }
-        PrimitiveOpKind::Log => {
-            cpu.with_backend_session(|__s| __s.log_read(TensorRead::from_tensor(input)))
-        }
-        PrimitiveOpKind::Sin => {
-            cpu.with_backend_session(|__s| __s.sin_read(TensorRead::from_tensor(input)))
-        }
-        PrimitiveOpKind::Cos => {
-            cpu.with_backend_session(|__s| __s.cos_read(TensorRead::from_tensor(input)))
-        }
-        PrimitiveOpKind::Tanh => {
-            cpu.with_backend_session(|__s| __s.tanh_read(TensorRead::from_tensor(input)))
-        }
-        PrimitiveOpKind::Sqrt => {
-            cpu.with_backend_session(|__s| __s.sqrt_read(TensorRead::from_tensor(input)))
-        }
-        PrimitiveOpKind::Rsqrt => {
-            cpu.with_backend_session(|__s| __s.rsqrt_read(TensorRead::from_tensor(input)))
-        }
-        PrimitiveOpKind::Expm1 => cpu.with_backend_session(|__s| {
-            __s.expm1_read(tenferro_tensor::TensorRead::from_tensor(input))
-        }),
-        PrimitiveOpKind::Log1p => {
-            cpu.with_backend_session(|__s| __s.log1p_read(TensorRead::from_tensor(input)))
-        }
+        PrimitiveOpKind::Neg => cpu
+            .with_backend_session(|__s| __s.neg_read(TensorRead::from_tensor(input)))
+            .unwrap(),
+        PrimitiveOpKind::Conj => cpu
+            .with_backend_session(|__s| __s.conj_read(TensorRead::from_tensor(input)))
+            .unwrap(),
+        PrimitiveOpKind::Abs => cpu
+            .with_backend_session(|__s| __s.abs_read(TensorRead::from_tensor(input)))
+            .unwrap(),
+        PrimitiveOpKind::Sign => cpu
+            .with_backend_session(|__s| __s.sign_read(TensorRead::from_tensor(input)))
+            .unwrap(),
+        PrimitiveOpKind::Exp => cpu
+            .with_backend_session(|__s| __s.exp_read(TensorRead::from_tensor(input)))
+            .unwrap(),
+        PrimitiveOpKind::Log => cpu
+            .with_backend_session(|__s| __s.log_read(TensorRead::from_tensor(input)))
+            .unwrap(),
+        PrimitiveOpKind::Sin => cpu
+            .with_backend_session(|__s| __s.sin_read(TensorRead::from_tensor(input)))
+            .unwrap(),
+        PrimitiveOpKind::Cos => cpu
+            .with_backend_session(|__s| __s.cos_read(TensorRead::from_tensor(input)))
+            .unwrap(),
+        PrimitiveOpKind::Tanh => cpu
+            .with_backend_session(|__s| __s.tanh_read(TensorRead::from_tensor(input)))
+            .unwrap(),
+        PrimitiveOpKind::Sqrt => cpu
+            .with_backend_session(|__s| __s.sqrt_read(TensorRead::from_tensor(input)))
+            .unwrap(),
+        PrimitiveOpKind::Rsqrt => cpu
+            .with_backend_session(|__s| __s.rsqrt_read(TensorRead::from_tensor(input)))
+            .unwrap(),
+        PrimitiveOpKind::Expm1 => cpu
+            .with_backend_session(|__s| {
+                __s.expm1_read(tenferro_tensor::TensorRead::from_tensor(input))
+            })
+            .unwrap(),
+        PrimitiveOpKind::Log1p => cpu
+            .with_backend_session(|__s| __s.log1p_read(TensorRead::from_tensor(input)))
+            .unwrap(),
         _ => panic!("not a unary smoke op: {op:?}"),
     }
     .unwrap()
@@ -579,28 +614,42 @@ fn run_cpu_binary(
     rhs: &Tensor,
 ) -> Tensor {
     match op {
-        PrimitiveOpKind::Add => cpu.with_backend_session(|__s| {
-            __s.add_read(TensorRead::from_tensor(lhs), TensorRead::from_tensor(rhs))
-        }),
-        PrimitiveOpKind::Sub => cpu.with_backend_session(|__s| {
-            __s.sub_read(TensorRead::from_tensor(lhs), TensorRead::from_tensor(rhs))
-        }),
-        PrimitiveOpKind::Mul => cpu.with_backend_session(|__s| {
-            __s.mul_read(TensorRead::from_tensor(lhs), TensorRead::from_tensor(rhs))
-        }),
-        PrimitiveOpKind::Div => cpu.with_backend_session(|__s| {
-            __s.div_read(TensorRead::from_tensor(lhs), TensorRead::from_tensor(rhs))
-        }),
-        PrimitiveOpKind::Rem => cpu.with_backend_session(|__s| __s.rem(lhs, rhs)),
-        PrimitiveOpKind::Maximum => cpu.with_backend_session(|__s| {
-            __s.maximum_read(TensorRead::from_tensor(lhs), TensorRead::from_tensor(rhs))
-        }),
-        PrimitiveOpKind::Minimum => cpu.with_backend_session(|__s| {
-            __s.minimum_read(TensorRead::from_tensor(lhs), TensorRead::from_tensor(rhs))
-        }),
-        PrimitiveOpKind::Pow => cpu.with_backend_session(|__s| {
-            __s.pow_read(TensorRead::from_tensor(lhs), TensorRead::from_tensor(rhs))
-        }),
+        PrimitiveOpKind::Add => cpu
+            .with_backend_session(|__s| {
+                __s.add_read(TensorRead::from_tensor(lhs), TensorRead::from_tensor(rhs))
+            })
+            .unwrap(),
+        PrimitiveOpKind::Sub => cpu
+            .with_backend_session(|__s| {
+                __s.sub_read(TensorRead::from_tensor(lhs), TensorRead::from_tensor(rhs))
+            })
+            .unwrap(),
+        PrimitiveOpKind::Mul => cpu
+            .with_backend_session(|__s| {
+                __s.mul_read(TensorRead::from_tensor(lhs), TensorRead::from_tensor(rhs))
+            })
+            .unwrap(),
+        PrimitiveOpKind::Div => cpu
+            .with_backend_session(|__s| {
+                __s.div_read(TensorRead::from_tensor(lhs), TensorRead::from_tensor(rhs))
+            })
+            .unwrap(),
+        PrimitiveOpKind::Rem => cpu.with_backend_session(|__s| __s.rem(lhs, rhs)).unwrap(),
+        PrimitiveOpKind::Maximum => cpu
+            .with_backend_session(|__s| {
+                __s.maximum_read(TensorRead::from_tensor(lhs), TensorRead::from_tensor(rhs))
+            })
+            .unwrap(),
+        PrimitiveOpKind::Minimum => cpu
+            .with_backend_session(|__s| {
+                __s.minimum_read(TensorRead::from_tensor(lhs), TensorRead::from_tensor(rhs))
+            })
+            .unwrap(),
+        PrimitiveOpKind::Pow => cpu
+            .with_backend_session(|__s| {
+                __s.pow_read(TensorRead::from_tensor(lhs), TensorRead::from_tensor(rhs))
+            })
+            .unwrap(),
         _ => panic!("not a binary smoke op: {op:?}"),
     }
     .unwrap()
@@ -614,16 +663,22 @@ fn run_cpu_reduction(
 ) -> Tensor {
     match op {
         PrimitiveOpKind::ReduceSum => cpu
-            .with_backend_session(|__s| __s.reduce_sum_read(TensorRead::from_tensor(input), axes)),
-        PrimitiveOpKind::ReduceSumSquares => cpu.with_backend_session(|__s| {
-            __s.reduce_sum_squares_read(TensorRead::from_tensor(input), axes)
-        }),
+            .with_backend_session(|__s| __s.reduce_sum_read(TensorRead::from_tensor(input), axes))
+            .unwrap(),
+        PrimitiveOpKind::ReduceSumSquares => cpu
+            .with_backend_session(|__s| {
+                __s.reduce_sum_squares_read(TensorRead::from_tensor(input), axes)
+            })
+            .unwrap(),
         PrimitiveOpKind::ReduceProd => cpu
-            .with_backend_session(|__s| __s.reduce_prod_read(TensorRead::from_tensor(input), axes)),
+            .with_backend_session(|__s| __s.reduce_prod_read(TensorRead::from_tensor(input), axes))
+            .unwrap(),
         PrimitiveOpKind::ReduceMax => cpu
-            .with_backend_session(|__s| __s.reduce_max_read(TensorRead::from_tensor(input), axes)),
+            .with_backend_session(|__s| __s.reduce_max_read(TensorRead::from_tensor(input), axes))
+            .unwrap(),
         PrimitiveOpKind::ReduceMin => cpu
-            .with_backend_session(|__s| __s.reduce_min_read(TensorRead::from_tensor(input), axes)),
+            .with_backend_session(|__s| __s.reduce_min_read(TensorRead::from_tensor(input), axes))
+            .unwrap(),
         _ => panic!("not a reduction smoke op: {op:?}"),
     }
     .unwrap()

@@ -53,7 +53,7 @@ fn data(len: usize, seed: usize) -> Vec<f64> {
         .collect()
 }
 
-fn main() {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     let threads = std::env::args()
         .nth(1)
         .expect("argument: default or thread count");
@@ -80,7 +80,7 @@ fn main() {
             .collect();
         check(
             &backend
-                .with_backend_session(|s| inputs.einsum("ij,jk->ik", s))
+                .with_backend_session(|s| inputs.einsum("ij,jk->ik", s))?
                 .unwrap(),
             &expected,
         );
@@ -99,6 +99,7 @@ fn main() {
             observe(
                 backend
                     .with_backend_session(|s| black_box(inputs).einsum(black_box("ij,jk->ik"), s))
+                    .unwrap()
                     .unwrap(),
             )
         });
@@ -108,6 +109,7 @@ fn main() {
                     .with_backend_session(|s| {
                         black_box(inputs).einsum_subscripts(black_box(&subs), s)
                     })
+                    .unwrap()
                     .unwrap(),
             )
         });
@@ -115,6 +117,7 @@ fn main() {
             observe(
                 backend
                     .with_backend_session(|s| plan.execute(black_box(inputs), s))
+                    .unwrap()
                     .unwrap(),
             )
         });
@@ -158,7 +161,7 @@ fn main() {
             ] {
                 check(
                     &backend
-                        .with_backend_session(|s| inputs.einsum_read(equation, s))
+                        .with_backend_session(|s| inputs.einsum_read(equation, s))?
                         .unwrap(),
                     &expected,
                 );
@@ -168,6 +171,7 @@ fn main() {
                             .with_backend_session(|s| {
                                 black_box(&inputs).einsum_read(black_box(equation), s)
                             })
+                            .unwrap()
                             .unwrap(),
                     )
                 });
@@ -180,7 +184,7 @@ fn main() {
     let batch = [&a, &b];
     check(
         &backend
-            .with_backend_session(|s| batch.einsum("ijb,jkb->ikb", s))
+            .with_backend_session(|s| batch.einsum("ijb,jkb->ikb", s))?
             .unwrap(),
         &[1.0; 256],
     );
@@ -191,6 +195,7 @@ fn main() {
         observe(
             backend
                 .with_backend_session(|s| black_box(batch).einsum("ijb,jkb->ikb", s))
+                .unwrap()
                 .unwrap(),
         )
     });
@@ -198,7 +203,7 @@ fn main() {
     let nary = [&a, &b, &c];
     check(
         &backend
-            .with_backend_session(|s| nary.einsum("ijb,jkb,klb->ilb", s))
+            .with_backend_session(|s| nary.einsum("ijb,jkb,klb->ilb", s))?
             .unwrap(),
         &[4.0; 256],
     );
@@ -209,7 +214,9 @@ fn main() {
         observe(
             backend
                 .with_backend_session(|s| black_box(nary).einsum("ijb,jkb,klb->ilb", s))
+                .unwrap()
                 .unwrap(),
         )
     });
+    Ok(())
 }

@@ -21,7 +21,7 @@ fn bench_cpu_context_entry_overhead(c: &mut Criterion) {
             |b, &threads| {
                 let backend =
                     CpuBackend::with_threads_and_kind(threads, CpuBackendKind::Faer).unwrap();
-                b.iter(|| backend.install(|| black_box(1usize)));
+                b.iter(|| backend.install(|| black_box(1usize)).unwrap());
             },
         );
     }

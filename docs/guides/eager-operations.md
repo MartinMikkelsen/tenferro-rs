@@ -181,7 +181,7 @@ let (sum, product, negated) = backend.with_backend_session(|session| {
     let product = a.mul(&b, session).unwrap();
     let negated = a.neg(session).unwrap();
     (sum, product, negated)
-});
+})?;
 
 assert_eq!(sum.as_slice::<f64>().unwrap(), &[5.0, 7.0, 9.0]);
 assert_eq!(product.as_slice::<f64>().unwrap(), &[4.0, 10.0, 18.0]);
@@ -216,7 +216,7 @@ backend.with_backend_session(|session| {
     assert_eq!(eigh.0.shape(), &[3]);
     assert_eq!(eigh.1.shape(), &[3, 3]);
     assert_eq!(x.shape(), &[3]);
-});
+})?;
 ```
 <!-- end-snippet-source -->
 
@@ -237,7 +237,7 @@ let (at, flat, col_sum) = backend.with_backend_session(|session| {
     let flat = a.reshape(&[6], session).unwrap();
     let col_sum = a.reduce_sum(&[0], session).unwrap();
     (at, flat, col_sum)
-});
+})?;
 assert_eq!(at.shape(), &[3, 2]);
 assert_eq!(flat.shape(), &[6]);
 assert_eq!(col_sum.shape(), &[3]);

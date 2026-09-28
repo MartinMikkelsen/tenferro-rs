@@ -30,18 +30,20 @@ fn operand_b() -> Tensor {
 
 /// 10 ops inside one backend session (1 entry).
 fn run_chain_one_session(a: &Tensor, b: &Tensor, backend: &mut CpuBackend) -> Tensor {
-    backend.with_backend_session(|session| {
-        let x = a.add(b, session).expect("add 1");
-        let x = x.exp(session).expect("exp 1");
-        let x = x.mul(a, session).expect("mul 1");
-        let x = x.add(b, session).expect("add 2");
-        let x = x.exp(session).expect("exp 2");
-        let x = x.mul(a, session).expect("mul 2");
-        let x = x.add(b, session).expect("add 3");
-        let x = x.exp(session).expect("exp 3");
-        let x = x.mul(a, session).expect("mul 3");
-        x.reduce_sum(&[0], session).expect("reduce_sum")
-    })
+    backend
+        .with_backend_session(|session| {
+            let x = a.add(b, session).expect("add 1");
+            let x = x.exp(session).expect("exp 1");
+            let x = x.mul(a, session).expect("mul 1");
+            let x = x.add(b, session).expect("add 2");
+            let x = x.exp(session).expect("exp 2");
+            let x = x.mul(a, session).expect("mul 2");
+            let x = x.add(b, session).expect("add 3");
+            let x = x.exp(session).expect("exp 3");
+            let x = x.mul(a, session).expect("mul 3");
+            x.reduce_sum(&[0], session).expect("reduce_sum")
+        })
+        .unwrap()
 }
 
 /// The same 10-op chain through one execution scope wrapping one session entry.
@@ -71,6 +73,7 @@ fn run_chain_execution_scope(
                 let x = x.mul(a, session).expect("mul 3");
                 x.reduce_sum(&[0], session).expect("reduce_sum")
             })
+            .unwrap()
         })
         .expect("scope admission should succeed")
 }
@@ -190,18 +193,20 @@ impl Phase1Operands {
 
 /// 10 ops inside one backend session (1 entry).
 fn run_phase1_chain_one_session(ops: &Phase1Operands, backend: &mut CpuBackend) -> Tensor {
-    backend.with_backend_session(|session| {
-        let x = ops.a.sub(&ops.b, session).expect("sub");
-        let x = x.log(session).expect("log");
-        let x = x.pow(&ops.power, session).expect("pow");
-        let x = x.maximum(&ops.max, session).expect("maximum");
-        let x = x.neg(session).expect("neg");
-        let x = x.reshape(&[4, 1], session).expect("reshape");
-        let x = x.transpose(&[1, 0], session).expect("transpose");
-        let x = x.clamp(&ops.lower, &ops.upper, session).expect("clamp");
-        let x = x.matmul(&ops.rhs, session).expect("matmul");
-        x.cast(tenferro_runtime::DType::F32, session).expect("cast")
-    })
+    backend
+        .with_backend_session(|session| {
+            let x = ops.a.sub(&ops.b, session).expect("sub");
+            let x = x.log(session).expect("log");
+            let x = x.pow(&ops.power, session).expect("pow");
+            let x = x.maximum(&ops.max, session).expect("maximum");
+            let x = x.neg(session).expect("neg");
+            let x = x.reshape(&[4, 1], session).expect("reshape");
+            let x = x.transpose(&[1, 0], session).expect("transpose");
+            let x = x.clamp(&ops.lower, &ops.upper, session).expect("clamp");
+            let x = x.matmul(&ops.rhs, session).expect("matmul");
+            x.cast(tenferro_runtime::DType::F32, session).expect("cast")
+        })
+        .unwrap()
 }
 
 fn bench_session_chain_phase1(c: &mut Criterion) {

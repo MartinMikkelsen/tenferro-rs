@@ -17,7 +17,7 @@ fn main() {
         .with_execution_scope(|| {
             operations.with_backend_session(|session| {
                 session.add_read(TensorRead::from_tensor(&a), TensorRead::from_tensor(&a))
-            })
+            }).unwrap()
         })
         .unwrap()
         .unwrap();

@@ -61,6 +61,7 @@ fn cuda_axpby_reads_an_offset_strided_source_in_place() {
                 TensorWrite::from_tensor(&mut expected),
             )
         })
+        .unwrap()
         .unwrap();
     }
 
@@ -82,6 +83,7 @@ fn cuda_axpby_reads_an_offset_strided_source_in_place() {
             TensorWrite::from_tensor(&mut gpu_destination),
         )
     })
+    .unwrap()
     .unwrap();
     assert_eq!(
         strided_source_passes_for_test(),
@@ -128,6 +130,7 @@ fn cuda_axpby_keeps_compact_operands_on_cublas() {
             TensorWrite::from_tensor(&mut gpu_y),
         )
     })
+    .unwrap()
     .unwrap();
 
     assert_eq!(strided_source_passes_for_test(), 0);

@@ -145,17 +145,19 @@ fn a_retained_value_survives_an_eager_session_it_was_computed_in() {
     use tenferro_tensor::BackendSessionHost;
 
     let mut backend = CpuBackend::new();
-    let retained = backend.with_backend_session(|session| {
-        let values = external(vec![Df64::from_f64(1.0), Df64::from_f64(2.0)], vec![2]);
-        let copied = session
-            .to_contiguous_read(tenferro_tensor::TensorRead::from_tensor(&values))
-            .expect("a contiguous read inside the session");
-        assert_eq!(
-            copied.dtype(),
-            DType::External(std::any::TypeId::of::<Df64>())
-        );
-        copied
-    });
+    let retained = backend
+        .with_backend_session(|session| {
+            let values = external(vec![Df64::from_f64(1.0), Df64::from_f64(2.0)], vec![2]);
+            let copied = session
+                .to_contiguous_read(tenferro_tensor::TensorRead::from_tensor(&values))
+                .expect("a contiguous read inside the session");
+            assert_eq!(
+                copied.dtype(),
+                DType::External(std::any::TypeId::of::<Df64>())
+            );
+            copied
+        })
+        .unwrap();
     assert_eq!(
         payload(&retained),
         vec![Df64::from_f64(1.0), Df64::from_f64(2.0)]

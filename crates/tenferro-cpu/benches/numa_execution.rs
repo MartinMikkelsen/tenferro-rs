@@ -31,6 +31,7 @@ fn run_session_workload(backend: &mut CpuBackend, input: &Tensor) -> Tensor {
                 },
             )
         })
+        .unwrap()
         .expect("NUMA benchmark session workload should succeed")
 }
 

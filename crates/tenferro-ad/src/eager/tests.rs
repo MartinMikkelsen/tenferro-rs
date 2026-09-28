@@ -133,26 +133,34 @@ fn eager_runtime_execution_session_runs_cpu_operation() {
 #[test]
 fn eager_backend_session_identity_belongs_to_the_concrete_backend() {
     let mut backend = EagerBackend::cpu(CpuBackend::new());
-    let identity = backend.with_backend_session(|session| session.session_type_id());
+    let identity = backend
+        .with_backend_session(|session| session.session_type_id())
+        .unwrap();
     assert_ne!(identity, std::any::TypeId::of::<EagerBackend>());
     assert_eq!(
         identity,
-        backend.with_backend_session(|session| session.session_type_id())
+        backend
+            .with_backend_session(|session| session.session_type_id())
+            .unwrap()
     );
 
     let materializations = Arc::new(AtomicUsize::new(0));
     let mut recording = EagerBackend::recording_cpu(materializations);
     let recording_owner = recording.recording_session_owner().unwrap() as usize;
-    let recording_identity = recording.with_backend_session(|session| {
-        let identity = session.session_type_id();
-        let projected = unsafe { session.session_data_mut() };
-        assert_eq!(projected as usize, recording_owner);
-        identity
-    });
+    let recording_identity = recording
+        .with_backend_session(|session| {
+            let identity = session.session_type_id();
+            let projected = unsafe { session.session_data_mut() };
+            assert_eq!(projected as usize, recording_owner);
+            identity
+        })
+        .unwrap();
     assert_ne!(recording_identity, identity);
     assert_eq!(
         recording_identity,
-        recording.with_backend_session(|session| { session.session_type_id() })
+        recording
+            .with_backend_session(|session| { session.session_type_id() })
+            .unwrap()
     );
     assert!(backend.recording_session_owner().is_none());
 }
@@ -175,6 +183,7 @@ fn eager_materialization_uses_backend() {
                 TensorRead::from_tensor(&probe),
             )
         })
+        .unwrap()
         .unwrap();
     assert_eq!(sum.as_slice::<f64>().unwrap(), &[4.0]);
     assert_eq!(materializations.load(Ordering::Relaxed), 0);
@@ -188,6 +197,7 @@ fn eager_materialization_uses_backend() {
     );
     let direct = backend
         .with_backend_session(|session| session.to_contiguous_read(TensorRead::from_view(view)))
+        .unwrap()
         .unwrap();
     assert_eq!(direct.as_slice::<f64>().unwrap(), &[1.0, 3.0, 2.0, 4.0]);
     assert_eq!(materializations.swap(0, Ordering::Relaxed), 1);
@@ -200,6 +210,7 @@ fn eager_materialization_uses_backend() {
                 TensorWrite::from_tensor(&mut destination),
             )
         })
+        .unwrap()
         .unwrap();
     assert_eq!(destination.as_slice::<f64>().unwrap(), &[2.0]);
     let ctx = Arc::new(EagerRuntime::from_backend(backend).unwrap());
@@ -556,8 +567,9 @@ impl PreparedOperationExecutor for ReadPathFallbackPrepared {
                     source,
                 )
             })?;
-        let materialized =
-            backend.with_backend_session(|__s| __s.to_contiguous_read(inputs[0].clone()))?;
+        let materialized = backend
+            .with_backend_session(|__s| __s.to_contiguous_read(inputs[0].clone()))
+            .unwrap()?;
         Ok(vec![materialized.duplicate()?])
     }
 
@@ -1293,6 +1305,7 @@ fn one_like_tensor_covers_integer_and_bool_dtypes_without_analytic_backend_ops()
     for input in cases {
         let one = backend
             .with_backend_session(|session| one_like_tensor(&input, session))
+            .unwrap()
             .unwrap();
         assert_eq!(one.shape(), input.shape());
         assert_eq!(one.dtype(), input.dtype());
@@ -1316,6 +1329,7 @@ fn eager_backend_session_dispatches_broadcast_multiply_fusion_to_cpu() {
                 &[1],
             )
         })
+        .unwrap()
         .unwrap()
         .expect("eager backend session should dispatch CPU broadcast multiply fusion");
 
@@ -1347,6 +1361,7 @@ fn eager_backend_session_dispatches_elementwise_into_hook_to_cpu_variants() {
                     TensorWrite::from_tensor(&mut out),
                 )
             })
+            .unwrap()
             .unwrap();
 
         assert_eq!(out.as_slice::<f64>().unwrap(), &[9.0, 14.0, 18.0]);

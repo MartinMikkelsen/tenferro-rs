@@ -190,7 +190,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // FFT execution consumes the already uploaded tensor; it does not transfer it.
     let spectrum = backend
-        .with_backend_session(|session| gpu_input.rfft(None, 0, FftNorm::Backward, session))?;
+        .with_backend_session(|session| gpu_input.rfft(None, 0, FftNorm::Backward, session))??;
 
     // Check residency before crossing the explicit device-to-host boundary.
     let spectrum_read = TensorRead::from_tensor(&spectrum);
@@ -312,7 +312,7 @@ backend.with_backend_session(|session| -> Result<(), tenferro_tensor::Error> {
         Complex64::new(10.0, 0.0),
     );
     Ok(())
-})?;
+})??;
 ```
 <!-- end-snippet-source -->
 
@@ -397,11 +397,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut cpu = context.cpu_backend().clone();
     let cpu_spectrum = cpu
-        .with_backend_session(|session| managed.rfft(None, 0, FftNorm::Backward, session))?;
+        .with_backend_session(|session| managed.rfft(None, 0, FftNorm::Backward, session))??;
 
     let mut metal = context.metal_backend().clone();
     let metal_spectrum = metal
-        .with_backend_session(|session| managed.rfft(None, 0, FftNorm::Backward, session))?;
+        .with_backend_session(|session| managed.rfft(None, 0, FftNorm::Backward, session))??;
     metal.synchronize()?;
 
     assert_eq!(cpu_spectrum.shape(), metal_spectrum.shape());

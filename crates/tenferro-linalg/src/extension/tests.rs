@@ -150,6 +150,7 @@ fn extension_reads_preserve_strided_inputs() {
                 })
                 .unwrap()
             })
+            .unwrap()
             .unwrap();
         let values = outputs[0].as_slice::<f64>().unwrap();
         assert_eq!(values.len(), 2);

@@ -89,9 +89,11 @@ fn cuda_blas1_covers_all_supported_dtypes() {
                         TensorRead::from_tensor(&host_y),
                     )
                 })
+                .unwrap()
                 .unwrap();
             let expected_norm = cpu
                 .with_backend_session(|__s| __s.norm_squared_read(TensorRead::from_tensor(&host_x)))
+                .unwrap()
                 .unwrap();
             let mut expected_y = host_y.duplicate().unwrap();
             cpu.with_backend_session(|__s| {
@@ -102,6 +104,7 @@ fn cuda_blas1_covers_all_supported_dtypes() {
                     TensorWrite::from_tensor(&mut expected_y),
                 )
             })
+            .unwrap()
             .unwrap();
 
             let x = upload_tensor(cuda.runtime(), &host_x).unwrap();
@@ -110,9 +113,11 @@ fn cuda_blas1_covers_all_supported_dtypes() {
                 .with_backend_session(|__s| {
                     __s.vdot_read(TensorRead::from_tensor(&x), TensorRead::from_tensor(&y))
                 })
+                .unwrap()
                 .unwrap();
             let norm = cuda
                 .with_backend_session(|__s| __s.norm_squared_read(TensorRead::from_tensor(&x)))
+                .unwrap()
                 .unwrap();
             cuda.with_backend_session(|__s| {
                 __s.axpby_read_into_accum(
@@ -122,6 +127,7 @@ fn cuda_blas1_covers_all_supported_dtypes() {
                     TensorWrite::from_tensor(&mut y),
                 )
             })
+            .unwrap()
             .unwrap();
 
             let dot = download_tensor(cuda.runtime(), &dot).unwrap();
@@ -198,6 +204,7 @@ fn cuda_vdot_matches_cpu_and_conjugates_the_left_operand() {
                     TensorRead::from_tensor(&host_rhs),
                 )
             })
+            .unwrap()
             .unwrap();
 
         let lhs = upload_tensor(cuda.runtime(), &host_lhs).unwrap();
@@ -206,6 +213,7 @@ fn cuda_vdot_matches_cpu_and_conjugates_the_left_operand() {
             .with_backend_session(|__s| {
                 __s.vdot_read(TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs))
             })
+            .unwrap()
             .unwrap();
         let got = download_tensor(cuda.runtime(), &got).unwrap();
 
@@ -308,6 +316,7 @@ fn cuda_vdot_accepts_two_strided_operands() {
                 transposed_host_view(&host_rhs),
             )
         })
+        .unwrap()
         .unwrap();
 
     let lhs = upload_tensor(cuda.runtime(), &host_lhs).unwrap();
@@ -316,6 +325,7 @@ fn cuda_vdot_accepts_two_strided_operands() {
         .with_backend_session(|__s| {
             __s.vdot_read(transposed_device_view(&lhs), transposed_device_view(&rhs))
         })
+        .unwrap()
         .unwrap();
     let got = download_tensor(cuda.runtime(), &got).unwrap();
 
@@ -370,6 +380,7 @@ fn cuda_axpby_accepts_a_non_contiguous_read() {
             TensorWrite::from_tensor(&mut expected),
         )
     })
+    .unwrap()
     .unwrap();
 
     let x = upload_tensor(cuda.runtime(), &host_x).unwrap();
@@ -382,6 +393,7 @@ fn cuda_axpby_accepts_a_non_contiguous_read() {
             TensorWrite::from_tensor(&mut y),
         )
     })
+    .unwrap()
     .unwrap();
     let got = download_tensor(cuda.runtime(), &y).unwrap();
 
@@ -426,9 +438,11 @@ fn cuda_reductions_accept_compact_views_with_offsets() {
         .with_backend_session(|__s| {
             __s.vdot_read(offset_host_view(&host), offset_host_view(&host_other))
         })
+        .unwrap()
         .unwrap();
     let expected_norm = cpu
         .with_backend_session(|__s| __s.norm_squared_read(offset_host_view(&host)))
+        .unwrap()
         .unwrap();
 
     let device = upload_tensor(cuda.runtime(), &host).unwrap();
@@ -441,12 +455,14 @@ fn cuda_reductions_accept_compact_views_with_offsets() {
                 offset_device_view(&device_other),
             )
         })
+        .unwrap()
         .unwrap();
     let dot = download_tensor(cuda.runtime(), &dot).unwrap();
     assert_close_c64(&dot, &expected_dot, "vdot compact offset view");
 
     let norm = cuda
         .with_backend_session(|__s| __s.norm_squared_read(offset_device_view(&device)))
+        .unwrap()
         .unwrap();
     let norm = download_tensor(cuda.runtime(), &norm).unwrap();
     assert_close_f64(&norm, &expected_norm, "norm_squared compact offset view");
@@ -489,6 +505,7 @@ fn cuda_reductions_accept_a_non_contiguous_read() {
         .with_backend_session(|__s| {
             __s.vdot_read(transposed_host_view(&host), TensorRead::from_tensor(&other))
         })
+        .unwrap()
         .unwrap();
 
     let device = upload_tensor(cuda.runtime(), &host).unwrap();
@@ -500,6 +517,7 @@ fn cuda_reductions_accept_a_non_contiguous_read() {
                 TensorRead::from_tensor(&device_other),
             )
         })
+        .unwrap()
         .unwrap();
     let got = download_tensor(cuda.runtime(), &got).unwrap();
 
@@ -507,9 +525,11 @@ fn cuda_reductions_accept_a_non_contiguous_read() {
 
     let expected = cpu
         .with_backend_session(|__s| __s.norm_squared_read(transposed_host_view(&host)))
+        .unwrap()
         .unwrap();
     let got = cuda
         .with_backend_session(|__s| __s.norm_squared_read(transposed_device_view(&device)))
+        .unwrap()
         .unwrap();
     let got = download_tensor(cuda.runtime(), &got).unwrap();
     assert_close_f64(&got, &expected, "norm_squared transposed");
@@ -526,11 +546,13 @@ fn cuda_norm_squared_matches_cpu() {
         let host = sample(len, 0.125);
         let expected = cpu
             .with_backend_session(|__s| __s.norm_squared_read(TensorRead::from_tensor(&host)))
+            .unwrap()
             .unwrap();
 
         let device = upload_tensor(cuda.runtime(), &host).unwrap();
         let got = cuda
             .with_backend_session(|__s| __s.norm_squared_read(TensorRead::from_tensor(&device)))
+            .unwrap()
             .unwrap();
         let got = download_tensor(cuda.runtime(), &got).unwrap();
 
@@ -573,6 +595,7 @@ fn cuda_axpby_matches_cpu_with_complex_coefficients() {
                 TensorWrite::from_tensor(&mut expected),
             )
         })
+        .unwrap()
         .unwrap();
 
         let x = upload_tensor(cuda.runtime(), &host_x).unwrap();
@@ -585,6 +608,7 @@ fn cuda_axpby_matches_cpu_with_complex_coefficients() {
                 TensorWrite::from_tensor(&mut y),
             )
         })
+        .unwrap()
         .unwrap();
         let got = download_tensor(cuda.runtime(), &y).unwrap();
 
@@ -639,6 +663,7 @@ fn cuda_axpby_accepts_compact_views_with_offsets() {
             TensorWrite::from_view(TensorViewMut::C64(y_view)),
         )
     })
+    .unwrap()
     .unwrap();
 
     let got = download_tensor(cuda.runtime(), &y).unwrap();
@@ -671,6 +696,7 @@ fn cuda_blas1_cross_thread_operands_observe_vendor_writes() {
             .with_backend_session(|__s| {
                 __s.vdot_read(TensorRead::from_tensor(&x), TensorRead::from_tensor(&y))
             })
+            .unwrap()
             .unwrap();
         worker
             .with_backend_session(|__s| {
@@ -681,6 +707,7 @@ fn cuda_blas1_cross_thread_operands_observe_vendor_writes() {
                     TensorWrite::from_tensor(&mut y),
                 )
             })
+            .unwrap()
             .unwrap();
         (
             download_tensor(worker.runtime(), &dot).unwrap(),
@@ -711,12 +738,14 @@ fn cuda_blas1_handles_empty_inputs() {
                 TensorRead::from_tensor(&device),
             )
         })
+        .unwrap()
         .unwrap();
     let dot = download_tensor(cuda.runtime(), &dot).unwrap();
     assert_eq!(dot.as_slice::<Complex64>().unwrap(), &[c64(0.0, 0.0)]);
 
     let norm = cuda
         .with_backend_session(|__s| __s.norm_squared_read(TensorRead::from_tensor(&device)))
+        .unwrap()
         .unwrap();
     let norm = download_tensor(cuda.runtime(), &norm).unwrap();
     assert_eq!(norm.as_slice::<f64>().unwrap(), &[0.0]);
@@ -730,6 +759,7 @@ fn cuda_blas1_handles_empty_inputs() {
             TensorWrite::from_tensor(&mut out),
         )
     })
+    .unwrap()
     .unwrap();
     let out = download_tensor(cuda.runtime(), &out).unwrap();
     assert!(out.as_slice::<Complex64>().unwrap().is_empty());

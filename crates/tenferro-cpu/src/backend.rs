@@ -32,11 +32,11 @@ use crate::{
     TypedTensor, TypedTensorView, TypedTensorViewMut,
 };
 use tenferro_tensor::backend::ElementwiseFusionPlan;
-use tenferro_tensor::SharedTensorAllocationDomain;
 use tenferro_tensor::{
     AllocationDomainId, BackendRuntimeCache, BackendSession, BackendSessionHost, ElementwiseReadOp,
     TensorBackend, TensorBuffer, TensorDeviceTransfer, TensorFusion, TensorViewCanonicalization,
 };
+use tenferro_tensor::{SessionEntryError, SharedTensorAllocationDomain};
 
 use super::exec_session::CpuExecSession;
 use super::{copy_tensor_read_into, elementwise, gemm, structural, CpuContext};
@@ -220,6 +220,9 @@ fn maybe_print_cpu_session_profile() {
         );
     }
 }
+
+/// Backend name reported by CPU session-entry failures.
+pub(crate) const CPU_BACKEND: &str = "CpuBackend";
 
 struct BufferPoolLoan<'a> {
     buffers: &'a mut BufferPool,
@@ -2621,27 +2624,29 @@ impl CpuBackend {
     /// ```
     /// use tenferro_cpu::CpuBackend;
     ///
-    /// let backend = CpuBackend::with_threads(1).unwrap();
-    /// let value = backend.install(|| 1 + 1);
+    /// let backend = CpuBackend::with_threads(1)?;
+    /// let value = backend.install(|| 1 + 1)?;
     /// assert_eq!(value, 2);
+    /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// Panics when re-entered while another CPU backend execution is active on
-    /// the current thread or managed Rayon scope. This includes direct nesting
-    /// and backend calls from parallel child tasks; either could violate CPU or
-    /// provider exclusivity. For an externally managed domain, it also panics
-    /// with the executor's typed diagnostic when synchronous executor entry
-    /// fails because this convenience method cannot return a `Result`.
-    pub fn install<R: Send>(&self, op: impl FnOnce() -> R + Send) -> R {
-        let admission = self.infallible_execution_admission();
+    /// Returns [`crate::Error::SessionEntry`] without running `op` when another
+    /// CPU backend execution is already active on the current thread or managed
+    /// Rayon scope ([`SessionEntryError::Reentered`]; direct nesting and backend
+    /// calls from parallel child tasks could violate CPU or provider
+    /// exclusivity), when a caller-managed domain is already executing, or when
+    /// admission state is poisoned. Returns [`crate::Error::BackendSource`] with
+    /// the executor's typed diagnostic when an externally managed executor
+    /// cannot be entered.
+    pub fn install<R: Send>(&self, op: impl FnOnce() -> R + Send) -> crate::Result<R> {
+        let admission = self.execution_admission()?;
         let permit = admission.permit();
         let entry = CpuOperationEntry::new(self.engine.domain(), permit);
-        match entry.enter(ParallelMode::Sequential, |_| op()) {
-            Ok(result) => result,
-            Err(error) => panic!("CpuBackend::install executor failed: {error}"),
-        }
+        entry
+            .enter(ParallelMode::Sequential, |_| op())
+            .map_err(|error| crate::Error::backend_source("CpuBackend::install", error))
     }
 
     fn try_install<R: Send>(
@@ -2780,13 +2785,21 @@ impl CpuBackend {
         op(&mut resources)
     }
 
-    fn acquire_execution_permit(&self, owner: ResourceOwner) -> ResourcePermit {
+    fn acquire_execution_permit(
+        &self,
+        owner: ResourceOwner,
+    ) -> Result<ResourcePermit, SessionEntryError> {
+        let arbiter_poisoned = |_| SessionEntryError::ResourcePoisoned {
+            backend: CPU_BACKEND,
+            resource: "the CPU resource arbiter",
+        };
         match &self.resolved {
             ResolvedCpuExecution::Managed(placement)
             | ResolvedCpuExecution::ExternalManaged(placement) => self
                 .shared
                 .arbiter
-                .acquire_recovering(placement.cpus().clone(), owner),
+                .acquire_waiting(placement.cpus().clone(), owner)
+                .map_err(arbiter_poisoned),
             ResolvedCpuExecution::ExternalCallerManaged => {
                 // INVARIANT: this resolved mode is created only from a domain
                 // whose admission variant owns the matching active-entry flag.
@@ -2797,16 +2810,25 @@ impl CpuBackend {
                     .unwrap_or_else(|| {
                         unreachable!("caller-managed execution needs a local admission guard")
                     });
-                ResourcePermit::caller_managed(active, owner)
+                ResourcePermit::caller_managed(active, owner).ok_or_else(|| {
+                    SessionEntryError::Contended {
+                        backend: CPU_BACKEND,
+                        message: "the caller-managed CPU domain is already executing; \
+                                  serialize entries to a caller-managed domain"
+                            .to_owned(),
+                    }
+                })
             }
             ResolvedCpuExecution::Compatibility => self
                 .shared
                 .arbiter
-                .acquire_recovering(self.shared.topology.allowed_cpus().clone(), owner),
+                .acquire_waiting(self.shared.topology.allowed_cpus().clone(), owner)
+                .map_err(arbiter_poisoned),
             ResolvedCpuExecution::ProviderDefaultExclusive => self
                 .shared
                 .arbiter
-                .acquire_provider_exclusive_recovering(owner),
+                .acquire_provider_exclusive_waiting(owner)
+                .map_err(arbiter_poisoned),
         }
     }
 
@@ -2896,15 +2918,15 @@ impl CpuBackend {
         &mut self,
         cache: Option<&mut gemm::GemmAnalysisCache>,
         f: impl FnOnce(&mut dyn BackendSession) -> R + Send,
-    ) -> R {
+    ) -> Result<R, SessionEntryError> {
         let providers = self.provider_bundle.clone();
-        let admission = self.infallible_execution_admission();
+        let admission = self.execution_admission()?;
         let permit = admission.permit();
         let owner = permit.owner();
         let entry = CpuOperationEntry::new(self.engine.domain(), permit);
         // Provider-owned BLAS threading does not change session entry: the
         // permit, including provider exclusion, spans this entire callback.
-        let enter_managed_session = entry.supports_infallible_session_entry();
+        let enter_managed_session = entry.enters_executor_per_session();
         let run = |entered| {
             self.with_execution_resources(permit, |resources| {
                 let mut buffers = BufferPoolLoan::new(&mut resources.buffers);
@@ -2936,7 +2958,8 @@ impl CpuBackend {
         if enter_managed_session {
             entry.enter_managed_session(|context| run(Some(context)))
         } else {
-            with_execution_owner(owner, || run(None))
+            // Externally managed domains keep operation-level executor entry.
+            Ok(with_execution_owner(owner, || run(None)))
         }
     }
 }
@@ -2945,7 +2968,7 @@ impl BackendSessionHost for CpuBackend {
     fn with_backend_session<R: Send>(
         &mut self,
         f: impl FnOnce(&mut dyn BackendSession) -> R + Send,
-    ) -> R {
+    ) -> Result<R, SessionEntryError> {
         self.run_backend_session_cached(None, f)
     }
 
@@ -2953,7 +2976,7 @@ impl BackendSessionHost for CpuBackend {
         &mut self,
         cache: &mut Self::RuntimeCache,
         f: impl FnOnce(&mut dyn BackendSession) -> R + Send,
-    ) -> R {
+    ) -> Result<R, SessionEntryError> {
         if !cpu_session_profile_enabled() {
             return self.run_backend_session_cached(Some(cache), f);
         }
@@ -2997,7 +3020,12 @@ fn reclaim_tensor_typed<T: tenferro_cpu_basic::PoolScalar>(
 
 impl TensorBuffer for CpuBackend {
     fn reclaim_buffer(&mut self, tensor: Tensor) {
-        let admission = self.infallible_execution_admission();
+        // Recycling is best effort: when no execution can be admitted (for
+        // example a nested call from inside a session), the tensor is simply
+        // dropped and its allocation freed instead of pooled.
+        let Ok(admission) = self.execution_admission() else {
+            return;
+        };
         let permit = admission.permit();
         with_execution_owner(permit.owner(), || {
             self.with_execution_resources(permit, |resources| {

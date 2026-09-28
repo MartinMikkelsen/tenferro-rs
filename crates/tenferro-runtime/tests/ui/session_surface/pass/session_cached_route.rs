@@ -32,7 +32,7 @@ fn main() {
                 TensorRead::from_tensor(&rhs),
                 &config,
             )
-        })
+        }).unwrap()
         .unwrap();
 
     assert_eq!(out.as_slice::<f64>().unwrap(), &[1.0, 2.0, 3.0, 4.0]);

@@ -63,14 +63,16 @@ fn the_registered_operation_rejects_a_preset_input() {
 fn ordinary_work_shares_the_session_with_the_extension() {
     let runtime = EagerRuntime::with_cpu_backend(CpuBackend::new()).expect("cpu runtime");
     let mut backend = CpuBackend::new();
-    backend.with_backend_session(|session| {
-        let a = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).expect("shape matches");
-        let b = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]).expect("shape matches");
-        let sum = session
-            .add_read(TensorRead::from_tensor(&a), TensorRead::from_tensor(&b))
-            .expect("ordinary addition");
-        assert_eq!(sum.as_slice::<f64>().expect("f64 slice"), &[4.0, 6.0]);
-    });
+    backend
+        .with_backend_session(|session| {
+            let a = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).expect("shape matches");
+            let b = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]).expect("shape matches");
+            let sum = session
+                .add_read(TensorRead::from_tensor(&a), TensorRead::from_tensor(&b))
+                .expect("ordinary addition");
+            assert_eq!(sum.as_slice::<f64>().expect("f64 slice"), &[4.0, 6.0]);
+        })
+        .unwrap();
     assert_eq!(
         <Df64Total as tenferro_ad::extension::ExtensionOp>::input_count(&Df64Total),
         1

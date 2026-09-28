@@ -53,6 +53,7 @@ fn uploaded_storage_is_root_owned_and_prepares_once_at_the_descriptor_boundary()
         .with_backend_session(|session| {
             session.to_contiguous_read(TensorRead::from_tensor(&tensor))
         })
+        .unwrap()
         .unwrap();
     assert_eq!(duplicate.dtype(), DType::F32);
     assert_ne!(allocation_id(&duplicate), allocation_id(&tensor));

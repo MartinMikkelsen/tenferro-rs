@@ -456,6 +456,7 @@ fn faer_read_transposed_view_uses_provider_runtime() {
                 &config,
             )
         })
+        .unwrap()
         .unwrap();
     assert_eq!(out.shape(), &[2, 2]);
     assert_eq!(out.as_slice::<f64>().unwrap(), &[50.0, 122.0, 68.0, 167.0]);
@@ -478,13 +479,17 @@ fn blas_dot_general_contract_trailing_rhs_dim() {
     };
     let mut backend =
         crate::CpuBackend::with_threads_and_kind(1, crate::CpuBackendKind::Blas).unwrap();
-    let out = backend
-        .dot_general(
-            &Tensor::from_typed::<f64>(lhs),
-            &Tensor::from_typed::<f64>(rhs),
+    let lhs = Tensor::from_typed::<f64>(lhs);
+    let rhs = Tensor::from_typed::<f64>(rhs);
+    let out = tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |session| {
+        session.dot_general_read(
+            tenferro_tensor::TensorRead::from_tensor(&lhs),
+            tenferro_tensor::TensorRead::from_tensor(&rhs),
             &config,
         )
-        .expect("dot_general should succeed");
+    })
+    .unwrap()
+    .expect("dot_general should succeed");
 
     assert_eq!(out.shape(), &[2, 2]);
     assert_eq!(out.as_slice::<f64>().unwrap(), &[89.0, 116.0, 98.0, 128.0]);

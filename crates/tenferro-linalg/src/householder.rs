@@ -26,7 +26,7 @@ use crate::QrOptions;
 /// let r = host.with_backend_session(|session| {
 ///     let qr = a.householder_qr(session)?;
 ///     qr.r(QrOptions::default(), session)
-/// })?;
+/// })??;
 /// assert_eq!(r.shape(), &[2, 2]);
 /// # Ok::<(), tenferro_tensor::Error>(())
 /// ```

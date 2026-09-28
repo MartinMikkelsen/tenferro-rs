@@ -35,7 +35,7 @@ fn main() {
                 &dot_config(),
             )?;
             Ok::<_, tenferro_tensor::Error>((total, dot))
-        })
+        }).unwrap()
         .unwrap();
 
     assert_eq!(total.as_slice::<f64>().unwrap(), &[10.0]);

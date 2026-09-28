@@ -123,7 +123,9 @@ fn exhaustion_recovery_waiter_wakes_when_last_active_permit_drops() {
     let handle = std::thread::spawn(move || {
         // Use the recovering path (as the backend does); the plain test
         // helper returns RequestIdExhausted directly without recovery.
-        let permit = arbiter2.acquire_recovering(cpu_set([1]), request_owner());
+        let permit = arbiter2
+            .acquire_waiting(cpu_set([1]), request_owner())
+            .unwrap();
         tx.send(()).unwrap();
         permit
     });

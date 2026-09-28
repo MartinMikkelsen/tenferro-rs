@@ -38,24 +38,26 @@ fn an_external_scalar_composes_with_ordinary_operations_in_one_session() {
         .expect("shape matches data");
 
     let mut backend = CpuBackend::new();
-    backend.with_backend_session(|session| {
-        // Ordinary tensor work inside the admitted session.
-        let a = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).expect("shape matches");
-        let b = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]).expect("shape matches");
-        let ordinary = session
-            .add_read(TensorRead::from_tensor(&a), TensorRead::from_tensor(&b))
-            .expect("ordinary addition");
-        assert_eq!(ordinary.as_slice::<f64>().expect("f64 slice"), &[4.0, 6.0]);
+    backend
+        .with_backend_session(|session| {
+            // Ordinary tensor work inside the admitted session.
+            let a = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).expect("shape matches");
+            let b = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]).expect("shape matches");
+            let ordinary = session
+                .add_read(TensorRead::from_tensor(&a), TensorRead::from_tensor(&b))
+                .expect("ordinary addition");
+            assert_eq!(ordinary.as_slice::<f64>().expect("f64 slice"), &[4.0, 6.0]);
 
-        // Extension-owned work in the same session, on the carried payload.
-        scalar_binary_into::<Df64, Df64Add>(
-            "df64_add",
-            &mut destination,
-            payload::<Df64>(&lhs),
-            payload::<Df64>(&rhs),
-        )
-        .expect("extension addition");
-    });
+            // Extension-owned work in the same session, on the carried payload.
+            scalar_binary_into::<Df64, Df64Add>(
+                "df64_add",
+                &mut destination,
+                payload::<Df64>(&lhs),
+                payload::<Df64>(&rhs),
+            )
+            .expect("extension addition");
+        })
+        .unwrap();
 
     // The low-order component survived the session.
     assert_eq!(destination.as_slice()[0], Df64 { hi: 1.0, lo: low });

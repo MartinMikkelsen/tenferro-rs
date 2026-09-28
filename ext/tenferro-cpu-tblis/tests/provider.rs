@@ -49,6 +49,7 @@ fn preferred_provider_falls_back_for_scalar_output_inner_product() {
                 &config,
             )
         })
+        .unwrap()
         .unwrap();
 
     assert_eq!(out.shape(), &[] as &[usize]);
@@ -65,6 +66,7 @@ fn preferred_provider_leaves_non_contractions_on_default_backend() {
         .with_backend_session(|session| {
             session.add_read(TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs))
         })
+        .unwrap()
         .unwrap();
 
     assert_eq!(out.as_slice::<f64>().unwrap(), &[4.0, 6.0]);
@@ -90,6 +92,7 @@ fn required_provider_reports_unsupported_without_fallback() {
                 &config,
             )
         })
+        .unwrap()
         .unwrap_err();
 
     assert!(error

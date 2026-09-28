@@ -35,7 +35,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let projected = x.matmul(&weights, session)?;
             Ok([shifted, squared_total, transposed, projected])
         },
-    )?;
+    )??;
     assert_close(shifted.host_data()?, &[11.0, 14.0, 22.0, 25.0, 33.0, 36.0]);
     assert_eq!(squared_total.shape(), &[]);
     assert_close(squared_total.host_data()?, &[3811.0]);

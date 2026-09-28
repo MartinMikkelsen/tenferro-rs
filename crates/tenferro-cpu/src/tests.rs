@@ -50,6 +50,7 @@ fn with_cpu_exec_session_checks_exact_marker_and_scopes_borrow() {
                 17usize
             })
         })
+        .unwrap()
         .expect("CpuBackend must expose its scoped CpuExecSession");
     assert_eq!(value, 17);
 }
@@ -65,6 +66,7 @@ fn faer_parallelism_capability_runs_inside_a_cpu_session() {
                 Ok(())
             })
         })
+        .unwrap()
         .unwrap();
 
     // A session that is not a CPU execution session is rejected with
@@ -304,6 +306,7 @@ fn grouped_gemm_shared_buffers_f64_matches_sequential_reference() {
                 TensorWrite::from_tensor(&mut out),
             )
         })
+        .unwrap()
         .unwrap();
 
     assert_eq!(out.as_slice::<f64>().unwrap(), expected.as_slice());
@@ -355,6 +358,7 @@ fn grouped_gemm_shared_buffers_c64_matches_sequential_reference() {
                 TensorWrite::from_tensor(&mut out),
             )
         })
+        .unwrap()
         .unwrap();
 
     for (actual, expected) in out.as_slice::<Complex64>().unwrap().iter().zip(expected) {
@@ -395,6 +399,7 @@ fn grouped_gemm_covers_f32_and_c32() {
                 TensorWrite::from_tensor(&mut out),
             )
         })
+        .unwrap()
         .unwrap();
     for (actual, expected) in out.as_slice::<f32>().unwrap().iter().zip(f32_expected) {
         assert!((*actual - expected).abs() < 1.0e-5);
@@ -436,6 +441,7 @@ fn grouped_gemm_covers_f32_and_c32() {
                 TensorWrite::from_tensor(&mut out),
             )
         })
+        .unwrap()
         .unwrap();
     for (actual, expected) in out
         .as_slice::<Complex32>()
@@ -473,6 +479,7 @@ fn grouped_gemm_rejects_overlapping_output_ranges() {
                 TensorWrite::from_tensor(&mut out),
             )
         })
+        .unwrap()
         .unwrap_err();
     assert!(format!("{err}").contains("overlaps"));
     assert_eq!(out.as_slice::<f64>().unwrap(), &[0.0; 8]);
@@ -500,6 +507,7 @@ fn grouped_gemm_zero_jobs_is_noop_and_empty_contract_scales_output() {
                 TensorWrite::from_tensor(&mut out),
             )
         })
+        .unwrap()
         .unwrap();
     assert_eq!(out.as_slice::<f64>().unwrap(), &[2.0, 3.0, 4.0, 5.0]);
 
@@ -523,6 +531,7 @@ fn grouped_gemm_zero_jobs_is_noop_and_empty_contract_scales_output() {
                 TensorWrite::from_tensor(&mut out),
             )
         })
+        .unwrap()
         .unwrap();
     assert_eq!(out.as_slice::<f64>().unwrap(), &[6.0, 9.0, 12.0, 15.0]);
 }

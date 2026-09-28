@@ -80,6 +80,7 @@ fn add_session(owner: &mut CpuBackend, a: &Tensor, b: &Tensor) -> Tensor {
         .with_backend_session(|session| {
             session.add_read(TensorRead::from_tensor(a), TensorRead::from_tensor(b))
         })
+        .unwrap()
         .expect("session add should succeed")
 }
 
@@ -94,6 +95,7 @@ fn add_scope(owner: &CpuBackend, ops: &mut CpuBackend, a: &Tensor, b: &Tensor) -
             ops.with_backend_session(|session| {
                 session.add_read(TensorRead::from_tensor(a), TensorRead::from_tensor(b))
             })
+            .unwrap()
         })
         .expect("scope admission should succeed")
         .expect("scope add should succeed")
@@ -108,6 +110,7 @@ fn dot_session(owner: &mut CpuBackend, a: &Tensor, b: &Tensor) -> Tensor {
                 &dot_config(),
             )
         })
+        .unwrap()
         .expect("session dot should succeed")
 }
 
@@ -121,6 +124,7 @@ fn dot_scope(owner: &CpuBackend, ops: &mut CpuBackend, a: &Tensor, b: &Tensor) -
                     &dot_config(),
                 )
             })
+            .unwrap()
         })
         .expect("scope admission should succeed")
         .expect("scope dot should succeed")
@@ -129,6 +133,7 @@ fn dot_scope(owner: &CpuBackend, ops: &mut CpuBackend, a: &Tensor, b: &Tensor) -
 fn reduce_session(owner: &mut CpuBackend, a: &Tensor) -> Tensor {
     owner
         .with_backend_session(|session| session.reduce_sum_read(TensorRead::from_tensor(a), &[0]))
+        .unwrap()
         .expect("session reduce_sum should succeed")
 }
 
@@ -138,6 +143,7 @@ fn reduce_scope(owner: &CpuBackend, ops: &mut CpuBackend, a: &Tensor) -> Tensor 
             ops.with_backend_session(|session| {
                 session.reduce_sum_read(TensorRead::from_tensor(a), &[0])
             })
+            .unwrap()
         })
         .expect("scope admission should succeed")
         .expect("scope reduce_sum should succeed")
@@ -150,6 +156,7 @@ fn slice_session(owner: &mut CpuBackend, a: &Tensor, config: &SliceConfig) -> Te
             // indexed operation is the capability dispatch on the session.
             TensorIndexing::slice(session, a, config)
         })
+        .unwrap()
         .expect("session slice should succeed")
 }
 
@@ -162,6 +169,7 @@ fn slice_scope(
     owner
         .with_execution_scope(|| {
             ops.with_backend_session(|session| TensorIndexing::slice(session, a, config))
+                .unwrap()
         })
         .expect("scope admission should succeed")
         .expect("scope slice should succeed")
@@ -172,17 +180,19 @@ fn slice_scope(
 // ---------------------------------------------------------------------------
 
 fn add_marginal_session(owner: &mut CpuBackend, a: &Tensor, b: &Tensor) -> Tensor {
-    owner.with_backend_session(|session| {
-        let mut x = session
-            .add_read(TensorRead::from_tensor(a), TensorRead::from_tensor(b))
-            .expect("session add should succeed");
-        for _ in 1..CHAIN_LEN {
-            x = session
-                .add_read(TensorRead::from_tensor(&x), TensorRead::from_tensor(b))
+    owner
+        .with_backend_session(|session| {
+            let mut x = session
+                .add_read(TensorRead::from_tensor(a), TensorRead::from_tensor(b))
                 .expect("session add should succeed");
-        }
-        x
-    })
+            for _ in 1..CHAIN_LEN {
+                x = session
+                    .add_read(TensorRead::from_tensor(&x), TensorRead::from_tensor(b))
+                    .expect("session add should succeed");
+            }
+            x
+        })
+        .unwrap()
 }
 
 fn add_marginal_scope(owner: &CpuBackend, ops: &mut CpuBackend, a: &Tensor, b: &Tensor) -> Tensor {
@@ -196,12 +206,14 @@ fn add_marginal_scope(owner: &CpuBackend, ops: &mut CpuBackend, a: &Tensor, b: &
                 .with_backend_session(|session| {
                     session.add_read(TensorRead::from_tensor(a), TensorRead::from_tensor(b))
                 })
+                .unwrap()
                 .expect("scope add should succeed");
             for _ in 1..CHAIN_LEN {
                 x = ops
                     .with_backend_session(|session| {
                         session.add_read(TensorRead::from_tensor(&x), TensorRead::from_tensor(b))
                     })
+                    .unwrap()
                     .expect("scope add should succeed");
             }
             x
@@ -386,6 +398,7 @@ fn bench_cast(c: &mut Criterion) {
 
     let session_out = owner
         .with_backend_session(|session| session.cast(&a, DType::F32))
+        .unwrap()
         .expect("session cast");
     assert_eq!(session_out.as_slice::<f32>().unwrap()[0], 1.0);
 
@@ -394,6 +407,7 @@ fn bench_cast(c: &mut Criterion) {
             black_box(
                 owner
                     .with_backend_session(|session| session.cast(black_box(&a), DType::F32))
+                    .unwrap()
                     .expect("session cast"),
             )
         });

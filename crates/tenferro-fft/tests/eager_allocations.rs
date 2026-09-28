@@ -134,7 +134,9 @@ fn ordinary_eager_drop_and_consuming_fft_reuse_without_input_sized_allocations()
     );
     measured((0, 0), || {
         let owned = output.into_value().unwrap();
-        backend.with_backend_session(|s| s.reclaim_buffer(owned));
+        backend
+            .with_backend_session(|s| s.reclaim_buffer(owned))
+            .unwrap();
     });
     let output = measured((0, 0), transform);
     assert_eq!(

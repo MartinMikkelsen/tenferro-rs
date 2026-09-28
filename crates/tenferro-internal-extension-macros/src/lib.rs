@@ -223,7 +223,7 @@ fn expand_extension_runtime(args: RuntimeArgs) -> syn::Result<proc_macro2::Token
                     |session| -> tenferro_runtime::Result<Vec<tenferro_tensor::Tensor>> {
                         Ok(#execute_in_session(&self.op, session, extension_caches, inputs)?)
                     },
-                )
+                )?
             }
         },
         (Some(execute_reads), None) => quote! {

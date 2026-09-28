@@ -91,6 +91,7 @@ pub mod config;
 pub mod dispatch;
 pub mod error;
 pub mod prelude;
+mod session_entry;
 pub mod types;
 pub mod validate;
 
@@ -112,6 +113,7 @@ pub use config::{
 pub use erased_host::ErasedHostTensor;
 pub use error::{BoxError, Error, ReinterpretError, Result};
 pub use scalar_set::ScalarSet;
+pub use session_entry::SessionEntryError;
 
 pub use host_container::{
     DefaultScalars, DefaultScalarsRef, DefaultScalarsView, HostTensor, HostTensorView,

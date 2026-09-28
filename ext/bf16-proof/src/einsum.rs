@@ -537,7 +537,7 @@ impl<B: TensorBackend + std::fmt::Debug + Send + Sync + 'static> PreparedOperati
                     .cloned()
                     .map(|input| exec.to_contiguous_read(input))
                     .collect::<tenferro_tensor::Result<Vec<Tensor>>>()
-            })
+            })?
             .map_err(tenferro_runtime::Error::from)?;
         let borrowed: Vec<&Tensor> = materialized.iter().collect();
         contract(self.op.as_ref(), &borrowed)

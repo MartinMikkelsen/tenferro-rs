@@ -104,6 +104,7 @@ fn assert_c32_dot_general_with_conj_matches_cpu(
         .with_backend_session(|__s| {
             __s.dot_general_with_conj(&lhs, &rhs, &config, lhs_conj, rhs_conj)
         })
+        .unwrap()
         .unwrap();
 
     let gpu_lhs = backend
@@ -116,6 +117,7 @@ fn assert_c32_dot_general_with_conj_matches_cpu(
         .with_backend_session(|__s| {
             __s.dot_general_with_conj(&gpu_lhs, &gpu_rhs, &config, lhs_conj, rhs_conj)
         })
+        .unwrap()
         .unwrap();
     let out = backend
         .download_to_host(tenferro_tensor::TensorRead::from_tensor(&gpu_out))
@@ -223,6 +225,7 @@ fn webgpu_f32_dot_general_with_conj_is_identity_when_adapter_available() {
     let mut cpu = CpuBackend::new();
     let expected = cpu
         .with_backend_session(|__s| __s.dot_general_with_conj(&lhs, &rhs, &config, true, true))
+        .unwrap()
         .unwrap();
 
     let gpu_lhs = backend
@@ -235,6 +238,7 @@ fn webgpu_f32_dot_general_with_conj_is_identity_when_adapter_available() {
         .with_backend_session(|__s| {
             __s.dot_general_with_conj(&gpu_lhs, &gpu_rhs, &config, true, true)
         })
+        .unwrap()
         .unwrap();
     let out = backend
         .download_to_host(tenferro_tensor::TensorRead::from_tensor(&gpu_out))
@@ -279,6 +283,7 @@ fn webgpu_dot_general_runs_rank2_f32_matmul_when_adapter_available() {
                 &config,
             )
         })
+        .unwrap()
         .unwrap();
     let out = backend
         .download_to_host(tenferro_tensor::TensorRead::from_tensor(&gpu_out))
@@ -372,6 +377,7 @@ fn webgpu_dot_general_supports_batched_f32_contract_shape_when_adapter_available
                 &config,
             )
         })
+        .unwrap()
         .unwrap();
     let out = backend
         .download_to_host(tenferro_tensor::TensorRead::from_tensor(&gpu_out))
@@ -421,6 +427,7 @@ fn webgpu_dot_general_packs_noncontiguous_lhs_free_axes_when_adapter_available()
                 &config,
             )
         })
+        .unwrap()
         .unwrap();
     let out = backend
         .download_to_host(tenferro_tensor::TensorRead::from_tensor(&gpu_out))
@@ -492,6 +499,7 @@ fn webgpu_dot_general_supports_batched_c32_contract_shape_when_adapter_available
                 &config,
             )
         })
+        .unwrap()
         .unwrap();
     let out = backend
         .download_to_host(tenferro_tensor::TensorRead::from_tensor(&gpu_out))
@@ -533,6 +541,7 @@ fn webgpu_dot_general_rejects_f64_and_c64_without_cpu_fallback_when_adapter_avai
                 &config,
             )
         })
+        .unwrap()
         .expect_err("f64 WebGPU dot_general must stay unsupported");
     assert!(
         err.to_string().contains("WebGPU"),
@@ -555,6 +564,7 @@ fn webgpu_dot_general_rejects_f64_and_c64_without_cpu_fallback_when_adapter_avai
                 &config,
             )
         })
+        .unwrap()
         .expect_err("c64 WebGPU dot_general must stay unsupported");
     assert!(
         err.to_string().contains("WebGPU"),
@@ -604,6 +614,7 @@ fn webgpu_dot_general_runs_rank2_c32_matmul_when_adapter_available() {
                 &config,
             )
         })
+        .unwrap()
         .unwrap();
     let out = backend
         .download_to_host(tenferro_tensor::TensorRead::from_tensor(&gpu_out))

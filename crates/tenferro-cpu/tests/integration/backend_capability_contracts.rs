@@ -297,9 +297,11 @@ fn cpu_backend_exposes_only_owner_capabilities() {
 #[test]
 fn backend_session_exposes_narrow_capability_bounds() {
     let mut backend = CpuBackend::new();
-    backend.with_backend_session(|session| {
-        accepts_session_capabilities(session);
-    });
+    backend
+        .with_backend_session(|session| {
+            accepts_session_capabilities(session);
+        })
+        .unwrap();
 }
 
 #[test]

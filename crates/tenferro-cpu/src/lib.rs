@@ -12,7 +12,7 @@
 //! let c = backend
 //!     .with_backend_session(|session| {
 //!         session.add_read(TensorRead::from_tensor(&a), TensorRead::from_tensor(&b))
-//!     })?;
+//!     })??;
 //! assert_eq!(c.as_slice::<f64>().unwrap(), &[4.0, 6.0]);
 //! # Ok::<(), tenferro_tensor::Error>(())
 //! ```
@@ -340,7 +340,7 @@ where
 ///         let _ = parallel;
 ///         Ok(())
 ///     })
-/// })?;
+/// })??;
 /// # Ok(())
 /// # }
 /// # fn main() {}

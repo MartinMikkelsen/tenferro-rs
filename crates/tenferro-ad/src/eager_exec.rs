@@ -315,7 +315,7 @@ pub(crate) fn exec_op_on_tensor_reads_with_runtime<B: BackendSessionHost>(
             return Err(missing_extension_module_error(ext.as_ref()));
         };
         let concrete_inputs =
-            backend.with_backend_session(|exec| concrete_tensor_reads(exec, inputs))?;
+            backend.with_backend_session(|exec| concrete_tensor_reads(exec, inputs))??;
         let input_refs: Vec<&Tensor> = concrete_inputs.iter().map(|input| input.tensor()).collect();
         return execute_extension_op_via_runtime(Arc::clone(ext), &input_refs, runtime);
     }
@@ -461,7 +461,7 @@ fn exec_standard_op_on_tensor_reads<B: BackendSessionHost>(
 ) -> Result<Vec<Tensor>> {
     backend.with_backend_session(|exec| {
         exec_standard_op_on_tensor_reads_with_session(op, inputs, exec)
-    })
+    })?
 }
 
 pub(crate) fn exec_standard_op_on_tensor_reads_in_session(
@@ -729,7 +729,8 @@ fn exec_standard_op_on_tensors<B: BackendSessionHost>(
     inputs: &[&Tensor],
     backend: &mut B,
 ) -> Result<Vec<Tensor>> {
-    backend.with_backend_session(|exec| exec_standard_op_on_tensors_with_session(op, inputs, exec))
+    backend
+        .with_backend_session(|exec| exec_standard_op_on_tensors_with_session(op, inputs, exec))?
 }
 
 pub(crate) fn exec_standard_op_on_tensors_in_session(

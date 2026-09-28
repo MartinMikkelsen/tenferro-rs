@@ -39,6 +39,10 @@ not when changing tenferro itself.
   crates you need (`tenferro-runtime`, `tenferro-cpu`, and operation crates).
 - **Explicit execution owner.** Concrete operations take a borrowed session
   inside `backend.with_backend_session(...)` (`BackendSessionHost` import).
+  Entry is fallible: it returns `Result<R, SessionEntryError>` around the
+  callback's own result, so an operation returning `Result` needs `??`. A
+  session opened from inside another session fails with `Reentered` instead of
+  running; pass the borrowed session to nested work.
   Construct the backend/runtime once and reuse it — per-call construction
   discards the buffer pool. Eager tensors retain their runtime instead.
 - **Representation is not reuse.** Integer einsum labels still plan. For a

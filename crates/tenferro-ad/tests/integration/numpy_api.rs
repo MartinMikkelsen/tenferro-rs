@@ -393,6 +393,7 @@ fn tensor_add_uses_numpy_broadcasting_with_explicit_backend() {
 
     let out = backend
         .with_backend_session(|session| lhs.add(&rhs, session))
+        .unwrap()
         .unwrap();
 
     assert_eq!(out.shape(), &[3, 4]);
@@ -435,6 +436,7 @@ fn tensor_extension_trait_exposes_initial_elementwise_methods() {
             let _ = x.log1p(session)?;
             Ok(cond)
         })
+        .unwrap()
         .unwrap();
 }
 
@@ -450,6 +452,7 @@ fn tensor_compare_returns_bool_and_where_select_accepts_bool_condition() {
             let selected = cond.where_select(&x, &y, session)?;
             Ok((cond, selected))
         })
+        .unwrap()
         .unwrap();
 
     assert_eq!(cond.dtype(), DType::Bool);
@@ -469,6 +472,7 @@ fn typed_tensor_add_uses_numpy_broadcasting_with_explicit_backend() {
 
     let out = backend
         .with_backend_session(|session| lhs.add(&rhs, session))
+        .unwrap()
         .unwrap();
 
     assert_eq!(out.shape(), &[3, 4]);
@@ -511,6 +515,7 @@ fn typed_tensor_extension_trait_exposes_initial_elementwise_methods() {
             let _ = x.log1p(session)?;
             Ok(cond)
         })
+        .unwrap()
         .unwrap();
 }
 
@@ -526,6 +531,7 @@ fn typed_tensor_compare_returns_bool_and_where_select_accepts_bool_condition() {
             let selected = cond.where_select(&x, &y, session)?;
             Ok::<_, tenferro_tensor::Error>((cond, selected))
         })
+        .unwrap()
         .unwrap();
 
     assert_eq!(cond.host_data().unwrap(), &[true, false]);

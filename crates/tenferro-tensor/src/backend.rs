@@ -7,8 +7,8 @@ use crate::types::{
 };
 use crate::validate::validate_convert_dtype;
 use crate::{
-    AllocationDomainId, AllocationId, DType, Error, RuntimeCacheControl, ShapeMismatch, Tensor,
-    TensorRead, TensorValue, TensorWrite, ValidationError,
+    AllocationDomainId, AllocationId, DType, Error, RuntimeCacheControl, SessionEntryError,
+    ShapeMismatch, Tensor, TensorRead, TensorValue, TensorWrite, ValidationError,
 };
 use num_complex::{Complex32, Complex64};
 use std::any::TypeId;
@@ -3804,17 +3804,34 @@ pub trait BackendSessionHost: BackendRuntimeCache {
     ///
     /// The session is built by the backend rather than by coercing the owner, so
     /// this is the only way an operation is reached from a backend.
+    ///
+    /// Admission happens before `f` runs. A backend may wait for resources that
+    /// another thread will release (CPU resource permits are granted in FIFO
+    /// order), but it never runs `f` twice, never retries `f` through a fallback
+    /// path, and never reports a failure of `f` as an admission failure: the
+    /// callback's own value, including its own `Result`, is returned unchanged in
+    /// `Ok`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SessionEntryError`] without running `f` when the backend cannot
+    /// admit the session: [`SessionEntryError::Reentered`] for a nested entry on
+    /// the calling thread, [`SessionEntryError::Contended`] for a busy resource
+    /// that admission cannot wait for, [`SessionEntryError::IncompatibleContext`]
+    /// for a mismatched execution scope or executor declaration,
+    /// [`SessionEntryError::ResourcePoisoned`] for poisoned admission state, and
+    /// [`SessionEntryError::Executor`] when the executor cannot be entered.
     fn with_backend_session<R: Send>(
         &mut self,
         f: impl FnOnce(&mut dyn BackendSession) -> R + Send,
-    ) -> R;
+    ) -> Result<R, SessionEntryError>;
 
     #[doc(hidden)]
     fn with_backend_session_cached<R: Send>(
         &mut self,
         _cache: &mut Self::RuntimeCache,
         f: impl FnOnce(&mut dyn BackendSession) -> R + Send,
-    ) -> R {
+    ) -> Result<R, SessionEntryError> {
         self.with_backend_session(f)
     }
 }
@@ -3971,9 +3988,11 @@ fn validate_compatible_placement(
 /// where
 ///     B: tenferro_tensor::TensorBackend,
 /// {
+///     // Admission failure converts into `tenferro_tensor::Error::SessionEntry`;
+///     // the operation's own result is returned unchanged.
 ///     backend.with_backend_session(|exec| {
 ///         exec.add_read(TensorRead::from_tensor(a), TensorRead::from_tensor(b))
-///     })
+///     })?
 /// }
 /// ```
 ///
@@ -4143,14 +4162,18 @@ thread_local! {
 struct InSessionGuard;
 
 impl InSessionGuard {
-    fn enter() -> Self {
-        debug_assert!(
-            !IN_SESSION.get(),
-            "nested backend session entry: a session closure called \
-             with_backend_session again on this thread"
-        );
+    /// Set the in-session flag for one session closure.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SessionEntryError::Reentered`] when a session closure is
+    /// already running on this thread.
+    fn enter(backend: &'static str) -> Result<Self, SessionEntryError> {
+        if IN_SESSION.get() {
+            return Err(SessionEntryError::Reentered { backend });
+        }
         IN_SESSION.set(true);
-        InSessionGuard
+        Ok(InSessionGuard)
     }
 }
 
@@ -4161,14 +4184,18 @@ impl Drop for InSessionGuard {
 }
 
 /// Run `f` with the thread-local in-session flag set, restoring it on exit
-/// including on panic, and asserting (in debug builds) that the caller is not
-/// already inside a session closure.
+/// including on panic.
 ///
-/// This is the portable nested-entry guard shared by every backend-session
-/// entry point. CPU keeps its own release-mode `EXECUTION_OWNER` panic on top
-/// of this debug check.
+/// This is the portable nested-entry guard shared by backend-session entry
+/// points that have no resource permit of their own. A nested entry on the same
+/// thread is rejected with [`SessionEntryError::Reentered`] before `f` runs, in
+/// every build profile. CPU admission tracks reentry through its execution
+/// owner instead.
 #[doc(hidden)]
-pub fn with_session_entry_guard<R>(f: impl FnOnce() -> R) -> R {
-    let _guard = InSessionGuard::enter();
-    f()
+pub fn with_session_entry_guard<R>(
+    backend: &'static str,
+    f: impl FnOnce() -> R,
+) -> Result<R, SessionEntryError> {
+    let _guard = InSessionGuard::enter(backend)?;
+    Ok(f())
 }

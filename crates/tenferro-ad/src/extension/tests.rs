@@ -194,6 +194,7 @@ impl PreparedOperationExecutor for BridgePrepared {
             })?;
         let output = backend
             .with_backend_session(|__s| __s.to_contiguous_read(inputs[0].clone()))
+            .unwrap()
             .map_err(tenferro_runtime::Error::from)?;
         Ok(vec![output])
     }

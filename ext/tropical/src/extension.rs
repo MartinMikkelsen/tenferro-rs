@@ -297,7 +297,7 @@ impl<B: TensorBackend + 'static> PreparedOperationExecutor
                 .cloned()
                 .map(|input| exec.to_contiguous_read(input))
                 .collect::<tenferro_tensor::Result<Vec<_>>>()
-        })?;
+        })??;
         let input_refs: Vec<&Tensor> = materialized_inputs.iter().collect();
         Ok(execute_tropical_reference_payload(
             self.family_id,

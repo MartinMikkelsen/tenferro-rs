@@ -24,9 +24,6 @@ thread_local! {
     static WORKER_EXECUTION_SCOPE: RefCell<Option<Arc<ExecutionScopeState>>> = const { RefCell::new(None) };
 }
 
-pub(crate) const BACKEND_REENTRY_PANIC: &str =
-    "CpuBackend cannot be re-entered while another CPU backend execution is active on this thread or managed Rayon scope";
-
 pub(crate) fn has_active_execution() -> bool {
     EXECUTION_OWNER.with(Cell::get).is_some()
         || WORKER_EXECUTION_SCOPE.with(|scope| {
@@ -37,11 +34,12 @@ pub(crate) fn has_active_execution() -> bool {
         })
 }
 
-pub(crate) fn inherited_or_new_execution_owner() -> ResourceOwner {
-    if has_active_execution() {
-        panic!("{BACKEND_REENTRY_PANIC}");
-    }
-    ResourceOwner::fresh()
+/// Return a fresh owner for a top-level CPU execution, or `None` when another
+/// CPU backend execution is already active on this thread or managed Rayon
+/// scope. Nested entry could violate CPU or provider exclusivity, so callers
+/// report it as a typed reentry error before running any user callback.
+pub(crate) fn fresh_execution_owner() -> Option<ResourceOwner> {
+    (!has_active_execution()).then(ResourceOwner::fresh)
 }
 
 pub(crate) fn current_execution_owner() -> Option<ResourceOwner> {
@@ -248,34 +246,44 @@ impl ResourceArbiter {
         self.try_acquire_request(ResourceRequest::ProviderExclusive)
     }
 
-    pub(crate) fn acquire_recovering(&self, cpus: CpuSet, owner: ResourceOwner) -> ResourcePermit {
-        self.acquire_request_recovering(ResourceRequest::CpuSet(cpus), owner)
+    /// Wait in FIFO order for `cpus`. Contention with another owner is waited
+    /// out; only poisoned arbiter state is reported.
+    pub(crate) fn acquire_waiting(
+        &self,
+        cpus: CpuSet,
+        owner: ResourceOwner,
+    ) -> Result<ResourcePermit, ResourceArbiterError> {
+        self.acquire_request_waiting(ResourceRequest::CpuSet(cpus), owner)
     }
 
-    pub(crate) fn acquire_provider_exclusive_recovering(
+    pub(crate) fn acquire_provider_exclusive_waiting(
         &self,
         owner: ResourceOwner,
-    ) -> ResourcePermit {
-        self.acquire_request_recovering(ResourceRequest::ProviderExclusive, owner)
+    ) -> Result<ResourcePermit, ResourceArbiterError> {
+        self.acquire_request_waiting(ResourceRequest::ProviderExclusive, owner)
     }
 
-    fn acquire_request_recovering(
+    fn acquire_request_waiting(
         &self,
         request: ResourceRequest,
         owner: ResourceOwner,
-    ) -> ResourcePermit {
+    ) -> Result<ResourcePermit, ResourceArbiterError> {
         loop {
             match self.acquire_request(request.clone(), owner) {
-                Ok(permit) => return permit,
+                Ok(permit) => return Ok(permit),
+                // Poison means a thread panicked inside arbiter bookkeeping, so
+                // the active/waiter lists cannot be trusted; report it.
                 Err(ResourceArbiterError::StatePoisoned) => {
-                    self.inner.state.clear_poison();
+                    return Err(ResourceArbiterError::StatePoisoned);
                 }
+                // Exhaustion is waitable: once every permit and waiter drains,
+                // request ids restart from zero.
                 Err(ResourceArbiterError::RequestIdExhausted) => {
                     let mut state = self
                         .inner
                         .state
                         .lock()
-                        .unwrap_or_else(std::sync::PoisonError::into_inner);
+                        .map_err(|_| ResourceArbiterError::StatePoisoned)?;
                     while !state.active.is_empty() || !state.waiters.is_empty() {
                         // Mark the park while holding the mutex, immediately
                         // before wait releases it into the condvar: a drop can
@@ -289,7 +297,7 @@ impl ResourceArbiter {
                             .inner
                             .changed
                             .wait(state)
-                            .unwrap_or_else(std::sync::PoisonError::into_inner);
+                            .map_err(|_| ResourceArbiterError::StatePoisoned)?;
                         #[cfg(test)]
                         self.inner
                             .recovery_waiters
@@ -439,7 +447,7 @@ impl ResourceArbiter {
     }
 
     #[cfg(test)]
-    fn poison_for_test(&self) {
+    pub(crate) fn poison_for_test(&self) {
         let inner = Arc::clone(&self.inner);
         let _ = std::panic::catch_unwind(move || {
             let _state = inner.state.lock().unwrap();
@@ -460,18 +468,18 @@ pub(crate) struct ResourcePermit {
 }
 
 impl ResourcePermit {
-    pub(crate) fn caller_managed(active: Arc<AtomicBool>, owner: ResourceOwner) -> Self {
-        if active
+    /// Claim a caller-managed domain's active-entry flag, or return `None`
+    /// when an execution of that domain is already active. Caller-managed
+    /// domains have no queue to wait in.
+    pub(crate) fn caller_managed(active: Arc<AtomicBool>, owner: ResourceOwner) -> Option<Self> {
+        active
             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-            .is_err()
-        {
-            panic!("{BACKEND_REENTRY_PANIC}");
-        }
-        Self {
+            .ok()?;
+        Some(Self {
             kind: ResourcePermitKind::CallerManaged { active },
             owner,
             reentrant: false,
-        }
+        })
     }
 
     pub(crate) fn is_reentrant(&self) -> bool {

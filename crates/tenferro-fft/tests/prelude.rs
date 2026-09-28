@@ -8,6 +8,7 @@ fn prelude_calls_concrete_fft_operation() {
     let mut backend = CpuBackend::new();
     let spectrum = backend
         .with_backend_session(|session| input.fft(None, -1, FftNorm::Backward, session))
+        .unwrap()
         .unwrap();
     assert_eq!(
         spectrum.as_slice::<Complex64>().unwrap()[0],

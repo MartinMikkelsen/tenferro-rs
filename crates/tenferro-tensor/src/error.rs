@@ -93,6 +93,11 @@ pub enum Error {
         #[source]
         source: BoxError,
     },
+    #[error("backend session entry failed: {source}")]
+    SessionEntry {
+        #[source]
+        source: crate::SessionEntryError,
+    },
     #[error("missing runtime value for slot {slot}")]
     MissingValue { slot: usize },
     #[error("internal tensor error: {0}")]
@@ -590,11 +595,18 @@ impl Error {
             Self::IoSource { .. } => ErrorKind::Io,
             Self::RuntimeState { .. }
             | Self::RuntimeStateSource { .. }
-            | Self::HostAccess { .. } => ErrorKind::RuntimeState,
+            | Self::HostAccess { .. }
+            | Self::SessionEntry { .. } => ErrorKind::RuntimeState,
             Self::Extension { kind, .. } => *kind,
             Self::MissingValue { .. } => ErrorKind::RuntimeState,
             Self::Internal(_) => ErrorKind::Internal,
         }
+    }
+}
+
+impl From<crate::SessionEntryError> for Error {
+    fn from(source: crate::SessionEntryError) -> Self {
+        Self::SessionEntry { source }
     }
 }
 

@@ -278,44 +278,46 @@ fn run_concrete(
 ) -> Result<(Vec<f64>, Tensor, Tensor), String> {
     let mut backend =
         CpuBackend::with_threads_and_kind(1, config.backend).map_err(|error| error.to_string())?;
-    backend.with_backend_session(|session| {
-        with_cpu_exec_session(session, |session| {
-            let total = config.warmups + config.repetitions;
-            let mut timings = Vec::with_capacity(config.repetitions);
-            for iteration in 0..total {
-                let states = (0..SAMPLE_BATCH)
-                    .map(|_| initial.householder_qr(session).map_err(to_string))
-                    .collect::<Result<Vec<_>, _>>()?;
-                warm_cpu_clock();
-                let elapsed = if matches!(lane, Lane::Complete) {
-                    let start = Instant::now();
-                    for state in states {
-                        black_box(complete_concrete(state, blocks, session)?);
+    backend
+        .with_backend_session(|session| {
+            with_cpu_exec_session(session, |session| {
+                let total = config.warmups + config.repetitions;
+                let mut timings = Vec::with_capacity(config.repetitions);
+                for iteration in 0..total {
+                    let states = (0..SAMPLE_BATCH)
+                        .map(|_| initial.householder_qr(session).map_err(to_string))
+                        .collect::<Result<Vec<_>, _>>()?;
+                    warm_cpu_clock();
+                    let elapsed = if matches!(lane, Lane::Complete) {
+                        let start = Instant::now();
+                        for state in states {
+                            black_box(complete_concrete(state, blocks, session)?);
+                        }
+                        start.elapsed()
+                    } else {
+                        let mut elapsed = std::time::Duration::ZERO;
+                        for state in states {
+                            elapsed += attributed_concrete(state, blocks, session, lane)?;
+                        }
+                        elapsed
                     }
-                    start.elapsed()
-                } else {
-                    let mut elapsed = std::time::Duration::ZERO;
-                    for state in states {
-                        elapsed += attributed_concrete(state, blocks, session, lane)?;
+                    .as_secs_f64()
+                        * 1.0e3;
+                    if iteration >= config.warmups {
+                        timings.push(elapsed);
                     }
-                    elapsed
                 }
-                .as_secs_f64()
-                    * 1.0e3;
-                if iteration >= config.warmups {
-                    timings.push(elapsed);
-                }
-            }
-            let state = initial.householder_qr(session).map_err(to_string)?;
-            let final_state = append_sequence(state, blocks, session)?;
-            let q = final_state
-                .q_columns(0..FINAL_RANK, raw_options(), session)
-                .map_err(to_string)?;
-            let r = final_state.r(raw_options(), session).map_err(to_string)?;
-            Ok((timings, q, r))
+                let state = initial.householder_qr(session).map_err(to_string)?;
+                let final_state = append_sequence(state, blocks, session)?;
+                let q = final_state
+                    .q_columns(0..FINAL_RANK, raw_options(), session)
+                    .map_err(to_string)?;
+                let r = final_state.r(raw_options(), session).map_err(to_string)?;
+                Ok((timings, q, r))
+            })
+            .ok_or_else(|| "CPU execution session unavailable".to_string())?
         })
-        .ok_or_else(|| "CPU execution session unavailable".to_string())?
-    })
+        .unwrap()
 }
 
 fn append_sequence(
@@ -392,7 +394,11 @@ fn run_fresh_session(
     let mut timings = Vec::with_capacity(config.repetitions);
     for iteration in 0..total {
         let states = (0..SAMPLE_BATCH)
-            .map(|_| backend.with_backend_session(|session| initial.householder_qr(session)))
+            .map(|_| {
+                backend
+                    .with_backend_session(|session| initial.householder_qr(session))
+                    .unwrap()
+            })
             .collect::<Result<Vec<_>, _>>()
             .map_err(to_string)?;
         warm_cpu_clock();
@@ -401,10 +407,12 @@ fn run_fresh_session(
             for (append, block) in blocks.iter().enumerate() {
                 state = backend
                     .with_backend_session(|session| state.append_columns(block, session))
+                    .unwrap()
                     .map_err(to_string)?;
                 black_box(
                     backend
                         .with_backend_session(|session| state.r(raw_options(), session))
+                        .unwrap()
                         .map_err(to_string)?,
                 );
                 let start = INITIAL_RANK + append * BLOCK_WIDTH;
@@ -413,6 +421,7 @@ fn run_fresh_session(
                         .with_backend_session(|session| {
                             state.q_columns(start..start + BLOCK_WIDTH, raw_options(), session)
                         })
+                        .unwrap()
                         .map_err(to_string)?,
                 );
             }
@@ -424,17 +433,21 @@ fn run_fresh_session(
     }
     let mut state = backend
         .with_backend_session(|session| initial.householder_qr(session))
+        .unwrap()
         .map_err(to_string)?;
     for block in blocks {
         state = backend
             .with_backend_session(|session| state.append_columns(block, session))
+            .unwrap()
             .map_err(to_string)?;
     }
     let q = backend
         .with_backend_session(|session| state.q_columns(0..FINAL_RANK, raw_options(), session))
+        .unwrap()
         .map_err(to_string)?;
     let r = backend
         .with_backend_session(|session| state.r(raw_options(), session))
+        .unwrap()
         .map_err(to_string)?;
     Ok((timings, q, r))
 }

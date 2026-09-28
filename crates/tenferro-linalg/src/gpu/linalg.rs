@@ -2541,7 +2541,10 @@ where
     let host = TypedTensor::<T>::from_vec_col_major(shape.to_vec(), data)?;
     let uploaded =
         backend.upload_host_tensor(TensorRead::from_tensor(&Tensor::from_typed::<T>(host)))?;
-    uploaded.into_typed::<T>()
+    // The upload preserves the host dtype `T`; a refusal keeps its typed cause.
+    uploaded
+        .into_typed::<T>()
+        .map_err(|failure| failure.into_parts().1)
 }
 
 fn svd_values_typed<T>(

@@ -155,6 +155,7 @@ fn lazy_view_input_conversion_duplicates_when_input_remains_live() {
 
     let value = backend
         .with_backend_session(|exec| tensor_value_for_lazy_view(exec, &mut slots, 0, false))
+        .unwrap()
         .unwrap();
 
     let output = value.as_tensor().unwrap();
@@ -248,6 +249,7 @@ fn exec_slot_owned_value_and_read_tensor_conversions_preserve_shape_and_data() {
             );
             Ok::<(), crate::Error>(())
         })
+        .unwrap()
         .unwrap();
 }
 
@@ -302,6 +304,7 @@ fn collect_outputs_rejects_out_of_range_slot_without_panicking() {
     let mut backend = CpuBackend::new();
     let err = backend
         .with_backend_session(|exec| collect_outputs_from(&program, &mut slots, exec))
+        .unwrap()
         .unwrap_err();
 
     let message = err.to_string();
@@ -775,6 +778,7 @@ fn missing_extension_executor_reports_typed_fields_on_both_execution_paths() {
                 &mut caches,
             )
         })
+        .unwrap()
         .expect_err("metadata-only extension must not execute in a session");
     assert_missing_extension_executor(error);
 }

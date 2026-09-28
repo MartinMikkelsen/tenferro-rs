@@ -132,7 +132,7 @@ extern "C" __global__ void add_kernel(
                 })
             })
             .ok_or_else(|| Error::runtime_state("custom_cuda.add", "backend session is not CUDA"))?
-        })
+        })?
     }
     // snippet-end:custom_cuda_launch
 }

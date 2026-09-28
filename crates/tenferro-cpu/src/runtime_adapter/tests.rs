@@ -424,9 +424,11 @@ fn cpu_backend_cache_owner_hooks_report_and_clear_current_engine_caches() {
     };
     backend
         .with_backend_session(|__s| __s.gather(&operand, &indices, &config))
+        .unwrap()
         .expect("compile gather plan");
     backend
         .with_backend_session(|__s| __s.gather(&operand, &indices, &config))
+        .unwrap()
         .expect("reuse gather plan");
     let populated = RuntimeCacheOwner::cache_stats(&backend).expect("populated cache stats");
     assert_eq!(populated.entries, 1);

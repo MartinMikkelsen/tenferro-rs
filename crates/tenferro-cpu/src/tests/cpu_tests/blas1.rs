@@ -20,11 +20,13 @@ fn vdot(backend: &mut CpuBackend, lhs: &Tensor, rhs: &Tensor) -> Tensor {
             session.vdot_read(TensorRead::from_tensor(lhs), TensorRead::from_tensor(rhs))
         })
         .unwrap()
+        .unwrap()
 }
 
 fn norm_squared(backend: &mut CpuBackend, input: &Tensor) -> Tensor {
     backend
         .with_backend_session(|session| session.norm_squared_read(TensorRead::from_tensor(input)))
+        .unwrap()
         .unwrap()
 }
 
@@ -44,6 +46,7 @@ fn axpby(
                 TensorWrite::from_tensor(y),
             )
         })
+        .unwrap()
         .unwrap();
 }
 
@@ -185,6 +188,7 @@ fn blas1_compact_view_destinations_cover_all_supported_dtypes() {
                         TensorWrite::from_view(TensorViewMut::$view_variant(view)),
                     )
                 })
+                .unwrap()
                 .unwrap();
             assert_eq!(storage, vec![$one + $two, $one + $two]);
         }};
@@ -221,6 +225,7 @@ fn blas1_compact_view_destinations_cover_all_supported_dtypes() {
                 TensorWrite::from_view(TensorViewMut::F64(empty_view)),
             )
         })
+        .unwrap()
         .unwrap();
 }
 
@@ -282,12 +287,14 @@ fn blas1_strided_reads_are_supported_and_x_is_materialized_once() {
                 TensorRead::from_view(TensorView::F64(rhs_view)),
             )
         })
+        .unwrap()
         .unwrap();
     assert_eq!(dot.as_slice::<f64>().unwrap(), &[182.0]);
     let norm = backend
         .with_backend_session(|session| {
             session.norm_squared_read(TensorRead::from_view(TensorView::F64(lhs_view.clone())))
         })
+        .unwrap()
         .unwrap();
     assert_eq!(norm.as_slice::<f64>().unwrap(), &[91.0]);
 
@@ -302,6 +309,7 @@ fn blas1_strided_reads_are_supported_and_x_is_materialized_once() {
                 TensorWrite::from_tensor(&mut out),
             )
         })
+        .unwrap()
         .unwrap();
     assert_eq!(
         out.as_slice::<f64>().unwrap(),
@@ -327,6 +335,7 @@ fn assert_axpby_rejects_without_mutating(
                 TensorWrite::from_tensor(y),
             )
         })
+        .unwrap()
         .is_err());
     assert_eq!(y.as_slice::<f64>().unwrap(), before.as_slice());
 }
@@ -422,6 +431,7 @@ fn blas1_invalid_axpby_requests_leave_y_byte_identical() {
                 TensorWrite::from_view(TensorViewMut::F64(noncompact_y)),
             )
         })
+        .unwrap()
         .is_err());
     assert_eq!(noncompact_storage, before);
 }
@@ -436,6 +446,7 @@ fn blas1_vdot_and_norm_reject_invalid_metadata_and_placement() {
         assert!(backend
             .with_backend_session(|session| session
                 .vdot_read(TensorRead::from_tensor(&x), TensorRead::from_tensor(rhs),))
+            .unwrap()
             .is_err());
     }
 
@@ -452,9 +463,11 @@ fn blas1_vdot_and_norm_reject_invalid_metadata_and_placement() {
             TensorRead::from_tensor(&device),
             TensorRead::from_tensor(&device),
         ))
+        .unwrap()
         .is_err());
     assert!(backend
         .with_backend_session(|session| session.norm_squared_read(TensorRead::from_tensor(&device)))
+        .unwrap()
         .is_err());
 }
 
@@ -465,9 +478,11 @@ fn blas1_norm_rejects_integer_and_bool_without_allocating_a_result() {
         Tensor::from_vec_col_major(vec![2], vec![1_i32, 2]).unwrap(),
         Tensor::from_vec_col_major(vec![2], vec![true, false]).unwrap(),
     ] {
-        let result = backend.with_backend_session(|session| {
-            session.norm_squared_read(TensorRead::from_tensor(&input))
-        });
+        let result = backend
+            .with_backend_session(|session| {
+                session.norm_squared_read(TensorRead::from_tensor(&input))
+            })
+            .unwrap();
         assert!(matches!(result, Err(Error::Unsupported { .. })));
     }
 }
@@ -491,6 +506,7 @@ fn blas1_cg_microfixture_uses_session_primitives_without_element_loops() {
                     TensorWrite::from_tensor(&mut ap),
                 )
             })
+            .unwrap()
             .unwrap();
         let computed_ap = backend
             .with_backend_session(|__s| {
@@ -505,6 +521,7 @@ fn blas1_cg_microfixture_uses_session_primitives_without_element_loops() {
                     },
                 )
             })
+            .unwrap()
             .unwrap();
         backend
             .with_backend_session(|__s| {
@@ -513,6 +530,7 @@ fn blas1_cg_microfixture_uses_session_primitives_without_element_loops() {
                     TensorWrite::from_tensor(&mut ap),
                 )
             })
+            .unwrap()
             .unwrap();
         let rs_value = rs.as_slice::<f64>().unwrap()[0];
         let pap = vdot(&mut backend, &p, &ap).as_slice::<f64>().unwrap()[0];

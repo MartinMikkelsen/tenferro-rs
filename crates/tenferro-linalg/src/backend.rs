@@ -33,7 +33,8 @@ use crate::RankRevealingQrOptions;
 /// host.with_backend_session(|session| {
 ///     with_cpu_exec_session(session, |_backend| ())
 ///         .expect("CpuBackend must expose a CpuExecSession");
-/// });
+/// })?;
+/// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 pub trait LinalgBackend: BackendSession {
     /// Compute a Cholesky factorization.
@@ -94,7 +95,7 @@ pub trait LinalgBackend: BackendSession {
     ///         )
     ///     })
     ///     .expect("CpuBackend must expose a CpuExecSession")
-    /// })?;
+    /// })??;
     /// let x = x.into_typed::<f64>().expect("F64 inputs return F64 output");
     /// assert_eq!(x.host_data()?, &[0.5, 3.0]);
     /// # Ok::<(), tenferro_tensor::Error>(())
@@ -206,7 +207,7 @@ pub trait LinalgBackend: BackendSession {
     ///         )
     ///     })
     ///     .expect("CpuBackend must expose a CpuExecSession")
-    /// })?;
+    /// })??;
     /// assert_eq!(outputs[1].shape(), &[2]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
@@ -282,7 +283,7 @@ pub trait LinalgBackend: BackendSession {
     ///         backend.svd_full_read(TensorRead::from_view(TensorView::F64(input.as_view())))
     ///     })
     ///     .expect("CpuBackend must expose a CpuExecSession")
-    /// })?;
+    /// })??;
     /// assert_eq!(outputs[0].shape(), &[1, 1]);
     /// assert_eq!(outputs[1].shape(), &[1]);
     /// assert_eq!(outputs[2].shape(), &[2, 2]);
@@ -347,7 +348,7 @@ pub trait LinalgBackend: BackendSession {
     ///         backend.svd_read(TensorRead::from_view(TensorView::F64(input.as_view())))
     ///     })
     ///     .expect("CpuBackend must expose a CpuExecSession")
-    /// })?;
+    /// })??;
     /// assert_eq!(outputs[1].shape(), &[2]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
@@ -394,7 +395,7 @@ pub trait LinalgBackend: BackendSession {
     ///         )
     ///     })
     ///     .expect("CpuBackend must expose a CpuExecSession")
-    /// })?;
+    /// })??;
     /// assert_eq!(outputs[1].shape(), &[2]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
@@ -469,7 +470,7 @@ pub trait LinalgBackend: BackendSession {
     ///         )
     ///     })
     ///     .expect("CpuBackend must expose a CpuExecSession")
-    /// })?;
+    /// })??;
     /// assert_eq!(outputs[0].shape(), &[2, 2]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
@@ -519,7 +520,7 @@ pub trait LinalgBackend: BackendSession {
     ///         backend.qr_read(TensorRead::from_view(TensorView::F64(input.as_view())))
     ///     })
     ///     .expect("CpuBackend must expose a CpuExecSession")
-    /// })?;
+    /// })??;
     /// assert_eq!(outputs[0].shape(), &[2, 2]);
     /// assert_eq!(outputs[1].shape(), &[2, 2]);
     /// # Ok::<(), tenferro_tensor::Error>(())
@@ -559,7 +560,7 @@ pub trait LinalgBackend: BackendSession {
     ///         )
     ///     })
     ///     .expect("CpuBackend must expose a CpuExecSession")
-    /// })?;
+    /// })??;
     /// assert_eq!(outputs[0].shape(), &[2, 2]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
@@ -706,7 +707,7 @@ pub trait LinalgBackend: BackendSession {
     ///         )
     ///     })
     ///     .expect("CpuBackend must expose a CpuExecSession")
-    /// })?;
+    /// })??;
     /// assert_eq!(outputs[0].shape(), &[2]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
@@ -767,7 +768,7 @@ pub trait LinalgBackend: BackendSession {
     ///         )
     ///     })
     ///     .expect("CpuBackend must expose a CpuExecSession")
-    /// })?;
+    /// })??;
     /// assert_eq!(outputs[0].shape(), &[2]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
@@ -813,7 +814,7 @@ pub trait LinalgBackend: BackendSession {
     ///         backend.eigh_read(TensorRead::from_view(TensorView::F64(input.as_view())))
     ///     })
     ///     .expect("CpuBackend must expose a CpuExecSession")
-    /// })?;
+    /// })??;
     /// assert_eq!(outputs[0].shape(), &[2]);
     /// assert_eq!(outputs[1].shape(), &[2, 2]);
     /// # Ok::<(), tenferro_tensor::Error>(())
@@ -853,7 +854,7 @@ pub trait LinalgBackend: BackendSession {
     ///         backend.cholesky_read(TensorRead::from_view(TensorView::F64(input.as_view())))
     ///     })
     ///     .expect("CpuBackend must expose a CpuExecSession")
-    /// })?;
+    /// })??;
     /// assert_eq!(output.shape(), &[2, 2]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
@@ -892,7 +893,7 @@ pub trait LinalgBackend: BackendSession {
     ///         backend.lu_read(TensorRead::from_view(TensorView::F64(input.as_view())))
     ///     })
     ///     .expect("CpuBackend must expose a CpuExecSession")
-    /// })?;
+    /// })??;
     /// assert_eq!(outputs.len(), 4);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
@@ -931,7 +932,7 @@ pub trait LinalgBackend: BackendSession {
     ///         backend.full_piv_lu_read(TensorRead::from_view(TensorView::F64(input.as_view())))
     ///     })
     ///     .expect("CpuBackend must expose a CpuExecSession")
-    /// })?;
+    /// })??;
     /// assert_eq!(outputs.len(), 5);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
@@ -970,7 +971,7 @@ pub trait LinalgBackend: BackendSession {
     ///         backend.eig_read(TensorRead::from_view(TensorView::F64(input.as_view())))
     ///     })
     ///     .expect("CpuBackend must expose a CpuExecSession")
-    /// })?;
+    /// })??;
     /// assert_eq!(outputs.len(), 2);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
@@ -1089,7 +1090,7 @@ pub trait LinalgBackend: BackendSession {
     ///         )
     ///     })
     ///     .expect("CpuBackend must expose a CpuExecSession")
-    /// })?;
+    /// })??;
     /// let x = x.into_typed::<f64>().expect("F64 inputs return F64 output");
     /// assert_eq!(x.host_data()?, &[2.0, 3.0]);
     /// # Ok::<(), tenferro_tensor::Error>(())
@@ -1148,7 +1149,7 @@ pub trait LinalgBackend: BackendSession {
     ///         )
     ///     })
     ///     .expect("CpuBackend must expose a CpuExecSession")
-    /// })?;
+    /// })??;
     /// assert_eq!(out.as_slice::<f64>()?, &[2.0, 2.0]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```

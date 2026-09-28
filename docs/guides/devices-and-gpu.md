@@ -94,7 +94,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             TensorRead::from_tensor(&gpu_a),
             TensorRead::from_tensor(&gpu_b),
         )
-    })?;
+    })??;
     let cpu_c = download_tensor(backend.runtime(), &gpu_c)?;
 
     assert_eq!(cpu_c.as_slice::<f64>().unwrap(), &[4.0, 6.0]);
@@ -105,7 +105,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             TensorRead::from_tensor(&gpu_c),
             TensorWrite::from_tensor(&mut gpu_reuse),
         )
-    })?;
+    })??;
     let copied = download_tensor(backend.runtime(), &gpu_reuse)?;
     assert_eq!(copied.as_slice::<f64>().unwrap(), &[4.0, 6.0]);
     Ok(())

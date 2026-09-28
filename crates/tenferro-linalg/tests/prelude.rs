@@ -7,6 +7,7 @@ fn prelude_calls_concrete_linalg_operation() {
     let mut backend = CpuBackend::new();
     let (_u, singular_values, _vt) = backend
         .with_backend_session(|session| input.svd(session))
+        .unwrap()
         .unwrap();
     assert_eq!(singular_values.shape(), &[2]);
 }

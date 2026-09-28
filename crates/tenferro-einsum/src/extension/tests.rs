@@ -252,6 +252,7 @@ fn execute_einsum_extension_reads_consumes_strided_view_inputs() {
             let mut ctx = ExtensionExecutionContext::new(session, &mut caches);
             execute_einsum_extension_session_reads(&op, &[input], &mut ctx)
         })
+        .unwrap()
         .expect("read-capable einsum extension execution");
 
     assert_eq!(outputs.len(), 1);
@@ -290,6 +291,7 @@ fn runtime_einsum_changing_shapes_track_native_plan_cache_stats() {
                     &mut ctx,
                 )
             })
+            .unwrap()
             .unwrap();
 
         assert_eq!(outputs.len(), 1);
@@ -314,6 +316,7 @@ fn runtime_einsum_changing_shapes_track_native_plan_cache_stats() {
                 &mut ctx,
             )
         })
+        .unwrap()
         .unwrap();
     assert_einsum_matches_matmul_chain(&outputs[0], &lhs, &mid, &rhs);
 

@@ -55,7 +55,7 @@ Same traps, keyed by the priors you arrived with.
 - `cargo add tenferro` fails: there is no facade crate. Add
   `tenferro-runtime` + `tenferro-cpu` (plus operation crates).
 - `Array2::dot` is a free-standing habit; tenferro direct ops run inside an
-  explicit session: `backend.with_backend_session(|s| a.matmul(&b, s))`.
+  explicit session: `backend.with_backend_session(|s| a.matmul(&b, s))??`.
 - Your priors do not include a dtype-erased tensor; `Tensor` (runtime dtype)
   has no ndarray counterpart — use `TypedTensor<T>`.
 

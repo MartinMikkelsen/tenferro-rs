@@ -28,7 +28,7 @@ mod cuda {
         let (domain, allocation) = identity(&input);
 
         let duplicate = backend
-            .with_backend_session(|session| session.cast(&input, DType::F32))
+            .with_backend_session(|session| session.cast(&input, DType::F32)).unwrap()
             .unwrap();
 
         let (duplicate_domain, duplicate_allocation) = identity(&duplicate);
@@ -48,7 +48,7 @@ mod cuda {
         let error = second
             .with_backend_session(|session| {
                 session.to_contiguous_read(TensorRead::from_tensor(&input))
-            })
+            }).unwrap()
             .unwrap_err();
         assert!(matches!(error, tenferro_tensor::Error::RuntimeState { .. }));
     }
@@ -78,7 +78,7 @@ mod webgpu {
         let duplicate = backend
             .with_backend_session(|session| {
                 session.to_contiguous_read(TensorRead::from_tensor(&input))
-            })
+            }).unwrap()
             .unwrap();
 
         let (duplicate_domain, duplicate_allocation) = identity(&duplicate);
@@ -100,7 +100,7 @@ mod webgpu {
         let error = second
             .with_backend_session(|session| {
                 session.to_contiguous_read(TensorRead::from_tensor(&input))
-            })
+            }).unwrap()
             .unwrap_err();
         assert!(matches!(error, tenferro_tensor::Error::HostAccess { .. }));
     }

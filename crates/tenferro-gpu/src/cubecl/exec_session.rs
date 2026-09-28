@@ -684,13 +684,13 @@ impl BackendSessionHost for CudaBackend {
     fn with_backend_session<R: Send>(
         &mut self,
         f: impl FnOnce(&mut dyn BackendSession) -> R + Send,
-    ) -> R {
+    ) -> Result<R, tenferro_tensor::SessionEntryError> {
         let mut session = CudaExecSession {
             backend: self,
             _not_send_sync: PhantomData,
         };
-        // Nested entry is caught by the portable in-session guard in debug
-        // builds; the CUDA runtime must never re-enter a session closure.
-        with_session_entry_guard(|| f(&mut session))
+        // The portable in-session guard rejects nested entry before `f` runs;
+        // the CUDA runtime must never re-enter a session closure.
+        with_session_entry_guard("CudaBackend", || f(&mut session))
     }
 }

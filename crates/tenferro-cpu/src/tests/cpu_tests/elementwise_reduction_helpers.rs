@@ -24,6 +24,7 @@ fn elementwise_add_accepts_transposed_host_view_input() {
                 TensorRead::from_view(TensorView::F64(b)),
             )
         })
+        .unwrap()
         .unwrap();
 
     assert_eq!(out.shape(), &[2, 2]);
@@ -49,6 +50,7 @@ fn elementwise_add_read_promotes_rank0_f64_view_with_c64_tensor() {
                 TensorRead::from_tensor(&rhs),
             )
         })
+        .unwrap()
         .unwrap();
 
     assert_eq!(out.shape(), &[2]);
@@ -77,6 +79,7 @@ fn elementwise_add_read_promotes_c32_tensor_with_rank0_f32_view() {
                 TensorRead::from_view(TensorView::F32(scalar.as_view())),
             )
         })
+        .unwrap()
         .unwrap();
 
     assert_eq!(out.shape(), &[2]);
@@ -96,6 +99,7 @@ fn reduce_sum_accepts_transposed_host_view_input() {
         .with_backend_session(|__s| {
             __s.reduce_sum_read(TensorRead::from_view(TensorView::F64(b)), &[0])
         })
+        .unwrap()
         .unwrap();
 
     assert_eq!(out.shape(), &[2]);
@@ -113,6 +117,7 @@ fn reduce_read_views_cover_dtype_and_validation_branches() {
             .with_backend_session(|__s| __s
                 .reduce_sum_read(TensorRead::from_view(TensorView::F32(f32s.as_view())), &[0]))
             .unwrap()
+            .unwrap()
             .as_slice::<f32>()
             .unwrap(),
         &[3.0, 7.0]
@@ -121,6 +126,7 @@ fn reduce_read_views_cover_dtype_and_validation_branches() {
         backend
             .with_backend_session(|__s| __s
                 .reduce_max_read(TensorRead::from_view(TensorView::F32(f32s.as_view())), &[0]))
+            .unwrap()
             .unwrap()
             .as_slice::<f32>()
             .unwrap(),
@@ -134,6 +140,7 @@ fn reduce_read_views_cover_dtype_and_validation_branches() {
             .with_backend_session(|__s| __s
                 .reduce_min_read(TensorRead::from_view(TensorView::F64(f64s.as_view())), &[0]))
             .unwrap()
+            .unwrap()
             .as_slice::<f64>()
             .unwrap(),
         &[1.0, 3.0]
@@ -145,6 +152,7 @@ fn reduce_read_views_cover_dtype_and_validation_branches() {
             .with_backend_session(|__s| __s
                 .reduce_sum_read(TensorRead::from_view(TensorView::I32(i32s.as_view())), &[0]))
             .unwrap()
+            .unwrap()
             .as_slice::<i32>()
             .unwrap(),
         &[3, 7]
@@ -155,6 +163,7 @@ fn reduce_read_views_cover_dtype_and_validation_branches() {
         backend
             .with_backend_session(|__s| __s
                 .reduce_prod_read(TensorRead::from_view(TensorView::I64(i64s.as_view())), &[0]))
+            .unwrap()
             .unwrap()
             .as_slice::<i64>()
             .unwrap(),
@@ -171,6 +180,7 @@ fn reduce_read_views_cover_dtype_and_validation_branches() {
             .with_backend_session(|__s| __s
                 .reduce_sum_read(TensorRead::from_view(TensorView::C32(c32s.as_view())), &[0]))
             .unwrap()
+            .unwrap()
             .as_slice::<Complex32>()
             .unwrap(),
         &[Complex32::new(3.0, 0.0)]
@@ -186,6 +196,7 @@ fn reduce_read_views_cover_dtype_and_validation_branches() {
             .with_backend_session(|__s| __s
                 .reduce_prod_read(TensorRead::from_view(TensorView::C64(c64s.as_view())), &[0]))
             .unwrap()
+            .unwrap()
             .as_slice::<Complex64>()
             .unwrap(),
         &[Complex64::new(3.0, 1.0)]
@@ -199,6 +210,7 @@ fn reduce_read_views_cover_dtype_and_validation_branches() {
                 &[0],
             )
         })
+        .unwrap()
         .unwrap_err();
     assert!(matches!(
         sum_error,
@@ -214,6 +226,7 @@ fn reduce_read_views_cover_dtype_and_validation_branches() {
                 &[0],
             )
         })
+        .unwrap()
         .unwrap_err();
     assert!(matches!(
         prod_error,
@@ -227,6 +240,7 @@ fn reduce_read_views_cover_dtype_and_validation_branches() {
             .with_backend_session(|__s| __s
                 .reduce_max_read(TensorRead::from_view(TensorView::I32(i32s.as_view())), &[0]))
             .unwrap()
+            .unwrap()
             .as_slice::<i32>()
             .unwrap(),
         &[2, 4]
@@ -234,7 +248,8 @@ fn reduce_read_views_cover_dtype_and_validation_branches() {
     assert!(matches!(
         backend
             .with_backend_session(|__s| __s
-                .reduce_min_read(TensorRead::from_view(TensorView::C32(c32s.as_view())), &[0])),
+                .reduce_min_read(TensorRead::from_view(TensorView::C32(c32s.as_view())), &[0]))
+            .unwrap(),
         Err(crate::Error::Unsupported {
             op: "reduce_min",
             ..
@@ -243,17 +258,20 @@ fn reduce_read_views_cover_dtype_and_validation_branches() {
     assert!(matches!(
         backend
             .with_backend_session(|__s| __s
-                .reduce_sum_read(TensorRead::from_view(TensorView::F64(f64s.as_view())), &[2])),
+                .reduce_sum_read(TensorRead::from_view(TensorView::F64(f64s.as_view())), &[2]))
+            .unwrap(),
         Err(crate::Error::Validation {
             op: "reduce_sum",
             source: tenferro_tensor::ValidationError::AxisOutOfBounds { axis: 2, rank: 2 }
         })
     ));
     assert!(matches!(
-        backend.with_backend_session(|__s| __s.reduce_prod_read(
-            TensorRead::from_view(TensorView::F64(f64s.as_view())),
-            &[0, 0]
-        )),
+        backend
+            .with_backend_session(|__s| __s.reduce_prod_read(
+                TensorRead::from_view(TensorView::F64(f64s.as_view())),
+                &[0, 0]
+            ))
+            .unwrap(),
         Err(crate::Error::Validation {
             op: "reduce_prod",
             source: tenferro_tensor::ValidationError::DuplicateAxis {
@@ -274,6 +292,7 @@ fn reduce_read_empty_axes_materializes_views_for_all_dtypes() {
             .with_backend_session(|__s| __s
                 .reduce_max_read(TensorRead::from_view(TensorView::F32(f32s.as_view())), &[]))
             .unwrap()
+            .unwrap()
             .as_slice::<f32>()
             .unwrap(),
         &[1.0, 2.0]
@@ -284,6 +303,7 @@ fn reduce_read_empty_axes_materializes_views_for_all_dtypes() {
         backend
             .with_backend_session(|__s| __s
                 .reduce_min_read(TensorRead::from_view(TensorView::F64(f64s.as_view())), &[]))
+            .unwrap()
             .unwrap()
             .as_slice::<f64>()
             .unwrap(),
@@ -296,6 +316,7 @@ fn reduce_read_empty_axes_materializes_views_for_all_dtypes() {
             .with_backend_session(|__s| __s
                 .reduce_max_read(TensorRead::from_view(TensorView::I32(i32s.as_view())), &[]))
             .unwrap()
+            .unwrap()
             .as_slice::<i32>()
             .unwrap(),
         &[1, 2]
@@ -306,6 +327,7 @@ fn reduce_read_empty_axes_materializes_views_for_all_dtypes() {
         backend
             .with_backend_session(|__s| __s
                 .reduce_min_read(TensorRead::from_view(TensorView::I64(i64s.as_view())), &[]))
+            .unwrap()
             .unwrap()
             .as_slice::<i64>()
             .unwrap(),
@@ -320,6 +342,7 @@ fn reduce_read_empty_axes_materializes_views_for_all_dtypes() {
                 &[]
             ))
             .unwrap()
+            .unwrap()
             .as_slice::<bool>()
             .unwrap(),
         &[true, false]
@@ -333,6 +356,7 @@ fn reduce_read_empty_axes_materializes_views_for_all_dtypes() {
             .with_backend_session(|__s| __s
                 .reduce_min_read(TensorRead::from_view(TensorView::C32(c32s.as_view())), &[]))
             .unwrap()
+            .unwrap()
             .as_slice::<Complex32>()
             .unwrap(),
         &[Complex32::new(1.0, -1.0)]
@@ -345,6 +369,7 @@ fn reduce_read_empty_axes_materializes_views_for_all_dtypes() {
         backend
             .with_backend_session(|__s| __s
                 .reduce_max_read(TensorRead::from_view(TensorView::C64(c64s.as_view())), &[]))
+            .unwrap()
             .unwrap()
             .as_slice::<Complex64>()
             .unwrap(),
@@ -363,6 +388,7 @@ fn reduce_read_tensors_cover_host_dtype_dispatch() {
         backend
             .with_backend_session(|__s| __s.reduce_sum_read(TensorRead::from_tensor(&f32s), &[0]))
             .unwrap()
+            .unwrap()
             .as_slice::<f32>()
             .unwrap(),
         &[5.0]
@@ -370,6 +396,7 @@ fn reduce_read_tensors_cover_host_dtype_dispatch() {
     assert_eq!(
         backend
             .with_backend_session(|__s| __s.reduce_max_read(TensorRead::from_tensor(&f32s), &[0]))
+            .unwrap()
             .unwrap()
             .as_slice::<f32>()
             .unwrap(),
@@ -383,6 +410,7 @@ fn reduce_read_tensors_cover_host_dtype_dispatch() {
         backend
             .with_backend_session(|__s| __s.reduce_prod_read(TensorRead::from_tensor(&f64s), &[0]))
             .unwrap()
+            .unwrap()
             .as_slice::<f64>()
             .unwrap(),
         &[6.0]
@@ -390,6 +418,7 @@ fn reduce_read_tensors_cover_host_dtype_dispatch() {
     assert_eq!(
         backend
             .with_backend_session(|__s| __s.reduce_min_read(TensorRead::from_tensor(&f64s), &[0]))
+            .unwrap()
             .unwrap()
             .as_slice::<f64>()
             .unwrap(),
@@ -403,6 +432,7 @@ fn reduce_read_tensors_cover_host_dtype_dispatch() {
         backend
             .with_backend_session(|__s| __s.reduce_prod_read(TensorRead::from_tensor(&i32s), &[0]))
             .unwrap()
+            .unwrap()
             .as_slice::<i32>()
             .unwrap(),
         &[6]
@@ -410,6 +440,7 @@ fn reduce_read_tensors_cover_host_dtype_dispatch() {
     assert_eq!(
         backend
             .with_backend_session(|__s| __s.reduce_max_read(TensorRead::from_tensor(&i32s), &[0]))
+            .unwrap()
             .unwrap()
             .as_slice::<i32>()
             .unwrap(),
@@ -423,6 +454,7 @@ fn reduce_read_tensors_cover_host_dtype_dispatch() {
         backend
             .with_backend_session(|__s| __s.reduce_sum_read(TensorRead::from_tensor(&i64s), &[0]))
             .unwrap()
+            .unwrap()
             .as_slice::<i64>()
             .unwrap(),
         &[5]
@@ -430,6 +462,7 @@ fn reduce_read_tensors_cover_host_dtype_dispatch() {
     assert_eq!(
         backend
             .with_backend_session(|__s| __s.reduce_min_read(TensorRead::from_tensor(&i64s), &[0]))
+            .unwrap()
             .unwrap()
             .as_slice::<i64>()
             .unwrap(),
@@ -441,21 +474,22 @@ fn reduce_read_tensors_cover_host_dtype_dispatch() {
     );
     assert!(matches!(
         backend
-            .with_backend_session(|__s| __s.reduce_sum_read(TensorRead::from_tensor(&bools), &[0])),
+            .with_backend_session(|__s| __s.reduce_sum_read(TensorRead::from_tensor(&bools), &[0]))
+            .unwrap(),
         Err(crate::Error::Unsupported {
             op: "reduce_sum",
             ..
         })
     ));
     assert!(matches!(
-            backend.with_backend_session(
-                |__s| __s.reduce_prod_read(TensorRead::from_tensor(&bools), &[0])
-            ),
-            Err(crate::Error::Unsupported {
-                op: "reduce_prod",
-                ..
-            })
-        ));
+        backend
+            .with_backend_session(|__s| __s.reduce_prod_read(TensorRead::from_tensor(&bools), &[0]))
+            .unwrap(),
+        Err(crate::Error::Unsupported {
+            op: "reduce_prod",
+            ..
+        })
+    ));
 
     let c32s = Tensor::from_typed::<tenferro_tensor::Complex32>(
         TypedTensor::<Complex32>::from_vec_col_major(
@@ -467,6 +501,7 @@ fn reduce_read_tensors_cover_host_dtype_dispatch() {
     assert_eq!(
         backend
             .with_backend_session(|__s| __s.reduce_sum_read(TensorRead::from_tensor(&c32s), &[0]))
+            .unwrap()
             .unwrap()
             .as_slice::<Complex32>()
             .unwrap(),
@@ -483,6 +518,7 @@ fn reduce_read_tensors_cover_host_dtype_dispatch() {
     assert_eq!(
         backend
             .with_backend_session(|__s| __s.reduce_prod_read(TensorRead::from_tensor(&c64s), &[0]))
+            .unwrap()
             .unwrap()
             .as_slice::<Complex64>()
             .unwrap(),
@@ -822,6 +858,7 @@ fn empty_reduction_axes_are_noop_before_dtype_dispatch() {
     let prod_owned = reduce_prod(&bools, &[], &strided_kernel::ExecContext::serial()).unwrap();
     let sum_read = backend
         .with_backend_session(|__s| __s.reduce_sum_read(TensorRead::from_tensor(&bools), &[]))
+        .unwrap()
         .unwrap();
     let prod_read = backend
         .with_backend_session(|__s| {
@@ -830,6 +867,7 @@ fn empty_reduction_axes_are_noop_before_dtype_dispatch() {
                 &[],
             )
         })
+        .unwrap()
         .unwrap();
 
     for tensor in [sum_owned, prod_owned, sum_read, prod_read] {

@@ -571,6 +571,7 @@ fn cuda_event_domain_tokens_are_repeatable_and_order_native_dependencies() {
                                 TensorRead::from_tensor(&input_for_first),
                             )
                         })
+                        .unwrap()
                         .map_err(tenferro_runtime::Error::from)?,
                 );
                 Ok(())
@@ -600,6 +601,7 @@ fn cuda_event_domain_tokens_are_repeatable_and_order_native_dependencies() {
                         TensorRead::from_tensor(&input),
                     )
                 })
+                .unwrap()
                 .map_err(tenferro_runtime::Error::from)?,
         );
         Ok(())
@@ -624,6 +626,7 @@ fn cuda_event_domain_tokens_are_repeatable_and_order_native_dependencies() {
                             TensorRead::from_tensor(&input),
                         )
                     })
+                    .unwrap()
                     .map_err(tenferro_runtime::Error::from)?,
             );
             panic!("injected post-launch panic");

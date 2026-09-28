@@ -58,6 +58,7 @@ fn eager_read_dispatch_only_materializes_when_the_operation_requires_it() {
         .with_backend_session(|session| {
             execute(&StdTensorOp::Mul, &[read.clone(), read.clone()], session)
         })
+        .unwrap()
         .unwrap();
     assert_eq!(data(&result[0]), vec![1., 9., 25., 4., 16., 36.]);
     assert_eq!(
@@ -71,6 +72,7 @@ fn eager_read_dispatch_only_materializes_when_the_operation_requires_it() {
     let rhs = TensorRead::from_view(TensorRead::from_tensor(&rhs).tensor_view());
     let result = backend
         .with_backend_session(|session| execute(&StdTensorOp::Mul, &[read.clone(), rhs], session))
+        .unwrap()
         .unwrap();
     assert_eq!(data(&result[0]), vec![2., 6., 10., 4., 8., 12.]);
     assert_eq!(
@@ -88,6 +90,7 @@ fn eager_read_dispatch_only_materializes_when_the_operation_requires_it() {
                 session,
             )
         })
+        .unwrap()
         .unwrap();
     assert_eq!(data(&result[0]), vec![1., 3., 5., 0., 4., 6.]);
     assert_eq!(copies.swap(0, Ordering::Relaxed), 1);
@@ -96,6 +99,7 @@ fn eager_read_dispatch_only_materializes_when_the_operation_requires_it() {
     // with an implicit eager copy. Production CPU sessions override exp_read.
     let error = backend
         .with_backend_session(|session| execute(&StdTensorOp::Exp, &[read], session))
+        .unwrap()
         .unwrap_err();
     assert_eq!(error.kind(), ErrorKind::Unsupported);
     assert_eq!(copies.load(Ordering::Relaxed), 0);
@@ -104,6 +108,7 @@ fn eager_read_dispatch_only_materializes_when_the_operation_requires_it() {
     let read = TensorRead::from_view(TensorRead::from_tensor(&empty).tensor_view());
     let result = backend
         .with_backend_session(|session| execute(&StdTensorOp::Mul, &[read.clone(), read], session))
+        .unwrap()
         .unwrap();
     assert_eq!(result[0].shape(), &[0, 3]);
     assert!(data(&result[0]).is_empty());
@@ -460,6 +465,7 @@ fn generated_outputs_use_the_callers_borrowed_session() {
             assert_eq!(data(&values[0]), vec![3.0]);
             Ok::<_, tenferro_runtime::Error>(())
         })
+        .unwrap()
         .unwrap();
 }
 

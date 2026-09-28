@@ -42,6 +42,7 @@ fn matmul(backend: &mut CpuBackend, lhs: &Tensor, rhs: &Tensor) -> Tensor {
             )
         })
         .unwrap()
+        .unwrap()
 }
 
 fn assert_close(actual: &[f64], expected: &[f64]) {
@@ -65,6 +66,7 @@ fn full_piv_lu_reconstructs_permuted_matrix() {
     let pa = matmul(&mut backend, &p, &a);
     let qt = backend
         .with_backend_session(|__s| __s.transpose_read(TensorRead::from_tensor(&q), &[1, 0]))
+        .unwrap()
         .unwrap();
     let paqt = matmul(&mut backend, &pa, &qt);
     let lu = matmul(&mut backend, &l, &u);

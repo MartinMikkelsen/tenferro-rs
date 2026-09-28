@@ -34,9 +34,11 @@ fn direct_and_session_fresh_outputs_use_the_selected_domain() {
 
     let direct = backend
         .with_backend_session(|__s| __s.neg_read(TensorRead::from_tensor(&input)))
+        .unwrap()
         .unwrap();
     let session = backend
         .with_backend_session(|session| session.exp_read(TensorRead::from_tensor(&input)))
+        .unwrap()
         .unwrap();
 
     assert_eq!(input.placement().cpu_affinity, Some(remote));
@@ -78,6 +80,7 @@ fn dot_and_fusion_vec_outputs_use_the_selected_domain() {
                 &config,
             )
         })
+        .unwrap()
         .unwrap();
     let outputs = backend
         .execute_elementwise_fusion(&[&fusion_lhs, &fusion_rhs], &fusion)
@@ -107,6 +110,7 @@ fn metadata_only_reshape_and_caller_owned_output_are_not_retagged() {
 
     let reshaped = backend
         .with_backend_session(|__s| __s.reshape_read(TensorRead::from_tensor(&input), &[4]))
+        .unwrap()
         .unwrap();
     backend
         .with_backend_session(|__s| {
@@ -117,6 +121,7 @@ fn metadata_only_reshape_and_caller_owned_output_are_not_retagged() {
                 TensorWrite::from_tensor(&mut output),
             )
         })
+        .unwrap()
         .unwrap();
 
     assert_eq!(input.placement().cpu_affinity, Some(remote));
@@ -133,6 +138,7 @@ fn direct_tensor_read_reshape_preserves_remote_storage_affinity() {
 
     let output = backend
         .with_backend_session(|__s| __s.reshape_read(TensorRead::from_tensor(&input), &[4]))
+        .unwrap()
         .unwrap();
 
     assert_eq!(input.placement().cpu_affinity, Some(remote));
@@ -148,6 +154,7 @@ fn session_tensor_read_reshape_preserves_remote_storage_affinity() {
 
     let output = backend
         .with_backend_session(|session| session.reshape_read(TensorRead::from_tensor(&input), &[4]))
+        .unwrap()
         .unwrap();
 
     assert_eq!(input.placement().cpu_affinity, Some(remote));
@@ -174,6 +181,7 @@ fn direct_and_session_cpu_noop_transfers_preserve_remote_storage_affinity() {
                 session.download_to_host(TensorRead::from_tensor(&input))?,
             ))
         })
+        .unwrap()
         .unwrap();
 
     assert_eq!(input.placement().cpu_affinity, Some(remote));
@@ -205,6 +213,7 @@ fn reshaping_a_borrowed_view_tags_only_the_materialized_output() {
                 &[4],
             )
         })
+        .unwrap()
         .unwrap();
 
     assert_eq!(input.placement().cpu_affinity, Some(remote));
@@ -234,6 +243,7 @@ fn validation_failure_does_not_mutate_or_retag_caller_owned_output() {
                 TensorWrite::from_tensor(&mut output),
             )
         })
+        .unwrap()
         .unwrap_err();
 
     assert!(matches!(error, tenferro_tensor::Error::Validation { .. }));

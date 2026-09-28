@@ -239,12 +239,14 @@ fn cpu_indexing_dispatch_covers_supported_dtypes() {
         backend
             .with_backend_session(|__s| __s.slice(&f32_operand, &slice_cfg))
             .unwrap()
+            .unwrap()
             .shape(),
         &[2]
     );
     assert_eq!(
         backend
             .with_backend_session(|__s| __s.slice(&i64_operand, &slice_cfg))
+            .unwrap()
             .unwrap()
             .shape(),
         &[2]
@@ -253,6 +255,7 @@ fn cpu_indexing_dispatch_covers_supported_dtypes() {
         backend
             .with_backend_session(|__s| __s.slice(&bool_operand, &slice_cfg))
             .unwrap()
+            .unwrap()
             .shape(),
         &[2]
     );
@@ -260,12 +263,14 @@ fn cpu_indexing_dispatch_covers_supported_dtypes() {
         backend
             .with_backend_session(|__s| __s.slice(&c32_operand, &slice_cfg))
             .unwrap()
+            .unwrap()
             .shape(),
         &[2]
     );
     assert_eq!(
         backend
             .with_backend_session(|__s| __s.slice(&c64_operand, &slice_cfg))
+            .unwrap()
             .unwrap()
             .shape(),
         &[2]
@@ -309,12 +314,14 @@ fn cpu_indexing_dispatch_covers_supported_dtypes() {
         backend
             .with_backend_session(|__s| __s.concatenate(&[&f32_operand, &f32_operand], 0))
             .unwrap()
+            .unwrap()
             .shape(),
         &[6]
     );
     assert_eq!(
         backend
             .with_backend_session(|__s| __s.concatenate(&[&i64_operand, &i64_operand], 0))
+            .unwrap()
             .unwrap()
             .shape(),
         &[6]
@@ -323,12 +330,14 @@ fn cpu_indexing_dispatch_covers_supported_dtypes() {
         backend
             .with_backend_session(|__s| __s.concatenate(&[&c32_operand, &c32_operand], 0))
             .unwrap()
+            .unwrap()
             .shape(),
         &[6]
     );
     assert_eq!(
         backend
             .with_backend_session(|__s| __s.concatenate(&[&c64_operand, &c64_operand], 0))
+            .unwrap()
             .unwrap()
             .shape(),
         &[6]
@@ -338,12 +347,14 @@ fn cpu_indexing_dispatch_covers_supported_dtypes() {
         backend
             .with_backend_session(|__s| __s.reverse(&f32_operand, &[0]))
             .unwrap()
+            .unwrap()
             .shape(),
         &[3]
     );
     assert_eq!(
         backend
             .with_backend_session(|__s| __s.reverse(&i64_operand, &[0]))
+            .unwrap()
             .unwrap()
             .shape(),
         &[3]
@@ -352,6 +363,7 @@ fn cpu_indexing_dispatch_covers_supported_dtypes() {
         backend
             .with_backend_session(|__s| __s.reverse(&bool_operand, &[0]))
             .unwrap()
+            .unwrap()
             .shape(),
         &[3]
     );
@@ -359,12 +371,14 @@ fn cpu_indexing_dispatch_covers_supported_dtypes() {
         backend
             .with_backend_session(|__s| __s.reverse(&c32_operand, &[0]))
             .unwrap()
+            .unwrap()
             .shape(),
         &[3]
     );
     assert_eq!(
         backend
             .with_backend_session(|__s| __s.reverse(&c64_operand, &[0]))
+            .unwrap()
             .unwrap()
             .shape(),
         &[3]
@@ -386,11 +400,13 @@ fn static_erased_indexing_preserves_bool_values_and_empty_shapes() {
                 },
             )
         })
+        .unwrap()
         .unwrap();
     assert_eq!(sliced.as_slice::<bool>().unwrap(), &[false, false]);
 
     let reversed = backend
         .with_backend_session(|__s| __s.reverse(&input, &[0]))
+        .unwrap()
         .unwrap();
     assert_eq!(
         reversed.as_slice::<bool>().unwrap(),
@@ -398,6 +414,7 @@ fn static_erased_indexing_preserves_bool_values_and_empty_shapes() {
     );
     let concatenated = backend
         .with_backend_session(|__s| __s.concatenate(&[&sliced, &reversed], 0))
+        .unwrap()
         .unwrap();
     assert_eq!(
         concatenated.as_slice::<bool>().unwrap(),
@@ -430,16 +447,19 @@ fn static_erased_indexing_preserves_bool_values_and_empty_shapes() {
                 },
             )
         })
+        .unwrap()
         .unwrap();
     assert!(empty_slice.as_slice::<bool>().unwrap().is_empty());
     assert!(backend
         .with_backend_session(|__s| __s.reverse(&empty, &[0]))
+        .unwrap()
         .unwrap()
         .as_slice::<bool>()
         .unwrap()
         .is_empty());
     assert!(backend
         .with_backend_session(|__s| __s.concatenate(&[&empty, &empty], 0))
+        .unwrap()
         .unwrap()
         .as_slice::<bool>()
         .unwrap()
@@ -456,6 +476,7 @@ fn static_erased_indexing_preserves_bool_values_and_empty_shapes() {
                 },
             )
         })
+        .unwrap()
         .unwrap();
     assert_eq!(padded.as_slice::<bool>().unwrap(), &[false; 3]);
 }
@@ -477,6 +498,7 @@ fn cpu_slice_limit_over_dimension_is_invalid_configuration() {
                 },
             )
         })
+        .unwrap()
         .unwrap_err();
 
     assert!(matches!(
@@ -499,68 +521,78 @@ fn cpu_indexing_validation_covers_error_branches() {
     );
 
     expect_rank_mismatch(
-        backend.with_backend_session(|__s| {
-            __s.slice(
-                &input,
-                &SliceConfig {
-                    starts: vec![0],
-                    limits: vec![2, 2],
-                    strides: vec![1],
-                },
-            )
-        }),
+        backend
+            .with_backend_session(|__s| {
+                __s.slice(
+                    &input,
+                    &SliceConfig {
+                        starts: vec![0],
+                        limits: vec![2, 2],
+                        strides: vec![1],
+                    },
+                )
+            })
+            .unwrap(),
         "slice",
     );
     expect_rank_mismatch(
-        backend.with_backend_session(|__s| {
-            __s.slice(
-                &input,
-                &SliceConfig {
-                    starts: vec![0],
-                    limits: vec![2],
-                    strides: vec![1, 1],
-                },
-            )
-        }),
+        backend
+            .with_backend_session(|__s| {
+                __s.slice(
+                    &input,
+                    &SliceConfig {
+                        starts: vec![0],
+                        limits: vec![2],
+                        strides: vec![1, 1],
+                    },
+                )
+            })
+            .unwrap(),
         "slice",
     );
     expect_invalid_config(
-        backend.with_backend_session(|__s| {
-            __s.slice(
-                &input,
-                &SliceConfig {
-                    starts: vec![2],
-                    limits: vec![1],
-                    strides: vec![1],
-                },
-            )
-        }),
+        backend
+            .with_backend_session(|__s| {
+                __s.slice(
+                    &input,
+                    &SliceConfig {
+                        starts: vec![2],
+                        limits: vec![1],
+                        strides: vec![1],
+                    },
+                )
+            })
+            .unwrap(),
         "slice",
     );
     expect_invalid_config(
-        backend.with_backend_session(|__s| {
-            __s.slice(
-                &input,
-                &SliceConfig {
-                    starts: vec![0],
-                    limits: vec![3],
-                    strides: vec![1],
-                },
-            )
-        }),
+        backend
+            .with_backend_session(|__s| {
+                __s.slice(
+                    &input,
+                    &SliceConfig {
+                        starts: vec![0],
+                        limits: vec![3],
+                        strides: vec![1],
+                    },
+                )
+            })
+            .unwrap(),
         "slice",
     );
     expect_invalid_config(
-        backend.with_backend_session(|__s| {
-            __s.slice(
-                &input,
-                &SliceConfig {
-                    starts: vec![0],
-                    limits: vec![2],
-                    strides: vec![0],
-                },
-            )
-        }),
+        backend
+            .with_backend_session(|__s| {
+                __s.slice(
+                    &input,
+                    &SliceConfig {
+                        starts: vec![0],
+                        limits: vec![2],
+                        strides: vec![0],
+                    },
+                )
+            })
+            .unwrap(),
         "slice",
     );
 
@@ -568,112 +600,130 @@ fn cpu_indexing_validation_covers_error_branches() {
         TypedTensor::from_vec_col_major(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]).unwrap(),
     );
     expect_rank_mismatch(
-        backend.with_backend_session(|__s| {
-            __s.dynamic_slice(
-                &matrix,
-                &Tensor::from_vec_col_major(vec![2], vec![0_i64, 0]).unwrap(),
-                &[1],
-            )
-        }),
+        backend
+            .with_backend_session(|__s| {
+                __s.dynamic_slice(
+                    &matrix,
+                    &Tensor::from_vec_col_major(vec![2], vec![0_i64, 0]).unwrap(),
+                    &[1],
+                )
+            })
+            .unwrap(),
         "dynamic_slice",
     );
     expect_invalid_config(
-        backend.with_backend_session(|__s| {
-            __s.dynamic_slice(
-                &matrix,
-                &Tensor::from_vec_col_major(vec![1, 1], vec![0_i64]).unwrap(),
-                &[1, 1],
-            )
-        }),
+        backend
+            .with_backend_session(|__s| {
+                __s.dynamic_slice(
+                    &matrix,
+                    &Tensor::from_vec_col_major(vec![1, 1], vec![0_i64]).unwrap(),
+                    &[1, 1],
+                )
+            })
+            .unwrap(),
         "dynamic_slice",
     );
     expect_invalid_config(
-        backend.with_backend_session(|__s| {
-            __s.dynamic_slice(
-                &matrix,
-                &Tensor::from_vec_col_major(vec![1], vec![0_i64]).unwrap(),
-                &[1, 1],
-            )
-        }),
+        backend
+            .with_backend_session(|__s| {
+                __s.dynamic_slice(
+                    &matrix,
+                    &Tensor::from_vec_col_major(vec![1], vec![0_i64]).unwrap(),
+                    &[1, 1],
+                )
+            })
+            .unwrap(),
         "dynamic_slice",
     );
 
     expect_rank_mismatch(
-        backend.with_backend_session(|__s| {
-            __s.pad(
-                &input,
-                &PadConfig {
-                    edge_padding_low: vec![0, 0],
-                    edge_padding_high: vec![0],
-                    interior_padding: vec![0],
-                },
-            )
-        }),
+        backend
+            .with_backend_session(|__s| {
+                __s.pad(
+                    &input,
+                    &PadConfig {
+                        edge_padding_low: vec![0, 0],
+                        edge_padding_high: vec![0],
+                        interior_padding: vec![0],
+                    },
+                )
+            })
+            .unwrap(),
         "pad",
     );
     expect_rank_mismatch(
-        backend.with_backend_session(|__s| {
-            __s.pad(
-                &input,
-                &PadConfig {
-                    edge_padding_low: vec![0],
-                    edge_padding_high: vec![0],
-                    interior_padding: vec![0, 0],
-                },
-            )
-        }),
+        backend
+            .with_backend_session(|__s| {
+                __s.pad(
+                    &input,
+                    &PadConfig {
+                        edge_padding_low: vec![0],
+                        edge_padding_high: vec![0],
+                        interior_padding: vec![0, 0],
+                    },
+                )
+            })
+            .unwrap(),
         "pad",
     );
     expect_invalid_config(
-        backend.with_backend_session(|__s| {
-            __s.pad(
-                &input,
-                &PadConfig {
-                    edge_padding_low: vec![0],
-                    edge_padding_high: vec![0],
-                    interior_padding: vec![-1],
-                },
-            )
-        }),
+        backend
+            .with_backend_session(|__s| {
+                __s.pad(
+                    &input,
+                    &PadConfig {
+                        edge_padding_low: vec![0],
+                        edge_padding_high: vec![0],
+                        interior_padding: vec![-1],
+                    },
+                )
+            })
+            .unwrap(),
         "pad",
     );
     expect_invalid_config(
-        backend.with_backend_session(|__s| {
-            __s.pad(
-                &input,
-                &PadConfig {
-                    edge_padding_low: vec![0],
-                    edge_padding_high: vec![0],
-                    interior_padding: vec![i64::MAX],
-                },
-            )
-        }),
+        backend
+            .with_backend_session(|__s| {
+                __s.pad(
+                    &input,
+                    &PadConfig {
+                        edge_padding_low: vec![0],
+                        edge_padding_high: vec![0],
+                        interior_padding: vec![i64::MAX],
+                    },
+                )
+            })
+            .unwrap(),
         "pad",
     );
     expect_invalid_config(
-        backend.with_backend_session(|__s| {
-            __s.pad(
-                &input,
-                &PadConfig {
-                    edge_padding_low: vec![i64::MAX],
-                    edge_padding_high: vec![1],
-                    interior_padding: vec![0],
-                },
-            )
-        }),
+        backend
+            .with_backend_session(|__s| {
+                __s.pad(
+                    &input,
+                    &PadConfig {
+                        edge_padding_low: vec![i64::MAX],
+                        edge_padding_high: vec![1],
+                        interior_padding: vec![0],
+                    },
+                )
+            })
+            .unwrap(),
         "pad",
     );
     expect_invalid_config(
-        backend.with_backend_session(|__s| {
-            __s.pad(
-                &input,
-                &PadConfig {
-                    edge_padding_low: vec![-3],
-                    edge_padding_high: vec![0],
-                    interior_padding: vec![0],
-                },
-            )
-        }),
+        backend
+            .with_backend_session(|__s| {
+                __s.pad(
+                    &input,
+                    &PadConfig {
+                        edge_padding_low: vec![-3],
+                        edge_padding_high: vec![0],
+                        interior_padding: vec![0],
+                    },
+                )
+            })
+            .unwrap(),
         "pad",
     );
 
@@ -916,42 +966,44 @@ fn cpu_pad_does_not_reject_signed_edges_before_checked_shape_validation() {
 #[test]
 fn cpu_exec_session_covers_dot_errors_and_reclaim_dispatch() {
     let mut backend = CpuBackend::new();
-    backend.with_backend_session(|exec| {
-        let f32_vec = Tensor::from_typed::<f32>(
-            TypedTensor::from_vec_col_major(vec![2], vec![1.0, 2.0]).unwrap(),
-        );
-        let f64_vec = Tensor::from_typed::<f64>(
-            TypedTensor::from_vec_col_major(vec![2], vec![1.0, 2.0]).unwrap(),
-        );
-        let dot_cfg = DotGeneralConfig {
-            lhs_contracting_dims: [0].as_slice().into(),
-            rhs_contracting_dims: [0].as_slice().into(),
-            lhs_batch_dims: [].as_slice().into(),
-            rhs_batch_dims: [].as_slice().into(),
-        };
-        assert!(matches!(
-            exec.dot_general_read(
-                TensorRead::from_tensor(&f64_vec),
-                TensorRead::from_tensor(&f32_vec),
-                &dot_cfg
-            ),
-            Err(crate::Error::Validation {
-                op: "dot_general",
-                source: tenferro_tensor::ValidationError::DTypeMismatch { .. },
-            })
-        ));
+    backend
+        .with_backend_session(|exec| {
+            let f32_vec = Tensor::from_typed::<f32>(
+                TypedTensor::from_vec_col_major(vec![2], vec![1.0, 2.0]).unwrap(),
+            );
+            let f64_vec = Tensor::from_typed::<f64>(
+                TypedTensor::from_vec_col_major(vec![2], vec![1.0, 2.0]).unwrap(),
+            );
+            let dot_cfg = DotGeneralConfig {
+                lhs_contracting_dims: [0].as_slice().into(),
+                rhs_contracting_dims: [0].as_slice().into(),
+                lhs_batch_dims: [].as_slice().into(),
+                rhs_batch_dims: [].as_slice().into(),
+            };
+            assert!(matches!(
+                exec.dot_general_read(
+                    TensorRead::from_tensor(&f64_vec),
+                    TensorRead::from_tensor(&f32_vec),
+                    &dot_cfg
+                ),
+                Err(crate::Error::Validation {
+                    op: "dot_general",
+                    source: tenferro_tensor::ValidationError::DTypeMismatch { .. },
+                })
+            ));
 
-        exec.reclaim_buffer(Tensor::from_typed::<f32>(
-            TypedTensor::zeros(vec![1]).unwrap(),
-        ));
-        exec.reclaim_buffer(Tensor::from_typed::<f64>(
-            TypedTensor::zeros(vec![1]).unwrap(),
-        ));
-        exec.reclaim_buffer(Tensor::from_typed::<tenferro_tensor::Complex32>(
-            TypedTensor::zeros(vec![1]).unwrap(),
-        ));
-        exec.reclaim_buffer(Tensor::from_typed::<tenferro_tensor::Complex64>(
-            TypedTensor::zeros(vec![1]).unwrap(),
-        ));
-    });
+            exec.reclaim_buffer(Tensor::from_typed::<f32>(
+                TypedTensor::zeros(vec![1]).unwrap(),
+            ));
+            exec.reclaim_buffer(Tensor::from_typed::<f64>(
+                TypedTensor::zeros(vec![1]).unwrap(),
+            ));
+            exec.reclaim_buffer(Tensor::from_typed::<tenferro_tensor::Complex32>(
+                TypedTensor::zeros(vec![1]).unwrap(),
+            ));
+            exec.reclaim_buffer(Tensor::from_typed::<tenferro_tensor::Complex64>(
+                TypedTensor::zeros(vec![1]).unwrap(),
+            ));
+        })
+        .unwrap();
 }

@@ -50,6 +50,7 @@ fn bench_case<T>(
                 &config,
             )
         })
+        .unwrap()
         .unwrap();
     backend.runtime().synchronize().unwrap();
 
@@ -66,6 +67,7 @@ fn bench_case<T>(
                             black_box(&config),
                         )
                     })
+                    .unwrap()
                     .unwrap();
                 backend.runtime().synchronize().unwrap();
                 black_box(out);
@@ -81,6 +83,7 @@ fn bench_case<T>(
                 &config,
             )
         })
+        .unwrap()
         .unwrap();
     backend.runtime().synchronize().unwrap();
     group.bench_function(
@@ -95,6 +98,7 @@ fn bench_case<T>(
                             black_box(&config),
                         )
                     })
+                    .unwrap()
                     .unwrap();
                 backend.runtime().synchronize().unwrap();
                 black_box(out);

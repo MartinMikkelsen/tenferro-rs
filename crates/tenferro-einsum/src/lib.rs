@@ -45,7 +45,7 @@
 //!
 //! let out = backend.with_backend_session(|session| {
 //!     [&a, &b].einsum("ij,jk->ik", session)
-//! })?;
+//! })??;
 //! assert_eq!(out.shape(), &[2, 4]);
 //! # Ok::<(), tenferro_einsum::Error>(())
 //! ```

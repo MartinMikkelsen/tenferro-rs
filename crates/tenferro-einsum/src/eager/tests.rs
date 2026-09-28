@@ -35,6 +35,7 @@ fn tensor_value_view_paths_materialize_and_read() {
         backend
             .with_backend_session(|exec| view_value.into_tensor(exec))
             .unwrap()
+            .unwrap()
             .as_slice::<f64>()
             .unwrap(),
         &[3.0, 4.0]
@@ -61,10 +62,12 @@ fn generic_outer_product_with_views_uses_broadcast_path() {
     let mut ctx = CpuBackend::new();
     let result = ctx
         .with_backend_session(|exec| binary_contract(exec, lhs, rhs, &[0, 1], true))
+        .unwrap()
         .unwrap();
     let labels = result.labels;
     let tensor = ctx
         .with_backend_session(|exec| result.tensor.into_tensor(exec))
+        .unwrap()
         .unwrap();
 
     assert_eq!(labels, vec![0, 1]);
@@ -149,10 +152,12 @@ fn generic_binary_contract_reduces_then_builds_dot_config() {
     let mut ctx = CpuBackend::new();
     let result = ctx
         .with_backend_session(|exec| binary_contract(exec, lhs, rhs, &[0, 2], false))
+        .unwrap()
         .unwrap();
     let labels = result.labels;
     let tensor = ctx
         .with_backend_session(|exec| result.tensor.into_tensor(exec))
+        .unwrap()
         .unwrap();
 
     assert_eq!(labels, vec![0, 2]);
@@ -207,7 +212,9 @@ impl TensorElementwise for NoBroadcastMaterializationBackend {
             }
             _ => panic!("outer product should pass f64 broadcast views to mul_read"),
         }
-        CpuBackend::new().with_backend_session(|__s| __s.mul_read(lhs, rhs))
+        CpuBackend::new()
+            .with_backend_session(|__s| __s.mul_read(lhs, rhs))
+            .unwrap()
     }
 
     // Reproduce the previous read-half default: delegate an owned tensor and
@@ -597,6 +604,7 @@ fn generic_read_exec_reduces_single_view_input() {
     let mut ctx = CpuBackend::new();
     let result = ctx
         .with_backend_session(|exec| eager_einsum_exec_read(exec, &inputs, &tree))
+        .unwrap()
         .unwrap();
 
     assert_eq!(result.shape(), &[2]);

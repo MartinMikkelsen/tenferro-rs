@@ -88,7 +88,7 @@ let rhs = Tensor::from_vec_col_major(
 let mut backend = CpuBackend::new();
 let product = backend.with_backend_session(|session| {
     [&lhs, &rhs].einsum("ij,jk->ik", session)
-})?;
+})??;
 assert_eq!(product.as_slice::<f64>()?, &[22.0, 28.0, 49.0, 64.0]);
 
 let mut product_out = Tensor::from_vec_col_major(vec![2, 2], vec![0.0_f64; 4])?;
@@ -98,7 +98,7 @@ backend.with_backend_session(|session| {
         session,
         TensorWrite::from_tensor(&mut product_out),
     )
-})?;
+})??;
 assert_eq!(product_out.as_slice::<f64>()?, &[22.0, 28.0, 49.0, 64.0]);
 
 let complex_lhs = TypedTensor::<Complex64>::from_vec_col_major(
@@ -116,7 +116,7 @@ let complex_rhs = TypedTensor::<Complex64>::from_vec_col_major(
 )?;
 let complex = backend.with_backend_session(|session| {
     [&complex_lhs, &complex_rhs].einsum("ij,jk->ik", session)
-})?;
+})??;
 assert_eq!(
     complex.as_slice()?,
     &[Complex64::new(23.0, 2.0), Complex64::new(36.0, 3.0)],
@@ -133,7 +133,7 @@ backend.with_backend_session(|session| {
         session,
         TypedTensorWrite::from_view(borrowed_out),
     )
-})?;
+})??;
 assert_eq!(
     [borrowed_storage[1], borrowed_storage[3]],
     [Complex64::new(23.0, 2.0), Complex64::new(36.0, 3.0)],
@@ -170,10 +170,10 @@ let notation = EinsumNotation::new(
 let mut backend = CpuBackend::new();
 let string_result = backend.with_backend_session(|session| {
     [&lhs, &rhs].einsum("...ij,...jk->...ik", session)
-})?;
+})??;
 let programmatic_result = backend.with_backend_session(|session| {
     [&lhs, &rhs].einsum_notation(&notation, session)
-})?;
+})??;
 assert_eq!(string_result.shape(), &[2, 2, 2]);
 assert_eq!(string_result.as_slice::<f64>()?, &[3.0; 8]);
 assert_eq!(programmatic_result.as_slice::<f64>()?, &[3.0; 8]);
@@ -211,12 +211,12 @@ let inputs = [
 let mut backend = CpuBackend::new();
 let result = backend.with_backend_session(|session| {
     inputs.einsum_read("ij,j->i", session)
-})?;
+})??;
 assert_eq!(result.as_slice::<f64>()?, &[140.0, 320.0]);
 
 let plan = ConcreteEinsumPlan::prepare_read(inputs.clone(), "ij,j->i")?;
 let planned = backend
-    .with_backend_session(|session| plan.execute_read(inputs, session))?;
+    .with_backend_session(|session| plan.execute_read(inputs, session))??;
 assert_eq!(planned.as_slice::<f64>()?, &[140.0, 320.0]);
 
 let mut planned_out = Tensor::from_vec_col_major(vec![2], vec![0.0_f64; 2])?;
@@ -231,7 +231,7 @@ backend.with_backend_session(|session| {
         session,
         TensorWrite::from_tensor(&mut planned_out),
     )
-})?;
+})??;
 assert_eq!(planned_out.as_slice::<f64>()?, &[140.0, 320.0]);
 ```
 <!-- end-snippet-source -->

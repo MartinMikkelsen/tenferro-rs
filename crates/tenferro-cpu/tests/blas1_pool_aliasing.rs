@@ -48,6 +48,7 @@ fn blas1_scalars_do_not_overwrite_live_session_results() {
                     &config,
                 )
             })
+            .unwrap()
             .unwrap();
         live.push(product);
     }
@@ -68,11 +69,13 @@ fn blas1_scalars_do_not_overwrite_live_session_results() {
                     TensorRead::from_tensor(&operand),
                 )
             })
+            .unwrap()
             .unwrap();
         let _norm = backend
             .with_backend_session(|session| {
                 session.norm_squared_read(TensorRead::from_tensor(&operand))
             })
+            .unwrap()
             .unwrap();
     }
 

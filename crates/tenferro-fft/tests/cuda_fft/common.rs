@@ -24,12 +24,14 @@ impl Operation {
         axis: isize,
         norm: FftNorm,
     ) -> tenferro_tensor::Result<Tensor> {
-        backend.with_backend_session(|session| match self {
-            Self::Fft => input.fft(n, axis, norm, session),
-            Self::Ifft => input.ifft(n, axis, norm, session),
-            Self::Rfft => input.rfft(n, axis, norm, session),
-            Self::Irfft => input.irfft(n, axis, norm, session),
-        })
+        backend
+            .with_backend_session(|session| match self {
+                Self::Fft => input.fft(n, axis, norm, session),
+                Self::Ifft => input.ifft(n, axis, norm, session),
+                Self::Rfft => input.rfft(n, axis, norm, session),
+                Self::Irfft => input.irfft(n, axis, norm, session),
+            })
+            .unwrap()
     }
 
     pub(crate) fn execute_cuda(

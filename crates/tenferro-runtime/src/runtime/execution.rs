@@ -1274,7 +1274,7 @@ where
                 crate::exec::execute_host_instruction_exec(exec, slots, instruction)?;
                 crate::exec::reclaim_last_use_inputs_exec(slots, instruction, exec);
                 Ok(())
-            })?;
+            })??;
         } else if crate::exec::is_ffi_instruction(instruction) {
             if crate::exec::needs_owner_extension_fallback(instruction, Some(&extension_dispatch)) {
                 // The extension entry forms its own session; no operation runs
@@ -1289,7 +1289,7 @@ where
                             instruction,
                             terminal_slots,
                         )
-                    })?)
+                    })??)
                 {
                     crate::exec::execute_owner_extension_fallback(
                         backend,
@@ -1324,7 +1324,7 @@ where
                         crate::exec::reclaim_last_use_inputs_exec(slots, instruction, exec);
                         Ok(())
                     },
-                )?;
+                )??;
             }
         } else if value_mode
             && crate::exec::instruction_may_be_terminal_value(instruction, terminal_slots)
@@ -1335,7 +1335,7 @@ where
                     instruction,
                     terminal_slots,
                 )
-            })?
+            })??
         {
             // Already handled as a metadata-only TensorValue.
             crate::exec::reclaim_last_use_inputs_via_session(backend, slots, instruction);
@@ -1345,7 +1345,7 @@ where
                 slots[instruction.output_slots[0]] = Some(ExecSlot::Owned(result));
                 crate::exec::reclaim_last_use_inputs_exec(slots, instruction, exec);
                 Ok(())
-            })?;
+            })??;
         }
         Ok(())
     }
@@ -1383,7 +1383,7 @@ where
                     let read = slots[slot].as_ref().map(ExecSlot::as_read).ok_or_else(|| {
                         crate::Error::from(tenferro_tensor::Error::MissingValue { slot })
                     })?;
-                    backend.with_backend_session(|exec| exec.to_contiguous_read(read))?
+                    backend.with_backend_session(|exec| exec.to_contiguous_read(read))??
                 };
                 slots[slot] = Some(ExecSlot::Owned(tensor));
             }
@@ -1404,8 +1404,8 @@ where
 
         let mut lease = self.lease_state("Runtime::run_prepared elementwise region")?;
         let backend = &mut lease.state_mut().backend;
-        let outputs =
-            backend.with_backend_session(|exec| exec.execute_elementwise_fusion(&inputs, plan))?;
+        let outputs = backend
+            .with_backend_session(|exec| exec.execute_elementwise_fusion(&inputs, plan))??;
         let Some(outputs) = outputs else {
             return Ok(false);
         };
@@ -1425,13 +1425,13 @@ where
     fn materialize_slot<'input>(&self, slot: ExecSlot<'input>) -> Result<Tensor> {
         let mut lease = self.lease_state("Runtime::run_compiled collect outputs")?;
         let backend = &mut lease.state_mut().backend;
-        backend.with_backend_session(|exec| slot.into_tensor(exec))
+        backend.with_backend_session(|exec| slot.into_tensor(exec))?
     }
 
     fn materialize_slot_value<'input>(&self, slot: ExecSlot<'input>) -> Result<TensorValue> {
         let mut lease = self.lease_state("Runtime::run_compiled_values collect outputs")?;
         let backend = &mut lease.state_mut().backend;
-        backend.with_backend_session(|exec| slot.into_value(exec))
+        backend.with_backend_session(|exec| slot.into_value(exec))?
     }
 }
 
@@ -3405,7 +3405,7 @@ mod tests {
                 })?;
             Ok(vec![backend.with_backend_session(|exec| {
                 exec.to_contiguous_read(inputs[0].clone())
-            })?])
+            })??])
         }
     }
 
@@ -3512,8 +3512,8 @@ mod tests {
                 .map_err(|source| {
                     Error::runtime_state_source("reentrant_probe", ErrorPhase::Execution, source)
                 })?;
-            let materialized =
-                backend.with_backend_session(|exec| exec.to_contiguous_read(inputs[0].clone()))?;
+            let materialized = backend
+                .with_backend_session(|exec| exec.to_contiguous_read(inputs[0].clone()))??;
             self.probe_reentrant_call(materialized.duplicate()?);
             Ok(vec![materialized])
         }

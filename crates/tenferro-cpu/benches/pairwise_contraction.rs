@@ -116,6 +116,7 @@ fn run_case_normal(
                     false,
                 )
             })
+            .unwrap()
             .expect("first-site contraction should succeed"),
         PairwiseCase::EnvBra => backend
             .with_backend_session(|__s| {
@@ -127,6 +128,7 @@ fn run_case_normal(
                     true,
                 )
             })
+            .unwrap()
             .expect("environment-bra contraction should succeed"),
         PairwiseCase::TmpKet => backend
             .with_backend_session(|__s| {
@@ -138,6 +140,7 @@ fn run_case_normal(
                     false,
                 )
             })
+            .unwrap()
             .expect("temporary-ket contraction should succeed"),
         PairwiseCase::SiteUpdate => {
             let tmp = backend
@@ -150,6 +153,7 @@ fn run_case_normal(
                         true,
                     )
                 })
+                .unwrap()
                 .expect("environment-bra contraction should succeed");
             backend
                 .with_backend_session(|__s| {
@@ -161,6 +165,7 @@ fn run_case_normal(
                         false,
                     )
                 })
+                .unwrap()
                 .expect("temporary-ket contraction should succeed")
         }
     }
@@ -185,6 +190,7 @@ fn run_case_cached(
                     false,
                 )
             })
+            .unwrap()
             .expect("first-site contraction should succeed"),
         PairwiseCase::EnvBra => backend
             .with_backend_session_cached(cache, |__s| {
@@ -197,6 +203,7 @@ fn run_case_cached(
                     true,
                 )
             })
+            .unwrap()
             .expect("environment-bra contraction should succeed"),
         PairwiseCase::TmpKet => backend
             .with_backend_session_cached(cache, |__s| {
@@ -209,6 +216,7 @@ fn run_case_cached(
                     false,
                 )
             })
+            .unwrap()
             .expect("temporary-ket contraction should succeed"),
         PairwiseCase::SiteUpdate => {
             let tmp = backend
@@ -222,6 +230,7 @@ fn run_case_cached(
                         true,
                     )
                 })
+                .unwrap()
                 .expect("environment-bra contraction should succeed");
             backend
                 .with_backend_session_cached(cache, |__s| {
@@ -234,6 +243,7 @@ fn run_case_cached(
                         false,
                     )
                 })
+                .unwrap()
                 .expect("temporary-ket contraction should succeed")
         }
     }

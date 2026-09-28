@@ -232,6 +232,7 @@ fn bench_view_materialization(c: &mut Criterion) {
                     .expect("erased borrowed input");
                 let checked = backend
                     .with_backend_session(|session| session.to_contiguous_read(read.clone()))
+                    .unwrap()
                     .expect("pre-timing session copy succeeds");
                 verify_exact_output(&case, checked.as_slice::<f64>().expect("CPU host output"));
                 group.bench_function("tiny_transpose_erased_session", |b| {
@@ -241,6 +242,7 @@ fn bench_view_materialization(c: &mut Criterion) {
                                 .with_backend_session(|session| {
                                     session.to_contiguous_read(black_box(read.clone()))
                                 })
+                                .unwrap()
                                 .expect("timed session copy succeeds"),
                         );
                     });

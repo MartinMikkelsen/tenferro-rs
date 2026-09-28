@@ -64,6 +64,7 @@ fn session(backend: &mut CudaBackend, lhs: &Tensor, rhs: &Tensor, config: &DotGe
                 config,
             )
         })
+        .unwrap()
         .expect("session dot_general should succeed");
 }
 
@@ -85,6 +86,7 @@ where
                 &config,
             )
         })
+        .unwrap()
         .expect("validation dot_general");
     backend.runtime().synchronize().expect("validation sync");
     assert_eq!(device_out.shape(), &[size, size], "{label}: output shape");

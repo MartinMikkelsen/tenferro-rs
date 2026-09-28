@@ -23,9 +23,11 @@ pub(super) fn with_cpu_linalg<R>(
 where
     R: Send,
 {
-    backend.with_backend_session(|session| {
-        with_cpu_exec_session(session, f).expect("CpuBackend must expose CpuExecSession")
-    })
+    backend
+        .with_backend_session(|session| {
+            with_cpu_exec_session(session, f).expect("CpuBackend must expose CpuExecSession")
+        })
+        .unwrap()
 }
 
 fn get_f64(t: &Tensor, idx: &[usize]) -> f64 {

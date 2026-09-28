@@ -358,7 +358,7 @@ impl<B: TensorBackend + 'static> PreparedOperationExecutor for SparseReferencePr
                 .cloned()
                 .map(|input| exec.to_contiguous_read(input))
                 .collect::<Result<Vec<_>>>()
-        })?;
+        })??;
         let input_refs: Vec<&Tensor> = materialized_inputs.iter().collect();
         Ok(execute_sparse_reference_payload(
             self.family_id,

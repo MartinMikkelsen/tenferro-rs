@@ -31,6 +31,7 @@ fn bench_einsum_session_chain(c: &mut Criterion) {
     // Correctness validation outside the timed region: shape [8, 8], finite.
     let check = backend
         .with_backend_session(|session| plan.execute([&lhs, &rhs], session))
+        .unwrap()
         .unwrap();
     assert_eq!(check.shape(), &[8, 8]);
     assert!(check
@@ -43,27 +44,31 @@ fn bench_einsum_session_chain(c: &mut Criterion) {
 
     group.bench_function("B_one_session", |b| {
         b.iter(|| {
-            backend.with_backend_session(|session| {
-                let inputs = black_box([&lhs, &rhs]);
-                for _ in 0..CALLS {
-                    let out = plan.execute(inputs, session).unwrap();
-                    black_box(out);
-                }
-            });
+            backend
+                .with_backend_session(|session| {
+                    let inputs = black_box([&lhs, &rhs]);
+                    for _ in 0..CALLS {
+                        let out = plan.execute(inputs, session).unwrap();
+                        black_box(out);
+                    }
+                })
+                .unwrap();
         });
     });
 
     group.bench_function("C_mixed_one_session", |b| {
         b.iter(|| {
-            backend.with_backend_session(|session| {
-                let inputs = black_box([&lhs, &rhs]);
-                for _ in 0..CALLS {
-                    let x = plan.execute(inputs, session).unwrap();
-                    let x = x.exp(session).unwrap();
-                    let out = x.reduce_sum(&[0], session).unwrap();
-                    black_box(out);
-                }
-            });
+            backend
+                .with_backend_session(|session| {
+                    let inputs = black_box([&lhs, &rhs]);
+                    for _ in 0..CALLS {
+                        let x = plan.execute(inputs, session).unwrap();
+                        let x = x.exp(session).unwrap();
+                        let out = x.reduce_sum(&[0], session).unwrap();
+                        black_box(out);
+                    }
+                })
+                .unwrap();
         });
     });
 

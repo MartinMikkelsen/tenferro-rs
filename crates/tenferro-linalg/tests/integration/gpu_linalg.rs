@@ -31,9 +31,11 @@ fn with_cpu_linalg_session<R>(
 where
     R: Send,
 {
-    backend.with_backend_session(|session| {
-        with_cpu_exec_session(session, f).expect("CPU backend session should be available")
-    })
+    backend
+        .with_backend_session(|session| {
+            with_cpu_exec_session(session, f).expect("CPU backend session should be available")
+        })
+        .unwrap()
 }
 
 fn with_cuda_linalg_session<R>(
@@ -43,9 +45,11 @@ fn with_cuda_linalg_session<R>(
 where
     R: Send,
 {
-    backend.with_backend_session(|session| {
-        with_cuda_exec_session(session, f).expect("CUDA backend session should be available")
-    })
+    backend
+        .with_backend_session(|session| {
+            with_cuda_exec_session(session, f).expect("CUDA backend session should be available")
+        })
+        .unwrap()
 }
 
 fn upload(backend: &CudaBackend, tensor: &Tensor) -> Tensor {

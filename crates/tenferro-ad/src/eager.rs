@@ -992,19 +992,17 @@ impl CpuPlacementBoundEager {
     ///
     /// Returns the callback's [`Error`] unchanged. Core backend operations may
     /// report validation, unsupported capability, backend, or runtime-state
-    /// failures through that error.
-    ///
-    /// # Panics
-    ///
-    /// The existing CPU backend re-entry guard panics if the callback enters a
-    /// public `CpuBackend` or reopens another eager execution boundary on this
-    /// same runtime. Use only the borrowed `session` for work inside the scope.
+    /// failures through that error. Returns [`Error::SessionEntry`] without
+    /// running the callback when the backend cannot admit the session, for
+    /// example when it is called from inside another session on this thread
+    /// ([`tenferro_tensor::SessionEntryError::Reentered`]). Use only the
+    /// borrowed `session` for work inside the scope.
     pub fn with_eager_session<R: Send>(
         &mut self,
         f: impl FnOnce(&mut dyn BackendSession) -> Result<R> + Send,
     ) -> Result<R> {
         self.refresh_runtime_selection()?;
-        self.backend.with_backend_session(f)
+        self.backend.with_backend_session(f)?
     }
 }
 
@@ -3444,14 +3442,18 @@ impl EagerRuntime {
     /// # Errors
     ///
     /// Returns [`tenferro_runtime::Error::RuntimeState`] if the eager backend
-    /// lock is poisoned. Backend operations retain their typed tensor/backend
-    /// errors inside the callback result.
+    /// lock is poisoned, and [`tenferro_runtime::Error::SessionEntry`] without
+    /// running the callback when the backend cannot admit the session.
+    /// Backend operations retain their typed tensor/backend errors inside the
+    /// callback result.
     pub fn with_execution_session<R: Send>(
         &self,
         f: impl FnOnce(&mut dyn BackendSession) -> R + Send,
     ) -> Result<R> {
+        // Lock order: the eager backend owner lock is taken before admission,
+        // and admission never waits on this lock while holding a permit.
         let mut backend = self.lock_backend()?;
-        Ok(backend.with_backend_session(f))
+        Ok(backend.with_backend_session(f)?)
     }
 
     /// Enter a runtime-bound eager session for one or more eager operations.
@@ -3562,7 +3564,7 @@ impl EagerRuntime {
             let mut extension_ctx =
                 tenferro_runtime::ExtensionExecutionContext::new(session, extension_caches);
             f(&mut extension_ctx)
-        }))
+        })?)
     }
 
     /// Run a prepared extension executor through the runtime-owned erased
@@ -3701,7 +3703,7 @@ impl EagerRuntime {
                     }
                 }
                 Ok(())
-            })
+            })?
         })?;
 
         let outputs = graph

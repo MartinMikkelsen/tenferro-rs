@@ -343,8 +343,7 @@ tenferro_tensor::define_scalar_set! {
     ///
     /// ```rust
     /// use tenferro_bf16_proof::{Bf16, Bf16Set, Bf16Tag};
-    /// use tenferro_tensor_core::{ScalarSet};
-    /// use tenferro_tensor::{HostTensor};
+    /// use tenferro_tensor::{HostTensor, ScalarSet};
     ///
     /// let value = Bf16Set::Bf16(HostTensor::from_vec_col_major(vec![1], vec![Bf16::from_f32(2.0)])?);
     /// assert_eq!(value.tag(), Bf16Tag::Bf16);

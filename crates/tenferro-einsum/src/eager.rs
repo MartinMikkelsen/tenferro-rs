@@ -1132,7 +1132,7 @@ pub(crate) fn eager_einsum_subscripts(
 ) -> Result<Tensor> {
     ctx.with_backend_session(|session| {
         eager_einsum_subscripts_on_session(session, inputs, subscripts)
-    })
+    })?
 }
 
 /// Eager N-ary einsum on concrete [`Tensor`] values inside an existing
@@ -1214,7 +1214,7 @@ pub(crate) fn eager_einsum_read_subscripts(
 ) -> Result<Tensor> {
     ctx.with_backend_session(|session| {
         eager_einsum_read_subscripts_on_session(session, inputs, subscripts)
-    })
+    })?
 }
 
 /// Eager N-ary einsum on read-only tensor inputs inside an existing backend
@@ -1266,7 +1266,7 @@ pub(crate) fn eager_einsum_owned_subscripts(
     let shapes: Vec<&[usize]> = inputs.iter().map(|tensor| tensor.shape()).collect();
     let tree = plan_subscripts(subscripts, &shapes)?;
     let values = inputs.into_iter().map(TensorValue::Owned).collect();
-    ctx.with_backend_session(|exec| eager_einsum_exec_values(exec, values, &tree))
+    ctx.with_backend_session(|exec| eager_einsum_exec_values(exec, values, &tree))?
 }
 
 #[cfg(test)]
