@@ -313,7 +313,9 @@ impl CpuBatchPolicy {
 ///     rhs_batch_dims: [2].as_slice().into(),
 /// };
 /// let product = backend.with_backend_session(|session| {
-///     with_batch_policy(session, CpuBatchPolicy::new(CpuBatchStrategy::Sequential), |session| {
+///     // ProviderItems runs one provider GEMM per item with every provider;
+///     // a forced Sequential is rejected by providers with their own threading.
+///     with_batch_policy(session, CpuBatchPolicy::new(CpuBatchStrategy::ProviderItems), |session| {
 ///         session.dot_general_read(
 ///             TensorRead::from_tensor(&lhs),
 ///             TensorRead::from_tensor(&rhs),
