@@ -98,3 +98,19 @@ fn direct_tensor_broadcast_uses_the_shared_shape_payload() {
             if lhs.as_slice() == [2] && rhs.as_slice() == [3])
     ));
 }
+
+#[test]
+fn typed_complex_abs_returns_the_real_dtype() {
+    use num_complex::Complex64;
+    let mut backend = CpuBackend::new();
+    let z = TypedTensor::<Complex64>::from_vec_col_major(
+        vec![2],
+        vec![Complex64::new(3.0, 4.0), Complex64::new(0.0, -2.0)],
+    )
+    .unwrap();
+    let magnitude = backend
+        .with_backend_session(|session| z.abs(session))
+        .unwrap()
+        .unwrap();
+    assert_close(magnitude.host_data().unwrap(), &[5.0, 2.0]);
+}

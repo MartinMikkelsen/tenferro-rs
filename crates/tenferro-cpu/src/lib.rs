@@ -307,16 +307,16 @@ pub fn with_cpu_exec_session<B, R>(
 where
     B: tenferro_tensor::BackendSession + ?Sized,
 {
-    if session.session_type_id() != std::any::TypeId::of::<exec_session::CpuExecSessionMarker>() {
-        return None;
-    }
-    let data = unsafe { session.session_data_mut() };
-    // SAFETY: the exact marker is supplied by CpuExecSession's explicit
-    // `BackendSession` implementation that produced `session_data_mut`, and
-    // the equality above proves that the erased value is `CpuExecSession`.
-    // The callback is higher-ranked and returns no session borrow, so the
+    let data = session
+        .native_session()?
+        .into_marked_ptr::<exec_session::CpuExecSessionMarker>()?;
+    // SAFETY: only `CpuExecSession::native_session` creates a token with the
+    // crate-private `CpuExecSessionMarker`, and it points that token at a live
+    // `CpuExecSession`. The token borrowed `*session` exclusively, and this
+    // function keeps holding `session: &mut B` for the whole visit. The
+    // callback is higher-ranked and returns no session borrow, so the
     // reconstructed reference cannot escape the original session borrow.
-    Some(unsafe { f(&mut *(data.cast::<CpuExecSession<'static>>())) })
+    Some(unsafe { f(data.cast::<CpuExecSession<'static>>().as_mut()) })
 }
 
 /// Invoke a direct faer operation with the parallelism selected by a CPU session.

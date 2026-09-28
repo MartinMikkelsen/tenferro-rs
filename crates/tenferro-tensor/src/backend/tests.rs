@@ -73,17 +73,13 @@ fn contraction_scalar_identity_errors_name_the_public_constructor() {
 fn nested_backend_session_entry_is_rejected_before_its_callback_runs() {
     use crate::tests::backend_default_read_tests::DefaultReadBackend;
 
+    // The portable guard is per thread, so a second backend value entered from
+    // inside a session closure is rejected like a re-entry of the same one.
     let mut backend = DefaultReadBackend::default();
+    let mut other = DefaultReadBackend::default();
     let mut inner_ran = false;
     let nested = backend
-        .with_backend_session(|outer| {
-            // Recover the concrete backend from the session through the documented
-            // capability bridge so the nested call re-enters the session entry on
-            // the same backend, same thread.
-            let concrete: &mut DefaultReadBackend =
-                unsafe { &mut *outer.session_data_mut().cast::<DefaultReadBackend>() };
-            concrete.with_backend_session(|_inner| inner_ran = true)
-        })
+        .with_backend_session(|_outer| other.with_backend_session(|_inner| inner_ran = true))
         .unwrap();
     assert!(matches!(
         nested,

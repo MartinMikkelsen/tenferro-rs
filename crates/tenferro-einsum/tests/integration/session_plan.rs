@@ -62,9 +62,7 @@ macro_rules! panic_backend_methods {
 /// real or wrong-dtype ops. Excludes `BackendSessionHost`, which each backend
 /// implements explicitly.
 macro_rules! test_backend_impls {
-    ($ty:ident, $marker:ident) => {
-        struct $marker;
-
+    ($ty:ident) => {
         impl BackendRuntimeCache for $ty {
             type RuntimeCache = <CpuBackend as BackendRuntimeCache>::RuntimeCache;
         }
@@ -154,13 +152,7 @@ macro_rules! test_backend_impls {
         impl BackendCachedDot for $ty {}
 
         impl BackendSession for $ty {
-            fn session_type_id(&self) -> std::any::TypeId {
-                std::any::TypeId::of::<$marker>()
-            }
 
-            unsafe fn session_data_mut(&mut self) -> *mut () {
-                self as *mut Self as *mut ()
-            }
         }
 
         impl TensorBackend for $ty {}
@@ -420,7 +412,7 @@ macro_rules! panic_reduction {
     };
 }
 
-test_backend_impls!(SessionCountingBackend, SessionCountingBackendMarker);
+test_backend_impls!(SessionCountingBackend);
 
 impl TensorDot for SessionCountingBackend {
     // The previous read-half default delegated an owned pair to the one-shot
@@ -712,7 +704,7 @@ impl BackendSessionHost for SessionCountingBackend {
     }
 }
 
-test_backend_impls!(WrongDTypeSessionBackend, WrongDTypeSessionBackendMarker);
+test_backend_impls!(WrongDTypeSessionBackend);
 
 impl TensorDot for WrongDTypeSessionBackend {
     // The previous read-half default delegated an owned pair to the one-shot

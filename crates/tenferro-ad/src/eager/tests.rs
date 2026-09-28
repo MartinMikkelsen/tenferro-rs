@@ -132,37 +132,24 @@ fn eager_runtime_execution_session_runs_cpu_operation() {
 
 #[test]
 fn eager_backend_session_identity_belongs_to_the_concrete_backend() {
+    // The composite eager backend hands its caller the concrete backend's
+    // session, so the CPU session's native token is visible through it.
     let mut backend = EagerBackend::cpu(CpuBackend::new());
-    let identity = backend
-        .with_backend_session(|session| session.session_type_id())
-        .unwrap();
-    assert_ne!(identity, std::any::TypeId::of::<EagerBackend>());
-    assert_eq!(
-        identity,
-        backend
-            .with_backend_session(|session| session.session_type_id())
-            .unwrap()
-    );
+    assert!(backend
+        .with_backend_session(|session| {
+            tenferro_cpu::with_cpu_exec_session(session, |_| ()).is_some()
+        })
+        .unwrap());
 
+    // A test backend that is its own session has no native services.
     let materializations = Arc::new(AtomicUsize::new(0));
     let mut recording = EagerBackend::recording_cpu(materializations);
-    let recording_owner = recording.recording_session_owner().unwrap() as usize;
-    let recording_identity = recording
+    assert!(recording
         .with_backend_session(|session| {
-            let identity = session.session_type_id();
-            let projected = unsafe { session.session_data_mut() };
-            assert_eq!(projected as usize, recording_owner);
-            identity
+            session.native_session().is_none()
+                && tenferro_cpu::with_cpu_exec_session(session, |_| ()).is_none()
         })
-        .unwrap();
-    assert_ne!(recording_identity, identity);
-    assert_eq!(
-        recording_identity,
-        recording
-            .with_backend_session(|session| { session.session_type_id() })
-            .unwrap()
-    );
-    assert!(backend.recording_session_owner().is_none());
+        .unwrap());
 }
 
 #[test]

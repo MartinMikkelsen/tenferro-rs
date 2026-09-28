@@ -1,6 +1,5 @@
 use cubecl::prelude::{CubeElement, CubePrimitive};
 use num_complex::{Complex32, Complex64};
-use std::any::TypeId;
 use std::marker::PhantomData;
 use std::rc::Rc;
 use tenferro_tensor::backend::{
@@ -65,8 +64,8 @@ impl Drop for CubeclExitFlush<'_> {
     }
 }
 
-/// Marker for the concrete erased CUDA execution-session target.
-#[doc(hidden)]
+/// Native-session marker for [`CudaExecSession`]; private to this crate so no other
+/// crate can create a token that claims to be this session.
 pub(super) struct CudaExecSessionMarker;
 
 /// Borrowed CUDA execution capability.
@@ -438,13 +437,14 @@ pub fn with_cuda_exec_session<B, R>(
 where
     B: BackendSession + ?Sized,
 {
-    if session.session_type_id() != std::any::TypeId::of::<CudaExecSessionMarker>() {
-        return None;
-    }
-    let data = unsafe { session.session_data_mut() };
-    // SAFETY: the exact marker check and the BackendSession erased-pointer
-    // contract identify the value as CudaExecSession for this scoped visit.
-    Some(unsafe { f(&mut *(data.cast::<CudaExecSession<'static>>())) })
+    let data = session
+        .native_session()?
+        .into_marked_ptr::<CudaExecSessionMarker>()?;
+    // SAFETY: only `CudaExecSession::native_session` creates a token with the
+    // crate-private `CudaExecSessionMarker`, and it points that token at a live
+    // `CudaExecSession`. The token borrowed `*session` exclusively, and this function
+    // keeps holding `session: &mut B` for the whole scoped visit.
+    Some(unsafe { f(data.cast::<CudaExecSession<'static>>().as_mut()) })
 }
 
 macro_rules! delegate {
@@ -671,12 +671,11 @@ impl BackendSession for CudaExecSession<'_> {
         ops::axpby_read_into_accum(self.backend, alpha, x, beta, y)
     }
 
-    fn session_type_id(&self) -> TypeId {
-        TypeId::of::<CudaExecSessionMarker>()
-    }
-
-    unsafe fn session_data_mut(&mut self) -> *mut () {
-        self as *mut Self as *mut ()
+    fn native_session(&mut self) -> Option<tenferro_tensor::NativeSessionRef<'_>> {
+        // SAFETY: `CudaExecSessionMarker` is private to this crate, and this is the only
+        // place a token carrying it is created; it always points to a
+        // `CudaExecSession`, exclusively borrowed for the token lifetime.
+        Some(unsafe { tenferro_tensor::NativeSessionRef::new::<CudaExecSessionMarker, _>(self) })
     }
 }
 

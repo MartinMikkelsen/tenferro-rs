@@ -114,9 +114,9 @@ impl<T: TensorScalar> TypedTensorSessionOpsExt<T> for TypedTensor<T> {
         into_typed_result("neg", out)
     }
 
-    fn abs(&self, session: &mut dyn BackendSession) -> Result<TypedTensor<T>> {
+    fn abs(&self, session: &mut dyn BackendSession) -> Result<TypedTensor<T::Real>> {
         let out = session.abs_read(T::tensor_read(self))?;
-        into_typed_result("abs", out)
+        into_typed_result::<T::Real>("abs", out)
     }
 
     fn sign(&self, session: &mut dyn BackendSession) -> Result<TypedTensor<T>> {

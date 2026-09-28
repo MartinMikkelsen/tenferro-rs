@@ -165,24 +165,13 @@ fn generic_binary_contract_reduces_then_builds_dot_config() {
     assert_eq!(tensor.as_slice::<f64>().unwrap(), &[24.0; 10]);
 }
 
-#[doc(hidden)]
-struct NoBroadcastMaterializationBackendSessionMarker;
-
 struct NoBroadcastMaterializationBackend {
     shape: &'static [usize],
     lhs_strides: &'static [isize],
     rhs_strides: &'static [isize],
 }
 
-impl BackendSession for NoBroadcastMaterializationBackend {
-    fn session_type_id(&self) -> std::any::TypeId {
-        std::any::TypeId::of::<NoBroadcastMaterializationBackendSessionMarker>()
-    }
-
-    unsafe fn session_data_mut(&mut self) -> *mut () {
-        self as *mut Self as *mut ()
-    }
-}
+impl BackendSession for NoBroadcastMaterializationBackend {}
 
 fn unexpected(op: &'static str) -> Error {
     Error::backend_failure(op, "unexpected backend operation in outer-product test")

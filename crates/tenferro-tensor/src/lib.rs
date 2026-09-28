@@ -90,6 +90,7 @@ pub mod capability;
 pub mod config;
 pub mod dispatch;
 pub mod error;
+mod native_session;
 pub mod prelude;
 mod session_entry;
 pub mod types;
@@ -112,6 +113,7 @@ pub use config::{
 };
 pub use erased_host::ErasedHostTensor;
 pub use error::{BoxError, Error, ReinterpretError, Result};
+pub use native_session::NativeSessionRef;
 pub use scalar_set::ScalarSet;
 pub use session_entry::SessionEntryError;
 

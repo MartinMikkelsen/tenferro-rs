@@ -1,7 +1,6 @@
 use crate::buffer_pool::{BufferPool, PoolScalar};
 use crate::{Tensor, TensorRead, TensorValue, TensorWrite};
 use num_complex::{Complex32, Complex64};
-use std::any::TypeId;
 use std::sync::Arc;
 use tenferro_tensor::backend::{BackendSession, ElementwiseFusionPlan, GroupedGemmConfig};
 use tenferro_tensor::{
@@ -22,8 +21,8 @@ use super::{
     materialize_tensor_read_in_domain, reduction, structural,
 };
 
-/// Marker for the concrete erased CPU execution-session target.
-#[doc(hidden)]
+/// Native-session marker for [`CpuExecSession`]; private to this crate so no
+/// other crate can create a token that claims to be a CPU session.
 pub(super) struct CpuExecSessionMarker;
 
 /// Borrowed CPU execution session used by scheduler-owned extension regions.
@@ -971,12 +970,11 @@ impl BackendSession for CpuExecSession<'_> {
         })
     }
 
-    fn session_type_id(&self) -> TypeId {
-        TypeId::of::<CpuExecSessionMarker>()
-    }
-
-    unsafe fn session_data_mut(&mut self) -> *mut () {
-        self as *mut Self as *mut ()
+    fn native_session(&mut self) -> Option<tenferro_tensor::NativeSessionRef<'_>> {
+        // SAFETY: `CpuExecSessionMarker` is private to this crate, and this is
+        // the only place a token carrying it is created; it always points to a
+        // `CpuExecSession`, exclusively borrowed for the token lifetime.
+        Some(unsafe { tenferro_tensor::NativeSessionRef::new::<CpuExecSessionMarker, _>(self) })
     }
 }
 

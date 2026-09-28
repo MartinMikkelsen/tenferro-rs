@@ -1718,7 +1718,8 @@ look at the extension routes narrows the reason. `execute_linalg_extension_reads
 `ErasedExecutionContext<'_, B>` with `B: TensorBackend + 'static`, which the
 extension runtime uses to identify the concrete backend for capability
 dispatch. The session-based equivalent already exists
-(`BackendSession::session_type_id`, `with_cpu_exec_session`,
+(`BackendSession::session_type_id`, since #1938 D7 replaced by the opaque
+`BackendSession::native_session` token; `with_cpu_exec_session`,
 `with_cuda_exec_session`), and `execute_prepared_extension_instruction_in_session`
 uses it, but the owner path is still reachable.
 

@@ -433,6 +433,34 @@ are distinct: pass the selected provider and effective execution context into
 standard algorithms explicitly (D8). Thread policy cannot be reset by extracting
 a delegate's capability.
 
+**Implemented mapping (#1938 session phase).** `BackendSession::session_type_id`
+and the `unsafe fn session_data_mut` raw-pointer pair are gone. Safe code could
+implement both, so a custom session could claim a leaf's marker and hand the
+leaf visitor a forged pointer. They are replaced by
+`BackendSession::native_session(&mut self) -> Option<NativeSessionRef<'_>>`,
+defaulting to `None`. `NativeSessionRef` (in `tenferro-tensor`) has private
+fields (marker `TypeId`, pointer, `&'s mut` borrow marker, `*mut ()`
+thread-affinity marker), no `Clone`/`Send`/`Sync`, and one `unsafe` constructor
+whose contract is marker/type correspondence. Each leaf marker is crate-private,
+so only CPU, CUDA and WebGPU sessions create tokens carrying their marker, and
+their safe visitors (`with_cpu_exec_session`, `with_cuda_exec_session`,
+`with_webgpu_exec_session`, names retained) recover the session with a marker
+check plus one audited cast. Custom sessions get `None` by default, so a
+dispatch-overriding wrapper does not expose its delegate's native services
+unless it deliberately forwards the delegate's token. Compile-fail doctests pin
+the forged-construction (E0133), escaped-borrow, `Send` (E0277) and `Clone`
+(E0599) rejections.
+
+On the compact boundary, the input half already held from the ownership phase:
+any `TypedTensor<T, R, D>` view erases through `TypedTensorView::into_tensor_read`
+without allocating small-rank metadata or promoting host storage. The typed
+facade (`TypedTensorSessionOpsExt`) stays on the `Dynamic` representation and
+returns operation-specific result types: complex `abs` now returns
+`TypedTensor<T::Real>` instead of executing and then failing the recovery to
+`T`; `compare` already returned `TypedTensor<bool>`. A `Host` owner reaches the
+facade through the zero-copy `into_dynamic()` rather than through a second,
+representation-parameterized facade family.
+
 ### D8. Parallelism, delegation and placement
 
 Reuse the existing execution context and pool, not a second scheduler. Separate

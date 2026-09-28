@@ -41,10 +41,9 @@ fn with_cpu_exec_session_checks_exact_marker_and_scopes_borrow() {
         .with_backend_session(|session| {
             // The session the owner builds is the CPU execution session, which
             // is what the capability bridge recognizes.
-            assert_eq!(
-                session.session_type_id(),
-                std::any::TypeId::of::<crate::exec_session::CpuExecSessionMarker>()
-            );
+            assert!(session.native_session().is_some_and(|token| {
+                token.has_marker::<crate::exec_session::CpuExecSessionMarker>()
+            }));
             with_cpu_exec_session(session, |session: &mut CpuExecSession<'_>| {
                 let _: &mut CpuExecSession<'_> = session;
                 17usize

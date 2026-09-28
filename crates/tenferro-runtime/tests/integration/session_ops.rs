@@ -1059,9 +1059,6 @@ impl SessionCountingBackend {
 /// `into_typed_result`.
 struct WrongDTypeSessionBackend;
 
-/// Session-type marker for [`WrongDTypeSessionBackend`].
-struct WrongDTypeSessionBackendMarker;
-
 macro_rules! panic_backend_methods {
     ($($name:ident($($arg:ident : $argty:ty),*) -> $ret:ty;)+) => {
         $(
@@ -1078,9 +1075,7 @@ macro_rules! panic_backend_methods {
 /// real ops). Also excludes `BackendSessionHost`, which each backend
 /// implements explicitly.
 macro_rules! test_backend_impls {
-    ($ty:ident, $marker:ident) => {
-        struct $marker;
-
+    ($ty:ident) => {
         impl BackendRuntimeCache for $ty {
             type RuntimeCache = <CpuBackend as BackendRuntimeCache>::RuntimeCache;
         }
@@ -1191,13 +1186,7 @@ macro_rules! test_backend_impls {
         impl BackendCachedDot for $ty {}
 
         impl BackendSession for $ty {
-            fn session_type_id(&self) -> std::any::TypeId {
-                std::any::TypeId::of::<$marker>()
-            }
 
-            unsafe fn session_data_mut(&mut self) -> *mut () {
-                self as *mut Self as *mut ()
-            }
         }
 
         impl TensorBackend for $ty {}
@@ -1447,7 +1436,7 @@ macro_rules! panic_reduction {
     };
 }
 
-test_backend_impls!(SessionCountingBackend, SessionCountingBackendMarker);
+test_backend_impls!(SessionCountingBackend);
 panic_elementwise!(SessionCountingBackend);
 panic_analytic!(SessionCountingBackend);
 panic_reduction!(SessionCountingBackend);
@@ -1569,15 +1558,7 @@ impl TensorDeviceTransfer for WrongDTypeSessionBackend {
 
 impl BackendCachedDot for WrongDTypeSessionBackend {}
 
-impl BackendSession for WrongDTypeSessionBackend {
-    fn session_type_id(&self) -> std::any::TypeId {
-        std::any::TypeId::of::<WrongDTypeSessionBackendMarker>()
-    }
-
-    unsafe fn session_data_mut(&mut self) -> *mut () {
-        self as *mut Self as *mut ()
-    }
-}
+impl BackendSession for WrongDTypeSessionBackend {}
 
 impl TensorBackend for WrongDTypeSessionBackend {}
 

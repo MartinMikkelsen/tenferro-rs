@@ -1200,17 +1200,25 @@ pub trait TypedTensorSessionOpsExt<T: TensorScalar> {
     fn neg(&self, session: &mut dyn BackendSession) -> tenferro_tensor::Result<TypedTensor<T>>;
     /// Elementwise absolute value inside a session.
     ///
+    /// The result has the real counterpart dtype `T::Real`: complex magnitude
+    /// is real, and real or integer inputs keep their own dtype.
+    ///
     /// # Examples
     ///
     /// ```rust
+    /// use num_complex::Complex64;
     /// use tenferro_cpu::CpuBackend;
     /// use tenferro_runtime::{TypedTensor, TypedTensorSessionOpsExt};
     /// use tenferro_tensor::BackendSessionHost;
     ///
     /// let mut backend = CpuBackend::new();
-    /// let x = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![-1.0, 2.0]).unwrap();
+    /// let x = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![-1.0, 2.0])?;
     /// let y = backend.with_backend_session(|session| x.abs(session))??;
-    /// assert_eq!(y.host_data().unwrap(), &[1.0, 2.0]);
+    /// assert_eq!(y.host_data()?, &[1.0, 2.0]);
+    ///
+    /// let z = TypedTensor::<Complex64>::from_vec_col_major(vec![1], vec![Complex64::new(3.0, 4.0)])?;
+    /// let magnitude: TypedTensor<f64> = backend.with_backend_session(|session| z.abs(session))??;
+    /// assert_eq!(magnitude.host_data()?, &[5.0]);
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     ///
@@ -1219,7 +1227,10 @@ pub trait TypedTensorSessionOpsExt<T: TensorScalar> {
     /// Returns [`tenferro_tensor::Error::Unsupported`] for an unsupported
     /// dtype or [`tenferro_tensor::Error::BackendSource`] for a typed backend
     /// failure.
-    fn abs(&self, session: &mut dyn BackendSession) -> tenferro_tensor::Result<TypedTensor<T>>;
+    fn abs(
+        &self,
+        session: &mut dyn BackendSession,
+    ) -> tenferro_tensor::Result<TypedTensor<T::Real>>;
     /// Elementwise sign inside a session.
     ///
     /// # Examples

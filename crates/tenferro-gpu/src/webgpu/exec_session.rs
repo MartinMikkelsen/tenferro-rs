@@ -1,4 +1,3 @@
-use std::any::TypeId;
 use tenferro_tensor::backend::{
     BackendSession, BackendSessionHost, ElementwiseReadOp, SessionCachedDot, TensorAnalytic,
     TensorBuffer, TensorDeviceTransfer, TensorDot, TensorElementwise, TensorFusion, TensorIndexing,
@@ -15,8 +14,8 @@ use super::{
     WebGpuRuntimeIdentity,
 };
 
-/// Marker for the concrete erased WebGPU execution-session target.
-#[doc(hidden)]
+/// Native-session marker for [`WebGpuExecSession`]; private to this crate so no other
+/// crate can create a token that claims to be this session.
 pub(super) struct WebGpuExecSessionMarker;
 
 /// Borrowed WebGPU execution capability.
@@ -52,13 +51,14 @@ pub fn with_webgpu_exec_session<B, R>(
 where
     B: BackendSession + ?Sized,
 {
-    if session.session_type_id() != std::any::TypeId::of::<WebGpuExecSessionMarker>() {
-        return None;
-    }
-    let data = unsafe { session.session_data_mut() };
-    // SAFETY: the exact marker check and BackendSession erased-pointer contract
-    // identify the value as WebGpuExecSession for this scoped visit.
-    Some(unsafe { f(&mut *(data.cast::<WebGpuExecSession<'static>>())) })
+    let data = session
+        .native_session()?
+        .into_marked_ptr::<WebGpuExecSessionMarker>()?;
+    // SAFETY: only `WebGpuExecSession::native_session` creates a token with the
+    // crate-private `WebGpuExecSessionMarker`, and it points that token at a live
+    // `WebGpuExecSession`. The token borrowed `*session` exclusively, and this function
+    // keeps holding `session: &mut B` for the whole scoped visit.
+    Some(unsafe { f(data.cast::<WebGpuExecSession<'static>>().as_mut()) })
 }
 
 macro_rules! delegate {
@@ -571,12 +571,11 @@ delegate!(TensorDeviceTransfer {
 impl SessionCachedDot for WebGpuExecSession<'_> {}
 
 impl BackendSession for WebGpuExecSession<'_> {
-    fn session_type_id(&self) -> TypeId {
-        TypeId::of::<WebGpuExecSessionMarker>()
-    }
-
-    unsafe fn session_data_mut(&mut self) -> *mut () {
-        self as *mut Self as *mut ()
+    fn native_session(&mut self) -> Option<tenferro_tensor::NativeSessionRef<'_>> {
+        // SAFETY: `WebGpuExecSessionMarker` is private to this crate, and this is the only
+        // place a token carrying it is created; it always points to a
+        // `WebGpuExecSession`, exclusively borrowed for the token lifetime.
+        Some(unsafe { tenferro_tensor::NativeSessionRef::new::<WebGpuExecSessionMarker, _>(self) })
     }
 }
 

@@ -25,7 +25,7 @@ macro_rules! unreachable_backend_methods {
 }
 
 macro_rules! impl_minimal_tensor_backend {
-    ($ty:ty, $marker:ty) => {
+    ($ty:ty) => {
         impl BackendRuntimeCache for $ty {
             type RuntimeCache = ();
         }
@@ -365,13 +365,7 @@ macro_rules! impl_minimal_tensor_backend {
         }
         impl BackendCachedDot for $ty {}
         impl BackendSession for $ty {
-            fn session_type_id(&self) -> std::any::TypeId {
-                std::any::TypeId::of::<$marker>()
-            }
 
-            unsafe fn session_data_mut(&mut self) -> *mut () {
-                self as *mut Self as *mut ()
-            }
         }
         impl BackendSessionHost for $ty {
             fn with_backend_session<R: Send>(
@@ -393,8 +387,7 @@ impl TensorOnlyBackend {
 }
 
 #[doc(hidden)]
-struct TensorOnlyBackendSessionMarker;
-impl_minimal_tensor_backend!(TensorOnlyBackend, TensorOnlyBackendSessionMarker);
+impl_minimal_tensor_backend!(TensorOnlyBackend);
 
 fn assert_fft_capability<B: FftBackend>() {}
 fn assert_tensor_backend<B: TensorBackend>() {}

@@ -1,5 +1,4 @@
 #[cfg(test)]
-use std::any::TypeId;
 #[cfg(test)]
 use std::sync::atomic::{AtomicUsize, Ordering};
 #[cfg(test)]
@@ -147,14 +146,6 @@ impl EagerBackend {
         }
     }
 
-    #[cfg(test)]
-    pub(crate) fn recording_session_owner(&mut self) -> Option<*mut ()> {
-        match self {
-            Self::Recording(backend) => Some((backend as *mut RecordingBackend).cast()),
-            _ => None,
-        }
-    }
-
     #[cfg(feature = "cuda")]
     pub(crate) fn cuda(backend: CudaBackend) -> Self {
         Self::Cuda(backend)
@@ -251,10 +242,6 @@ pub(crate) fn cpu_runtime_engine_registration(
 }
 
 #[cfg(test)]
-#[doc(hidden)]
-struct RecordingBackendSessionMarker;
-
-#[cfg(test)]
 #[derive(Debug)]
 pub struct RecordingBackend {
     materializations: Arc<AtomicUsize>,
@@ -277,15 +264,7 @@ macro_rules! delegate_recording_backend_methods {
 }
 
 #[cfg(test)]
-impl BackendSession for RecordingBackend {
-    fn session_type_id(&self) -> TypeId {
-        TypeId::of::<RecordingBackendSessionMarker>()
-    }
-
-    unsafe fn session_data_mut(&mut self) -> *mut () {
-        self as *mut Self as *mut ()
-    }
-}
+impl BackendSession for RecordingBackend {}
 
 #[cfg(test)]
 impl BackendRuntimeCache for RecordingBackend {

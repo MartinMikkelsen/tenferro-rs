@@ -26,8 +26,6 @@ fn typed_eager_einsum_does_not_erase_through_host_copies() {
 
 #[derive(Default)]
 struct WrongDTypeBackend;
-#[doc(hidden)]
-struct WrongDTypeBackendSessionMarker;
 
 macro_rules! panic_backend_methods {
     ($($name:ident($($arg:ident : $argty:ty),*) -> $ret:ty;)+) => {
@@ -486,15 +484,7 @@ impl TensorDot for WrongDTypeBackend {
 
 impl BackendCachedDot for WrongDTypeBackend {}
 
-impl BackendSession for WrongDTypeBackend {
-    fn session_type_id(&self) -> std::any::TypeId {
-        std::any::TypeId::of::<WrongDTypeBackendSessionMarker>()
-    }
-
-    unsafe fn session_data_mut(&mut self) -> *mut () {
-        self as *mut Self as *mut ()
-    }
-}
+impl BackendSession for WrongDTypeBackend {}
 
 impl BackendSessionHost for WrongDTypeBackend {
     fn with_backend_session<R: Send>(

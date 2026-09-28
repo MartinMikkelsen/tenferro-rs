@@ -11,7 +11,6 @@ use crate::{
     ShapeMismatch, Tensor, TensorRead, TensorValue, TensorWrite, ValidationError,
 };
 use num_complex::{Complex32, Complex64};
-use std::any::TypeId;
 
 #[cfg(test)]
 mod tests;
@@ -4013,10 +4012,6 @@ fn validate_compatible_placement(
 /// }
 /// ```
 pub trait BackendSession: TensorBackendOps + SessionCachedDot + TensorDeviceTransfer {
-    /// Build-local identity for backend-extension session capability dispatch.
-    #[doc(hidden)]
-    fn session_type_id(&self) -> TypeId;
-
     /// Compute the all-axis conjugating dot product without transferring either input.
     ///
     /// The result is a rank-0 tensor with the input dtype and has the value
@@ -4122,18 +4117,29 @@ pub trait BackendSession: TensorBackendOps + SessionCachedDot + TensorDeviceTran
         ))
     }
 
-    /// Erased pointer used only by backend leaf crates for a checked session
-    /// capability bridge. The pointer is borrowed for the lifetime of `self`.
+    /// Return this session's backend-leaf native capability, if it has one.
     ///
-    /// # Safety
+    /// Standard CPU, CUDA and WebGPU sessions return a token their own safe
+    /// visitors (`with_cpu_exec_session`, `with_cuda_exec_session`,
+    /// `with_webgpu_exec_session`) recover. The default is `None`: a custom
+    /// session has no native services unless it forwards the token of a
+    /// standard session it owns. A wrapper that overrides operation dispatch
+    /// (for example a custom GEMM) should keep the default, because an
+    /// operation family that finds a native token may call the delegate's
+    /// native services directly and so bypass the wrapper's override.
     ///
-    /// The implementation must return a pointer to the same value represented
-    /// by `self`, and that pointer must remain valid and uniquely borrowed for
-    /// the duration of the `&mut self` borrow. Backend leaf crates may use this
-    /// contract to recover a concrete session capability after checking
-    /// [`Self::session_type_id`].
-    #[doc(hidden)]
-    unsafe fn session_data_mut(&mut self) -> *mut ();
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::BackendSession;
+    ///
+    /// fn native_services_available(session: &mut dyn BackendSession) -> bool {
+    ///     session.native_session().is_some()
+    /// }
+    /// ```
+    fn native_session(&mut self) -> Option<crate::NativeSessionRef<'_>> {
+        None
+    }
 }
 
 /// Standard runtime backend over dynamic [`Tensor`] values.
