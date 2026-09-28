@@ -28,7 +28,7 @@
               "tests": [
                 {
                   "path": "crates/tenferro-tensor/src/tests/backend_default_read_tests.rs",
-                  "symbol": "exp"
+                  "symbol": "exp_read"
                 }
               ],
               "workflow": "validate -> metadata -> optional plan -> session/provider -> result/AD wrapping"
@@ -83,7 +83,7 @@
                 "admission": [
                   {
                     "path": "crates/tenferro-tensor/src/backend.rs",
-                    "symbol": "default_backend_session"
+                    "symbol": "BackendSessionHost"
                   }
                 ],
                 "execution": [
@@ -94,7 +94,7 @@
                 ],
                 "metadata": [
                   {
-                    "path": "crates/tenferro-tensor-core/src/lib.rs",
+                    "path": "crates/tenferro-tensor/src/host_container.rs",
                     "symbol": "validate_shape_metadata"
                   }
                 ],
@@ -152,7 +152,7 @@
                 "validation": [
                   {
                     "path": "crates/tenferro-ad/src/eager_ops.rs",
-                    "symbol": "unary_op"
+                    "symbol": "nary_op_in_session"
                   }
                 ],
                 "wrapping": [
@@ -252,7 +252,7 @@
               "tests": [
                 {
                   "path": "crates/tenferro-tensor/src/tests/backend_default_read_tests.rs",
-                  "symbol": "dot_general"
+                  "symbol": "dot_general_read"
                 }
               ],
               "workflow": "reuse compatible preparation while retaining setup cost as a distinct case"
@@ -284,7 +284,7 @@
                 "admission": [
                   {
                     "path": "crates/tenferro-tensor/src/backend.rs",
-                    "symbol": "default_backend_session"
+                    "symbol": "BackendSessionHost"
                   }
                 ],
                 "execution": [
@@ -295,7 +295,7 @@
                 ],
                 "metadata": [
                   {
-                    "path": "crates/tenferro-tensor-core/src/lib.rs",
+                    "path": "crates/tenferro-tensor/src/host_container.rs",
                     "symbol": "validate_shape_metadata"
                   }
                 ],
@@ -352,8 +352,8 @@
                 },
                 "validation": [
                   {
-                    "path": "crates/tenferro-ad/src/eager_ops.rs",
-                    "symbol": "validate_eager_dot_general_config"
+                    "path": "crates/tenferro-ad/src/eager.rs",
+                    "symbol": "dot_general"
                   }
                 ],
                 "wrapping": [
@@ -486,7 +486,7 @@
                 "admission": [
                   {
                     "path": "crates/tenferro-tensor/src/backend.rs",
-                    "symbol": "default_backend_session"
+                    "symbol": "BackendSessionHost"
                   }
                 ],
                 "execution": [
@@ -497,7 +497,7 @@
                 ],
                 "metadata": [
                   {
-                    "path": "crates/tenferro-tensor-core/src/lib.rs",
+                    "path": "crates/tenferro-tensor/src/host_container.rs",
                     "symbol": "validate_shape_metadata"
                   }
                 ],
@@ -641,7 +641,7 @@
               "tests": [
                 {
                   "path": "crates/tenferro-ad/src/eager/tests.rs",
-                  "symbol": "eager_backend_delegates_broadcast_multiply_fusion_to_cpu_backend"
+                  "symbol": "eager_backend_session_dispatches_broadcast_multiply_fusion_to_cpu"
                 }
               ],
               "workflow": "validate -> metadata -> optional plan -> session/provider -> result/AD wrapping"
@@ -672,7 +672,7 @@
               "tests": [
                 {
                   "path": "crates/tenferro-tensor/src/tests/backend_default_read_tests.rs",
-                  "symbol": "add"
+                  "symbol": "add_read"
                 }
               ],
               "workflow": "reuse compatible preparation while retaining setup cost as a distinct case"
@@ -717,7 +717,7 @@
                 "admission": [
                   {
                     "path": "crates/tenferro-tensor/src/backend.rs",
-                    "symbol": "default_backend_session"
+                    "symbol": "BackendSessionHost"
                   }
                 ],
                 "execution": [
@@ -728,7 +728,7 @@
                 ],
                 "metadata": [
                   {
-                    "path": "crates/tenferro-tensor-core/src/lib.rs",
+                    "path": "crates/tenferro-tensor/src/host_container.rs",
                     "symbol": "validate_shape_metadata"
                   }
                 ],
@@ -786,7 +786,7 @@
                 "validation": [
                   {
                     "path": "crates/tenferro-ad/src/eager_ops.rs",
-                    "symbol": "broadcast_binary"
+                    "symbol": "broadcast_binary_in_session"
                   }
                 ],
                 "wrapping": [
@@ -919,7 +919,7 @@
                 "admission": [
                   {
                     "path": "crates/tenferro-tensor/src/backend.rs",
-                    "symbol": "default_backend_session"
+                    "symbol": "BackendSessionHost"
                   }
                 ],
                 "execution": [
@@ -930,7 +930,7 @@
                 ],
                 "metadata": [
                   {
-                    "path": "crates/tenferro-tensor-core/src/lib.rs",
+                    "path": "crates/tenferro-tensor/src/host_container.rs",
                     "symbol": "validate_shape_metadata"
                   }
                 ],
@@ -988,7 +988,7 @@
                 "validation": [
                   {
                     "path": "crates/tenferro-ad/src/eager_ops.rs",
-                    "symbol": "unary_op"
+                    "symbol": "nary_op_in_session"
                   }
                 ],
                 "wrapping": [
@@ -1128,7 +1128,7 @@
                 "admission": [
                   {
                     "path": "crates/tenferro-tensor/src/backend.rs",
-                    "symbol": "default_backend_session"
+                    "symbol": "BackendSessionHost"
                   }
                 ],
                 "execution": [
@@ -1139,7 +1139,7 @@
                 ],
                 "metadata": [
                   {
-                    "path": "crates/tenferro-tensor-core/src/lib.rs",
+                    "path": "crates/tenferro-tensor/src/host_container.rs",
                     "symbol": "validate_shape_metadata"
                   }
                 ],
@@ -1283,7 +1283,7 @@
               "tests": [
                 {
                   "path": "crates/tenferro-einsum/src/eager/tests.rs",
-                  "symbol": "reduce_sum"
+                  "symbol": "reduce_sum_read"
                 }
               ],
               "workflow": "validate -> metadata -> optional plan -> session/provider -> result/AD wrapping"
@@ -1333,7 +1333,7 @@
                 "admission": [
                   {
                     "path": "crates/tenferro-tensor/src/backend.rs",
-                    "symbol": "default_backend_session"
+                    "symbol": "BackendSessionHost"
                   }
                 ],
                 "execution": [
@@ -1344,7 +1344,7 @@
                 ],
                 "metadata": [
                   {
-                    "path": "crates/tenferro-tensor-core/src/lib.rs",
+                    "path": "crates/tenferro-tensor/src/host_container.rs",
                     "symbol": "validate_shape_metadata"
                   }
                 ],
@@ -1541,7 +1541,7 @@
                 "admission": [
                   {
                     "path": "crates/tenferro-tensor/src/backend.rs",
-                    "symbol": "default_backend_session"
+                    "symbol": "BackendSessionHost"
                   }
                 ],
                 "execution": [
@@ -1552,7 +1552,7 @@
                 ],
                 "metadata": [
                   {
-                    "path": "crates/tenferro-tensor-core/src/lib.rs",
+                    "path": "crates/tenferro-tensor/src/host_container.rs",
                     "symbol": "validate_shape_metadata"
                   }
                 ],
@@ -1610,7 +1610,7 @@
                 "validation": [
                   {
                     "path": "crates/tenferro-ad/src/eager_ops.rs",
-                    "symbol": "unary_op"
+                    "symbol": "nary_op_in_session"
                   }
                 ],
                 "wrapping": [
@@ -2068,7 +2068,7 @@
                 "allocation_source": "crates/tenferro-fft/src/lib.rs::execute_concrete_fft_op",
                 "metadata": "eager reuses validated shape/dtype/layout/config metadata before dispatch",
                 "owner_lifetime": "eager inputs remain valid through its owning session; output reuse requires exclusive write ownership",
-                "payload_boundary": "crates/tenferro-fft/src/lib.rs::execute_concrete_fft_op -> crates/tenferro-fft/src/eager_ext.rs::apply_eager_fft",
+                "payload_boundary": "crates/tenferro-fft/src/lib.rs::execute_concrete_fft_op -> crates/tenferro-fft/src/eager_ext.rs::apply_eager_fft_in_session",
                 "placement": "eager placement is explicit; transfers occur only at the existing backend boundary"
               },
               "disposition": "follow-up",
@@ -2106,7 +2106,7 @@
                 "wrapping": [
                   {
                     "path": "crates/tenferro-fft/src/eager_ext.rs",
-                    "symbol": "apply_eager_fft"
+                    "symbol": "apply_eager_fft_in_session"
                   }
                 ]
               },
@@ -2124,7 +2124,7 @@
                 "allocation_source": "crates/tenferro-runtime/src/runtime/snapshot.rs::run_compiled",
                 "metadata": "traced reuses validated shape/dtype/layout/config metadata before dispatch",
                 "owner_lifetime": "traced inputs remain valid through its owning session; output reuse requires exclusive write ownership",
-                "payload_boundary": "crates/tenferro-runtime/src/runtime/snapshot.rs::run_compiled -> crates/tenferro-fft/src/eager_ext.rs::apply_eager_fft",
+                "payload_boundary": "crates/tenferro-runtime/src/runtime/snapshot.rs::run_compiled -> crates/tenferro-fft/src/eager_ext.rs::apply_eager_fft_in_session",
                 "placement": "traced placement is explicit; transfers occur only at the existing backend boundary"
               },
               "disposition": "follow-up",
@@ -2256,10 +2256,10 @@
               "contract": "concrete route is explicitly classified; setup and execution boundaries remain separate",
               "contracts": {
                 "allocation": "source-observed allocation/materialization is explicit and is not a measured count",
-                "allocation_source": "crates/tenferro-linalg/src/extension.rs::execute_linalg_extension_reads_owner",
+                "allocation_source": "crates/tenferro-linalg/src/extension.rs::execute_linalg_extension_reads_on_session",
                 "metadata": "concrete reuses validated shape/dtype/layout/config metadata before dispatch",
                 "owner_lifetime": "concrete inputs remain valid through its owning session; output reuse requires exclusive write ownership",
-                "payload_boundary": "crates/tenferro-linalg/src/extension.rs::execute_linalg_extension_reads_owner -> concrete Tensor return (no wrapping owner)",
+                "payload_boundary": "crates/tenferro-linalg/src/extension.rs::execute_linalg_extension_reads_on_session -> concrete Tensor return (no wrapping owner)",
                 "placement": "concrete placement is explicit; transfers occur only at the existing backend boundary"
               },
               "disposition": "follow-up",
@@ -2273,7 +2273,7 @@
                 "execution": [
                   {
                     "path": "crates/tenferro-linalg/src/extension.rs",
-                    "symbol": "execute_linalg_extension_reads_owner"
+                    "symbol": "execute_linalg_extension_reads_on_session"
                   }
                 ],
                 "metadata": [
@@ -2303,10 +2303,10 @@
               "contract": "eager route is explicitly classified; setup and execution boundaries remain separate",
               "contracts": {
                 "allocation": "source-observed allocation/materialization is explicit and is not a measured count",
-                "allocation_source": "crates/tenferro-linalg/src/extension.rs::execute_linalg_extension_reads_owner",
+                "allocation_source": "crates/tenferro-linalg/src/extension.rs::execute_linalg_extension_reads_on_session",
                 "metadata": "eager reuses validated shape/dtype/layout/config metadata before dispatch",
                 "owner_lifetime": "eager inputs remain valid through its owning session; output reuse requires exclusive write ownership",
-                "payload_boundary": "crates/tenferro-linalg/src/extension.rs::execute_linalg_extension_reads_owner -> crates/tenferro-linalg/src/traced.rs::one_output",
+                "payload_boundary": "crates/tenferro-linalg/src/extension.rs::execute_linalg_extension_reads_on_session -> crates/tenferro-linalg/src/traced.rs::one_output",
                 "placement": "eager placement is explicit; transfers occur only at the existing backend boundary"
               },
               "disposition": "follow-up",
@@ -2320,7 +2320,7 @@
                 "execution": [
                   {
                     "path": "crates/tenferro-linalg/src/extension.rs",
-                    "symbol": "execute_linalg_extension_reads_owner"
+                    "symbol": "execute_linalg_extension_reads_on_session"
                   }
                 ],
                 "metadata": [

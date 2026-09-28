@@ -9,7 +9,7 @@ use tenferro_cpu::inject::{
     LapackProviderPtrSet, ProviderAbi, ProviderRegistrationError,
 };
 use tenferro_cpu::CpuBackend;
-use tenferro_tensor::{DotGeneralConfig, Tensor, TensorDot, TypedTensor};
+use tenferro_tensor::{BackendSessionHost, DotGeneralConfig, Tensor, TensorRead, TypedTensor};
 
 static TEST_LOCK: Mutex<()> = Mutex::new(());
 
@@ -212,16 +212,20 @@ fn ilp64_gemm_provider_reaches_lp64_consumer() {
     );
 
     let mut backend = CpuBackend::new();
-    let c = backend.dot_general(
-        &a,
-        &b,
-        &DotGeneralConfig {
-            lhs_contracting_dims: [1].as_slice().into(),
-            rhs_contracting_dims: [0].as_slice().into(),
-            lhs_batch_dims: [].as_slice().into(),
-            rhs_batch_dims: [].as_slice().into(),
-        },
-    );
+    let c = backend
+        .with_backend_session(|session| {
+            session.dot_general_read(
+                TensorRead::from_tensor(&a),
+                TensorRead::from_tensor(&b),
+                &DotGeneralConfig {
+                    lhs_contracting_dims: [1].as_slice().into(),
+                    rhs_contracting_dims: [0].as_slice().into(),
+                    lhs_batch_dims: [].as_slice().into(),
+                    rhs_batch_dims: [].as_slice().into(),
+                },
+            )
+        })
+        .expect("session entry");
 
     assert_eq!(DGEMM_ILP64_CALLS.load(Ordering::SeqCst), 1);
     match c {
