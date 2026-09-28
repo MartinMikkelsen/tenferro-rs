@@ -463,12 +463,10 @@ fn canonical_packing_contraction_writes_into_the_uninit_destination() {
     // lhs [2, 3, 2] contracts its middle axis, so its free axes 0 and 2 are not
     // one fusable group and the direct plan needs canonical packing.
     let lhs = Tensor::from_typed::<f64>(
-        TypedTensor::from_vec_col_major(vec![2, 3, 2], (1..=12).map(f64::from).collect())
-            .unwrap(),
+        TypedTensor::from_vec_col_major(vec![2, 3, 2], (1..=12).map(f64::from).collect()).unwrap(),
     );
     let rhs = Tensor::from_typed::<f64>(
-        TypedTensor::from_vec_col_major(vec![3, 2], vec![1.0, -1.0, 2.0, 0.5, 3.0, -2.0])
-            .unwrap(),
+        TypedTensor::from_vec_col_major(vec![3, 2], vec![1.0, -1.0, 2.0, 0.5, 3.0, -2.0]).unwrap(),
     );
     let config = DotGeneralConfig {
         lhs_contracting_dims: [1].as_slice().into(),

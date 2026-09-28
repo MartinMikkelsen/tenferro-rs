@@ -96,11 +96,14 @@ pub(crate) fn elementwise_read_into_fallback_with_pool(
             ))
         }
     };
-    copy_tensor_read_into(
+    let copied = copy_tensor_read_into(
         "CpuBackend::elementwise_read_into",
         TensorRead::from_tensor(&result),
         out,
-    )
+    );
+    // The staged result is scratch: return it to the pool for the next op.
+    reclaim_tensor(buffers, result);
+    copied
 }
 
 pub(crate) trait FreshCpuOutput {

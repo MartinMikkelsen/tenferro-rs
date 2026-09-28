@@ -774,6 +774,64 @@ fn eager_einsum_exec_values<'a>(
     inputs: Vec<TensorValue<'a>>,
     tree: &ContractionTree,
 ) -> Result<Tensor> {
+    match eager_einsum_exec_values_with_output(exec, inputs, tree, None)? {
+        EinsumExecOutput::Materialized(result, _) => Ok(result),
+        EinsumExecOutput::Written => Err(eager_invalid_config(
+            "einsum without an output destination reported a direct write".to_string(),
+        )),
+    }
+}
+
+/// Result of a contraction-tree walk that may write its last step directly.
+// INVARIANT: a transient return value moved once per einsum call; boxing the
+// tensor would add a heap allocation to every materialized result.
+#[allow(clippy::large_enum_variant)]
+enum EinsumExecOutput<'o> {
+    /// The last contraction step wrote the einsum result into the destination.
+    Written,
+    /// The result was materialized; the unused destination is handed back.
+    Materialized(Tensor, Option<TensorWrite<'o>>),
+}
+
+/// Write the last contraction step straight into `out` when it is one
+/// dot-general whose result axes are exactly `out`'s labels; otherwise hand
+/// `out` back.
+fn final_step_into<'o>(
+    exec: &mut dyn BackendSession,
+    lhs: &LabeledTensor<'_>,
+    rhs: &LabeledTensor<'_>,
+    output_labels: &[u32],
+    out: TensorWrite<'o>,
+) -> Result<Option<TensorWrite<'o>>> {
+    let lhs_read = lhs.tensor.tensor_read();
+    let rhs_read = rhs.tensor.tensor_read();
+    if lhs_read.dtype() != out.dtype() || rhs_read.dtype() != out.dtype() {
+        return Ok(Some(out));
+    }
+    let Some((order, config)) = binary_dot_config_for_into(
+        lhs_read.shape(),
+        rhs_read.shape(),
+        &lhs.labels,
+        &rhs.labels,
+        output_labels,
+        out.shape(),
+    ) else {
+        return Ok(Some(out));
+    };
+    let (dot_lhs, dot_rhs) = match order {
+        BinaryDotOperandOrder::Original => (lhs_read, rhs_read),
+        BinaryDotOperandOrder::Swapped => (rhs_read, lhs_read),
+    };
+    exec.dot_general_read_into(dot_lhs, dot_rhs, &config, out)?;
+    Ok(None)
+}
+
+fn eager_einsum_exec_values_with_output<'a, 'o>(
+    exec: &mut dyn BackendSession,
+    inputs: Vec<TensorValue<'a>>,
+    tree: &ContractionTree,
+    mut out: Option<TensorWrite<'o>>,
+) -> Result<EinsumExecOutput<'o>> {
     record_eager_einsum_profile("exec_values.enter", Duration::ZERO);
     let subscripts = &tree.subscripts;
     let input_count = subscripts.inputs.len();
@@ -821,7 +879,10 @@ fn eager_einsum_exec_values<'a>(
         let reduced = reduce_tensor(exec, operand, &reduce_labels)?;
         let embedded = embed_repeated(exec, reduced, output_labels)?;
         let reordered = transpose_to_labels(exec, embedded, output_labels)?;
-        return reordered.tensor.into_tensor(exec);
+        return Ok(EinsumExecOutput::Materialized(
+            reordered.tensor.into_tensor(exec)?,
+            out,
+        ));
     }
 
     for step_idx in 0..tree.step_count() {
@@ -835,6 +896,16 @@ fn eager_einsum_exec_values<'a>(
         })?;
         let lhs = take_labeled(&mut labeled, left, "lhs")?;
         let rhs = take_labeled(&mut labeled, right, "rhs")?;
+        if step_idx + 1 == tree.step_count() {
+            if let Some(target) = out.take() {
+                out = profile_eager_einsum_section("exec.final_step_into", || {
+                    final_step_into(exec, &lhs, &rhs, output_labels, target)
+                })?;
+                if out.is_none() {
+                    return Ok(EinsumExecOutput::Written);
+                }
+            }
+        }
         let result = profile_eager_einsum_section("exec.binary_contract", || {
             binary_contract(
                 exec,
@@ -865,7 +936,10 @@ fn eager_einsum_exec_values<'a>(
     let reordered = profile_eager_einsum_section("exec.final_transpose", || {
         transpose_to_labels(exec, reduced, output_labels)
     })?;
-    reordered.tensor.into_tensor(exec)
+    Ok(EinsumExecOutput::Materialized(
+        reordered.tensor.into_tensor(exec)?,
+        out,
+    ))
 }
 
 /// Run a whole einsum contraction tree in one backend session.
@@ -1055,8 +1129,22 @@ pub(crate) fn eager_einsum_exec_read_into(
         });
     }
 
-    let result = eager_einsum_exec_read(exec, inputs, tree)?;
-    exec.copy_read_into(TensorRead::from_tensor(&result), out)
+    let values = inputs
+        .iter()
+        .map(|input| match input {
+            TensorRead::Tensor(tensor) => TensorValue::Borrowed(tensor),
+            TensorRead::View(view) => TensorValue::View(view.clone()),
+        })
+        .collect();
+    match eager_einsum_exec_values_with_output(exec, values, tree, Some(out))? {
+        EinsumExecOutput::Written => Ok(()),
+        EinsumExecOutput::Materialized(result, Some(out)) => {
+            exec.copy_read_into(TensorRead::from_tensor(&result), out)
+        }
+        EinsumExecOutput::Materialized(_, None) => Err(eager_invalid_config(
+            "einsum destination was consumed without a direct write".to_string(),
+        )),
+    }
 }
 
 pub(crate) fn eager_einsum_exec_read_into_accum(

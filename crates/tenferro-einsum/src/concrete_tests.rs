@@ -880,12 +880,12 @@ fn einsum_into_gemm_fast_path_dispatches_to_backend_into_before_owned_fallback()
         .find("execute_binary_dot_read_into")
         .expect("GEMM-compatible einsum_into must call backend read-into");
     let fallback = body
-        .find("eager_einsum_exec_read(exec, inputs, tree)")
-        .expect("general einsum_into fallback should keep using owned execution");
+        .find("eager_einsum_exec_values_with_output(exec, values, tree, Some(out))")
+        .expect("general einsum_into should walk the tree with the destination");
 
     assert!(
         into_call < fallback,
-        "GEMM-compatible einsum_into should try backend read-into before owned fallback"
+        "GEMM-compatible einsum_into should try backend read-into before the tree walk"
     );
 }
 
@@ -1532,4 +1532,60 @@ fn concrete_einsum_plan_execute_typed_into_accepts_non_send_adapter() {
         .unwrap()
         .unwrap();
     assert_eq!(out.as_slice().unwrap(), &[22.0, 28.0, 49.0, 64.0]);
+}
+
+/// N-ary read-into: the last contraction step writes into the destination
+/// (exact and transposed output labels, and a label the tree pre-reduces), and
+/// a tree without a contraction step hands the destination back for a copy;
+/// every case matches the allocating path.
+#[test]
+fn nary_read_into_matches_allocating_execution() {
+    let mut backend = CpuBackend::new();
+    let a = Tensor::from_vec_col_major(vec![2, 3], (1..=6).map(f64::from).collect()).unwrap();
+    let b = Tensor::from_vec_col_major(vec![3, 4], (1..=12).map(|x| f64::from(x) * 0.5).collect())
+        .unwrap();
+    let c = Tensor::from_vec_col_major(vec![4, 2], (1..=8).map(|x| f64::from(x) - 3.0).collect())
+        .unwrap();
+    let reads = [
+        TensorRead::from_tensor(&a),
+        TensorRead::from_tensor(&b),
+        TensorRead::from_tensor(&c),
+    ];
+
+    for (subscripts, shape) in [
+        // The last step writes the exact output labels.
+        ("ij,jk,kl->il", vec![2, 2]),
+        // Transposed output order.
+        ("ij,jk,kl->li", vec![2, 2]),
+        // The tree sums `l` out of `c` before the last step.
+        ("ij,jk,kl->i", vec![2]),
+    ] {
+        let plan = ConcreteEinsumPlan::prepare_read(&reads, subscripts).unwrap();
+        let expected = backend
+            .with_backend_session(|session| plan.execute_read(&reads, session))
+            .unwrap()
+            .unwrap();
+        let len = shape.iter().product();
+        let mut out = Tensor::from_vec_col_major(shape.clone(), vec![-9.0_f64; len]).unwrap();
+        backend
+            .with_backend_session(|session| {
+                plan.execute_read_into(&reads, session, TensorWrite::from_tensor(&mut out))
+            })
+            .unwrap()
+            .unwrap();
+        assert_f64_tensor(&out, &shape, expected.as_slice::<f64>().unwrap());
+    }
+
+    // A single operand has no contraction step: the result is materialized
+    // and copied into the handed-back destination.
+    let unary = [TensorRead::from_tensor(&a)];
+    let plan = ConcreteEinsumPlan::prepare_read(&unary, "ij->ji").unwrap();
+    let mut out = Tensor::from_vec_col_major(vec![3, 2], vec![-9.0_f64; 6]).unwrap();
+    backend
+        .with_backend_session(|session| {
+            plan.execute_read_into(&unary, session, TensorWrite::from_tensor(&mut out))
+        })
+        .unwrap()
+        .unwrap();
+    assert_f64_tensor(&out, &[3, 2], &[1.0, 3.0, 5.0, 2.0, 4.0, 6.0]);
 }

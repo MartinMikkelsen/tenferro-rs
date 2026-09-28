@@ -1243,3 +1243,27 @@ fn explicit_managed_affinity_reports_engine_construction_error_when_unsupported(
     ));
     assert!(error.to_string().contains("unsupported on this platform"));
 }
+
+#[test]
+fn elementwise_into_fallback_returns_its_staged_result_to_the_pool() {
+    let mut buffers = BufferPool::new();
+    let ctx = ExecContext::default();
+    // The fallback (taken when the one-shot kernel does not apply) stages the
+    // sum before copying it into `out`.
+    let lhs = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap();
+    let rhs = Tensor::from_vec_col_major(vec![2, 2], vec![10.0_f64, 20.0, 30.0, 40.0]).unwrap();
+    let mut out = Tensor::from_vec_col_major(vec![2, 2], vec![0.0_f64; 4]).unwrap();
+    assert_eq!(buffers.len(), 0);
+
+    elementwise_read_into_fallback_with_pool(
+        &mut buffers,
+        &ctx,
+        ElementwiseReadOp::Add,
+        &[TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs)],
+        TensorWrite::from_tensor(&mut out),
+    )
+    .unwrap();
+
+    assert_eq!(out.as_slice::<f64>().unwrap(), &[11.0, 22.0, 33.0, 44.0]);
+    assert_eq!(buffers.len(), 1, "the staged result must be reclaimed");
+}
