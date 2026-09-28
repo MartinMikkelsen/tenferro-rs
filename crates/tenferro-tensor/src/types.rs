@@ -1406,6 +1406,142 @@ impl<T, R: TensorRank> std::ops::IndexMut<&[usize]> for TypedTensor<T, R, Host> 
     }
 }
 
+/// Read mapping over a host slice, as one owning guard.
+fn host_read_guard<T>(data: &[T]) -> HostReadGuard<'_, T> {
+    HostReadGuard::new(data)
+}
+
+/// Write mapping over an exclusive host slice, as one owning guard.
+fn host_write_guard<T: Clone>(data: &mut [T]) -> HostWriteGuard<'_, T> {
+    let len = data.len();
+    HostWriteGuard::new(len, move |source| {
+        data.clone_from_slice(source);
+        Ok(())
+    })
+}
+
+/// Promote a plain host payload into a group-backed root without copying elements.
+fn promote_host_group<T: TensorScalar, R: TensorRank>(
+    shape: R::Shape,
+    host: HostData<T>,
+) -> crate::Result<OwnedTensorGroup<R>> {
+    let recycler = host.recycler.clone();
+    let mut group = OwnedTensorGroup::from_host_vec(shape, host.into_vec())?;
+    if let Some(recycler) = recycler {
+        group
+            .group
+            .set_host_recycler(group.allocation_index.index(), recycler)
+            .map_err(|error| crate::Error::runtime_state_source("TypedTensor::promote", error))?;
+    }
+    Ok(group)
+}
+
+impl<T, R: TensorRank> TypedTensor<T, R, Host> {
+    /// Borrow the owned host elements through one owning read mapping.
+    ///
+    /// The guard retains the exclusive borrow of this owner, so no other access
+    /// can overlap it while the mapping is alive.
+    ///
+    /// # Examples
+    /// ```
+    /// use tenferro_tensor::{DynRank, Host, TypedTensor};
+    /// let tensor = TypedTensor::<i32, DynRank, Host>::from_host_vec_col_major(vec![2], vec![1, 2])?;
+    /// let guard = tensor.map_read();
+    /// assert_eq!(&guard[..], &[1, 2]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    pub fn map_read(&self) -> HostReadGuard<'_, T> {
+        host_read_guard(self.as_slice())
+    }
+
+    /// Exclusively borrow the owned host elements through one owning write mapping.
+    ///
+    /// Publish data with [`HostWriteGuard::copy_from_slice`]; the mapping is
+    /// released when the guard is dropped.
+    ///
+    /// # Examples
+    /// ```
+    /// use tenferro_tensor::{DynRank, Host, TypedTensor};
+    /// let mut tensor = TypedTensor::<i32, DynRank, Host>::from_host_vec_col_major(vec![2], vec![1, 2])?;
+    /// tensor.map_write().copy_from_slice(&[3, 4]).unwrap();
+    /// assert_eq!(tensor.as_slice(), &[3, 4]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    pub fn map_write(&mut self) -> HostWriteGuard<'_, T>
+    where
+        T: Clone,
+    {
+        host_write_guard(self.host_data_mut())
+    }
+}
+
+impl<T: TensorScalar, R: TensorRank> TypedTensor<T, R, Host> {
+    /// Promote this plain host owner into a group-backed owner.
+    ///
+    /// The payload is adopted as a provider root: no element is copied and a
+    /// pooled return target survives the promotion.
+    ///
+    /// # Examples
+    /// ```
+    /// use tenferro_tensor::{DynRank, Host, TypedTensor};
+    /// let host = TypedTensor::<f64, DynRank, Host>::from_host_vec_col_major(vec![2], vec![1.0, 2.0])?;
+    /// let gpu = host.promote()?;
+    /// assert_eq!(gpu.host_data()?, &[1.0, 2.0]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    /// # Errors
+    /// Returns [`crate::Error::RuntimeState`] when the new allocation group
+    /// rejects the promoted root or its recycler.
+    pub fn promote(self) -> crate::Result<TypedTensor<T, R, Gpu>> {
+        let TypedTensor {
+            shape,
+            placement,
+            storage,
+        } = self;
+        let group = promote_host_group(shape.clone(), storage.data)?;
+        Ok(TypedTensor {
+            shape,
+            placement,
+            storage: GroupStorage {
+                group: Box::new(group),
+            },
+        })
+    }
+}
+
+impl<T, R: TensorRank> TypedTensor<T, R, Dynamic> {
+    /// Borrow host elements through one owning read mapping.
+    ///
+    /// # Errors
+    /// Returns [`crate::Error::HostAccess`] with
+    /// [`HostAccessError::Unsupported`] when the group's allocation is not
+    /// host-accessible.
+    pub fn map_read(&self) -> crate::Result<HostReadGuard<'_, T>> {
+        match &self.storage {
+            DynamicStorage::Host(host) => Ok(host_read_guard(host.data.as_slice())),
+            DynamicStorage::Group(core) => core.group.host_slice::<T>().map(host_read_guard),
+        }
+    }
+
+    /// Exclusively borrow host elements through one owning write mapping.
+    ///
+    /// Publish data with [`HostWriteGuard::copy_from_slice`].
+    ///
+    /// # Errors
+    /// Returns [`crate::Error::HostAccess`] with
+    /// [`HostAccessError::Unsupported`] when the group's allocation is not
+    /// host-writable.
+    pub fn map_write(&mut self) -> crate::Result<HostWriteGuard<'_, T>>
+    where
+        T: Clone,
+    {
+        match &mut self.storage {
+            DynamicStorage::Host(host) => Ok(host_write_guard(host.data.as_mut_slice())),
+            DynamicStorage::Group(core) => core.group.host_slice_mut::<T>().map(host_write_guard),
+        }
+    }
+}
+
 impl<T, R: TensorRank> TypedTensor<T, R, Gpu> {
     /// Adopt a backend-owned buffer as a statically group-backed owner.
     ///
@@ -8628,15 +8764,8 @@ impl<T: TensorScalar, R: TensorRank> TypedTensor<T, R> {
         } = self;
         match storage {
             DynamicStorage::Host(HostStorage { data }) => {
-                let recycler = data.recycler.clone();
-                let mut group = OwnedTensorGroup::from_host_vec(shape.clone(), data.into_vec())
-                    .unwrap_or_else(|err| unreachable!("validated host shape: {err}"));
-                if let Some(recycler) = recycler {
-                    group
-                        .group
-                        .set_host_recycler(group.allocation_index.index(), recycler)
-                        .unwrap_or_else(|err| unreachable!("fresh host group recycler: {err}"));
-                }
+                let group = promote_host_group::<T, R>(shape.clone(), data)
+                    .unwrap_or_else(|err| unreachable!("a validated host owner promotes: {err}"));
                 Self {
                     shape,
                     placement,
