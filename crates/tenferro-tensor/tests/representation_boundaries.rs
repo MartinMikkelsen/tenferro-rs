@@ -220,3 +220,48 @@ fn promotion_keeps_the_pooled_return_target() {
         "promotion must keep the pooled return target on the group root"
     );
 }
+
+#[test]
+fn host_export_failure_retains_the_owner() {
+    let handle = BackendStorageHandle::<f64>::new_with_len(21, 2);
+    let device = TypedTensor::<f64>::from_buffer_col_major(
+        vec![2],
+        StorageBuffer::Backend(Box::new(handle)),
+        Placement::default(),
+    )
+    .unwrap();
+
+    let Err(failure) = device.into_host_vec() else {
+        panic!("a device allocation has no host vector");
+    };
+    assert!(!failure.error().to_string().is_empty());
+    let retained = failure.into_owner();
+    assert_eq!(retained.shape(), &[2]);
+    assert!(retained.backend_buffer().is_some());
+
+    let Err(failure) = retained.into_vec_col_major() else {
+        panic!("a device allocation has no host vector");
+    };
+    let retained = failure.into_owner();
+    assert_eq!(retained.shape(), &[2]);
+
+    let Err(failure) = retained.into_parts() else {
+        panic!("a device allocation extracts no host storage");
+    };
+    let retained = failure.into_owner();
+    assert!(retained.backend_buffer().is_some());
+    // The retained device owner still narrows to the group-backed representation.
+    assert!(retained.into_gpu().is_ok());
+}
+
+#[test]
+fn erased_host_export_dtype_mismatch_retains_the_tensor() {
+    let tensor = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
+    let Err(failure) = tensor.into_vec_col_major::<f32>() else {
+        panic!("an f64 tensor is not f32");
+    };
+    assert!(!failure.error().to_string().is_empty());
+    let retained = failure.into_owner();
+    assert_eq!(retained.dtype(), DType::F64);
+    assert_eq!(retained.as_slice::<f64>().unwrap(), &[1.0, 2.0]);
+}

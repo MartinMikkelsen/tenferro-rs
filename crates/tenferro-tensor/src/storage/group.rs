@@ -1655,13 +1655,52 @@ impl AllocationGroup {
         Ok((group, DescriptorSlot(0)))
     }
 
-    pub(crate) fn into_host_vec<T: 'static>(self, slot: DescriptorSlot) -> Result<Vec<T>, String> {
-        let owner = self
-            .into_owner(slot)
-            .map_err(|(_, error)| error.to_string())?;
-        owner
-            .into_host_vec::<T>()
-            .map_err(|error| error.to_string())
+    // INVARIANT: a rejected host export must return the unchanged group, so the
+    // wide `(Self, String)` pair is the ownership contract rather than a bug.
+    #[allow(clippy::result_large_err)]
+    pub(crate) fn into_host_vec<T: 'static>(
+        mut self,
+        slot: DescriptorSlot,
+    ) -> Result<Vec<T>, (Self, String)> {
+        // INVARIANT: the descriptor stays in place and only the allocation is
+        // taken, so a rejected host export can return the exact unchanged group
+        // rather than consuming the caller's remaining ownership.
+        let allocation = match self.resolve_descriptor(slot) {
+            Ok((_, descriptor)) => descriptor.allocation,
+            Err(error) => return Err((self, error.to_string())),
+        };
+        let owner = match self
+            .allocations
+            .get_mut(allocation.index())
+            .map(Option::take)
+        {
+            Some(Some(owner)) => owner,
+            Some(None) => {
+                return Err((
+                    self,
+                    GroupError::AllocationSlotVacant {
+                        slot: allocation.index(),
+                    }
+                    .to_string(),
+                ))
+            }
+            None => {
+                return Err((
+                    self,
+                    GroupError::AllocationSlotOutOfBounds {
+                        slot: allocation.index(),
+                    }
+                    .to_string(),
+                ))
+            }
+        };
+        match owner.into_host_vec::<T>() {
+            Ok(data) => Ok(data),
+            Err((owner, error)) => {
+                self.allocations[allocation.index()] = Some(owner);
+                Err((self, error.to_string()))
+            }
+        }
     }
 
     fn resolve_descriptor(

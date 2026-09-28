@@ -162,7 +162,22 @@ impl<T> ReinterpretError<T> {
         &self.error
     }
 
-    pub(crate) fn into_parts(self) -> (T, Error) {
+    /// Consume the failure and return the retained owner with its typed cause.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::TypedTensor;
+    ///
+    /// let tensor = TypedTensor::<f32>::from_vec_col_major(vec![1], vec![1.0])?;
+    /// let Err(failure) = tensor.into_complex() else { return Ok(()); };
+    /// let (owner, error) = failure.into_parts();
+    /// assert!(!error.to_string().is_empty());
+    /// assert_eq!(owner.shape(), &[1]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    #[must_use]
+    pub fn into_parts(self) -> (T, Error) {
         (*self.owner, self.error)
     }
 }

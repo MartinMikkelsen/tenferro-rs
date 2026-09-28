@@ -187,7 +187,12 @@ where
     let out = unsafe { out.assume_init_as::<R>()? };
     let shape = R::shape_from_vec(view.shape().to_vec().into())
         .map_err(|err| Error::backend_source(op, err))?;
-    let mut tensor = TypedTensor::from_vec_col_major(shape, out.into_vec_col_major()?.1)?;
+    let mut tensor = TypedTensor::from_vec_col_major(
+        shape,
+        out.into_vec_col_major()
+            .map_err(|failure| failure.into_parts().1)?
+            .1,
+    )?;
     tensor.set_placement(view.placement().clone());
     Ok(tensor)
 }

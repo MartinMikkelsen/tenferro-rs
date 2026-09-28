@@ -213,4 +213,5 @@ fn download_tensor_typed(
         unreachable!("f32 download")
     };
     host.into_vec_col_major()
+        .map_err(|failure| failure.into_parts().1)
 }

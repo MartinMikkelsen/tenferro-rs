@@ -2216,10 +2216,41 @@ impl<R: TensorRank> OwnedTensorGroup<R> {
         self.group.backend_buffer_mut::<T>(self.slot)
     }
 
-    fn into_host_vec<T: 'static>(self) -> crate::Result<Vec<T>> {
-        self.group
-            .into_host_vec::<T>(self.slot)
-            .map_err(|error| crate::Error::runtime_state("TypedTensor::into_vec_col_major", error))
+    // INVARIANT: the failure carrier must return the unchanged group owner, so
+    // the wide `(Self, Error)` pair is deliberate rather than a boxing bug.
+    #[allow(clippy::result_large_err)]
+    fn into_host_vec<T: 'static>(self) -> std::result::Result<Vec<T>, (Self, crate::Error)> {
+        if self.backend_buffer::<T>().is_some() {
+            return Err((
+                self,
+                crate::Error::runtime_state(
+                    "TypedTensor::into_host_vec",
+                    "backend buffers cannot be exported as host Vec; download the tensor first",
+                ),
+            ));
+        }
+        let OwnedTensorGroup {
+            group,
+            slot,
+            allocation_index,
+            host_ptr,
+            host_byte_len,
+            ..
+        } = self;
+        match group.into_host_vec::<T>(slot) {
+            Ok(data) => Ok(data),
+            Err((group, error)) => Err((
+                OwnedTensorGroup {
+                    group,
+                    slot,
+                    allocation_index,
+                    host_ptr,
+                    host_byte_len,
+                    _rank: PhantomData,
+                },
+                crate::Error::runtime_state("TypedTensor::into_host_vec", error),
+            )),
+        }
     }
 
     fn into_parts(self) -> (AllocationGroup, DescriptorSlot) {
@@ -8044,45 +8075,51 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
     /// Consume this compact tensor and return the original host `Vec<T>`.
     ///
     /// # Errors
-    /// Returns [`crate::Error::RuntimeState`] for device-only storage or
-    /// an incompatible managed host allocation.
-    pub fn into_host_vec(self) -> crate::Result<Vec<T>>
+    /// Returns [`ReinterpretError`] carrying the unchanged tensor when the
+    /// storage is device-only or the managed root cannot export a host vector.
+    pub fn into_host_vec(self) -> std::result::Result<Vec<T>, ReinterpretError<Self>>
     where
         T: 'static,
     {
-        match self.storage {
+        let TypedTensor {
+            shape,
+            placement,
+            storage,
+        } = self;
+        match storage {
             DynamicStorage::Host(HostStorage { data }) => Ok(data.into_vec()),
-            DynamicStorage::Group(core) => {
-                if core.group.backend_buffer::<T>().is_some() {
-                    return Err(crate::Error::runtime_state(
-                        "into_host_vec",
-                        "backend buffers cannot be exported as host Vec",
-                    ));
-                }
-                core.group.into_host_vec::<T>()
-            }
+            DynamicStorage::Group(GroupStorage { group }) => match group.into_host_vec::<T>() {
+                Ok(data) => Ok(data),
+                Err((group, error)) => Err(ReinterpretError::new(
+                    TypedTensor {
+                        shape,
+                        placement,
+                        storage: DynamicStorage::Group(GroupStorage {
+                            group: Box::new(group),
+                        }),
+                    },
+                    error,
+                )),
+            },
         }
     }
 
     /// Consume the original host vector along with its column-major shape.
     ///
     /// # Errors
-    /// Returns [`crate::Error::RuntimeState`] for device-only storage or
-    /// an incompatible managed host allocation.
-    pub fn into_vec_col_major(self) -> crate::Result<(Vec<usize>, Vec<T>)>
+    /// Returns [`ReinterpretError`] carrying the unchanged tensor when the
+    /// storage is device-only or the managed root cannot export a host vector.
+    pub fn into_vec_col_major(
+        self,
+    ) -> std::result::Result<(Vec<usize>, Vec<T>), ReinterpretError<Self>>
     where
         T: 'static,
     {
         let shape = self.shape().to_vec();
-        if matches!(&self.storage, DynamicStorage::Group(core) if core.group.backend_buffer::<T>().is_some())
-        {
-            return Err(crate::Error::runtime_state(
-                "into_vec_col_major",
-                "backend buffers cannot be exported as host Vec",
-            ));
+        match self.into_host_vec() {
+            Ok(data) => Ok((shape, data)),
+            Err(failure) => Err(failure),
         }
-        let data = self.into_host_vec()?;
-        Ok((shape, data))
     }
 
     /// Borrow the plain host values (or an existing managed host root).
@@ -8739,21 +8776,23 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
     /// ```
     /// use tenferro_tensor::{StorageBuffer, TypedTensor};
     ///
-    /// # fn main() -> tenferro_tensor::Result<()> {
     /// let t = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 2.0])?;
-    /// let (buffer, layout, placement) = t.into_parts()?;
+    /// let Ok((buffer, layout, placement)) = t.into_parts() else {
+    ///     panic!("a plain host owner extracts")
+    /// };
     /// assert!(matches!(buffer, StorageBuffer::Host(_)));
     /// assert_eq!(layout.shape(), &[2]);
     /// assert!(placement.device.is_none());
-    /// # Ok(())
-    /// # }
+    /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
     ///
     /// # Errors
     ///
-    /// Returns [`crate::Error::RuntimeState`] when this tensor uses backend
-    /// storage; download it before extracting host storage.
-    pub fn into_parts(self) -> crate::Result<(StorageBuffer<T>, TensorLayout<R>, Placement)>
+    /// Returns [`ReinterpretError`] carrying the unchanged tensor when it uses
+    /// backend storage; download it before extracting host storage.
+    pub fn into_parts(
+        self,
+    ) -> std::result::Result<(StorageBuffer<T>, TensorLayout<R>, Placement), ReinterpretError<Self>>
     where
         T: TensorScalar,
     {
@@ -8762,17 +8801,25 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
             placement,
             storage,
         } = self;
-        let layout = TensorLayout::compact(shape)
+        let layout = TensorLayout::compact(shape.clone())
             .unwrap_or_else(|err| unreachable!("validated owned shape: {err}"));
         match storage {
             DynamicStorage::Host(HostStorage { data }) => {
                 Ok((StorageBuffer::Host(data.into_vec()), layout, placement))
             }
-            DynamicStorage::Group(GroupStorage { group }) => Ok((
-                StorageBuffer::Host(group.into_host_vec::<T>()?),
-                layout,
-                placement,
-            )),
+            DynamicStorage::Group(GroupStorage { group }) => match group.into_host_vec::<T>() {
+                Ok(data) => Ok((StorageBuffer::Host(data), layout, placement)),
+                Err((group, error)) => Err(ReinterpretError::new(
+                    TypedTensor {
+                        shape,
+                        placement,
+                        storage: DynamicStorage::Group(GroupStorage {
+                            group: Box::new(group),
+                        }),
+                    },
+                    error,
+                )),
+            },
         }
     }
 }
@@ -9843,27 +9890,20 @@ impl Tensor {
     /// ```
     /// # Errors
     ///
-    /// Returns [`crate::Error::Validation`] with
-    /// [`tenferro_tensor_core::ValidationError::DTypeMismatch`] when `T` does
-    /// not match the tensor dtype, or [`crate::Error::RuntimeState`] when the
-    /// matching tensor uses backend storage that has not been downloaded.
-    pub fn into_vec_col_major<T: TensorScalar>(self) -> crate::Result<(Vec<usize>, Vec<T>)> {
-        // INVARIANT: this pre-check makes `into_typed`'s refusal arm
-        // unreachable, because a preset dtype tag identifies its variant.
-        let actual = self.dtype();
-        if actual != T::dtype() {
-            return Err(crate::Error::validation(
-                "Tensor::into_vec_col_major",
-                ValidationError::DTypeMismatch {
-                    expected: T::dtype(),
-                    actual,
-                },
-            ));
+    /// Returns [`ReinterpretError`] carrying the unchanged tensor when `T` does
+    /// not match the tensor dtype or when the matching tensor uses backend
+    /// storage that has not been downloaded.
+    pub fn into_vec_col_major<T: TensorScalar>(
+        self,
+    ) -> std::result::Result<(Vec<usize>, Vec<T>), ReinterpretError<Self>> {
+        let typed = T::into_typed(self)?;
+        match typed.into_vec_col_major() {
+            Ok(parts) => Ok(parts),
+            Err(failure) => {
+                let (owner, error) = failure.into_parts();
+                Err(ReinterpretError::new(Tensor::from_typed(owner), error))
+            }
         }
-        let typed = T::into_typed(self).unwrap_or_else(|failure| {
-            unreachable!("the dtype guard selects this arm: {}", failure.error())
-        });
-        typed.into_vec_col_major()
     }
 }
 
