@@ -544,6 +544,16 @@ fn execute_all_batch_elementwise(
     result
 }
 
+/// Whether every operand axis is a batch axis (an elementwise product).
+fn is_all_batch_contraction(
+    lhs: &TensorRead<'_>,
+    rhs: &TensorRead<'_>,
+    config: &DotGeneralConfig,
+) -> bool {
+    lhs.shape().len() == config.lhs_batch_dims.len()
+        && rhs.shape().len() == config.rhs_batch_dims.len()
+}
+
 /// Number of batch items of a contraction: the product of its batch extents.
 fn dot_batch_items(lhs: &TensorRead<'_>, config: &DotGeneralConfig) -> Result<usize> {
     config
@@ -766,9 +776,7 @@ impl DotGeneralRuntime {
         // A contraction in which every axis is a batch axis is an elementwise
         // product; classify it before GEMM lowering instead of running one 1x1
         // GEMM per element.
-        if lhs.shape().len() == config.lhs_batch_dims.len()
-            && rhs.shape().len() == config.rhs_batch_dims.len()
-        {
+        if is_all_batch_contraction(&lhs, &rhs, config) {
             return execute_all_batch_elementwise(
                 provider_context,
                 buffers,
@@ -815,19 +823,24 @@ impl DotGeneralRuntime {
         )
     }
 
+    /// Materialize both operands into the canonical GEMM layout, run
+    /// `execute` on them, then return the temporaries to the pool.
     #[allow(clippy::too_many_arguments)]
-    fn execute_canonical_gemm(
+    fn with_canonical_operands<R>(
         &self,
         provider_context: &CpuExecutionContext<'_>,
         buffers: &mut BufferPool,
-        cache: &mut GemmAnalysisCache,
-        cache_slot: Option<usize>,
         lhs: &TensorRead<'_>,
         rhs: &TensorRead<'_>,
         config: &DotGeneralConfig,
         accumulation: DotGeneralAccumulation,
-        output: &mut TensorWrite<'_>,
-    ) -> Result<()> {
+        execute: impl FnOnce(
+            &TensorRead<'_>,
+            &TensorRead<'_>,
+            &DotGeneralConfig,
+            DotGeneralAccumulation,
+        ) -> Result<R>,
+    ) -> Result<R> {
         let (lhs_perm, rhs_perm, canonical_config) =
             crate::gemm::canonical_gemm_layout(config, lhs.shape().len(), rhs.shape().len());
         let lhs_canonical = materialize_canonical_operand(
@@ -852,48 +865,72 @@ impl DotGeneralRuntime {
                 return Err(error);
             }
         };
-
-        let result = {
-            let lhs = TensorRead::from_tensor(&lhs_canonical);
-            let rhs = TensorRead::from_tensor(&rhs_canonical);
-            let canonical_accumulation = DotGeneralAccumulation {
+        let result = execute(
+            &TensorRead::from_tensor(&lhs_canonical),
+            &TensorRead::from_tensor(&rhs_canonical),
+            &canonical_config,
+            DotGeneralAccumulation {
                 lhs_conj: false,
                 rhs_conj: false,
                 ..accumulation
-            };
-            match crate::gemm::prepare_provider_gemm_canonical(
-                cache,
-                cache_slot,
-                &lhs,
-                &rhs,
-                output,
-                &canonical_config,
-            ) {
-                Ok(Some(plan)) => match execute_gemm_plan(
-                    self.gemm.as_ref(),
-                    provider_context,
-                    plan,
-                    &lhs,
-                    &rhs,
-                    canonical_accumulation,
-                    output,
-                ) {
-                    Ok(CpuProviderOutcome::Executed) => Ok(()),
-                    Ok(CpuProviderOutcome::Unsupported(reason)) => {
-                        Err(unsupported_provider_error("GEMM", reason))
-                    }
-                    Err(error) => Err(error),
-                },
-                Ok(None) => Err(Error::unsupported(
-                    OP,
-                    "configured CPU layout-plus-GEMM path cannot represent the canonical contraction",
-                )),
-                Err(error) => Err(error),
-            }
-        };
+            },
+        );
         crate::backend::reclaim_tensor(buffers, lhs_canonical);
         crate::backend::reclaim_tensor(buffers, rhs_canonical);
         result
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn execute_canonical_gemm(
+        &self,
+        provider_context: &CpuExecutionContext<'_>,
+        buffers: &mut BufferPool,
+        cache: &mut GemmAnalysisCache,
+        cache_slot: Option<usize>,
+        lhs: &TensorRead<'_>,
+        rhs: &TensorRead<'_>,
+        config: &DotGeneralConfig,
+        accumulation: DotGeneralAccumulation,
+        output: &mut TensorWrite<'_>,
+    ) -> Result<()> {
+        self.with_canonical_operands(
+            provider_context,
+            buffers,
+            lhs,
+            rhs,
+            config,
+            accumulation,
+            |lhs, rhs, canonical_config, canonical_accumulation| {
+                let Some(plan) = crate::gemm::prepare_provider_gemm_canonical(
+                    cache,
+                    cache_slot,
+                    lhs,
+                    rhs,
+                    output,
+                    canonical_config,
+                )?
+                else {
+                    return Err(Error::unsupported(
+                        OP,
+                        "configured CPU layout-plus-GEMM path cannot represent the canonical contraction",
+                    ));
+                };
+                match execute_gemm_plan(
+                    self.gemm.as_ref(),
+                    provider_context,
+                    plan,
+                    lhs,
+                    rhs,
+                    canonical_accumulation,
+                    output,
+                )? {
+                    CpuProviderOutcome::Executed => Ok(()),
+                    CpuProviderOutcome::Unsupported(reason) => {
+                        Err(unsupported_provider_error("GEMM", reason))
+                    }
+                }
+            },
+        )
     }
 
     /// Execute a `beta == 0` allocated dot into uninitialized pooled bytes.
@@ -905,15 +942,18 @@ impl DotGeneralRuntime {
     /// the zeroed path). Errors propagate; a provider error may follow a
     /// partial write, so it is never silently retried.
     ///
-    /// Only the direct GEMM plan is attempted here: the uninit checkout holds
-    /// the scratch pool exclusively, so the canonical fallback (which
-    /// materializes operands from the pool) is left to the zeroed path.
+    /// The direct GEMM plan is tried first and the canonical packing fallback
+    /// second, both into the uninitialized destination; operand packing draws
+    /// on `buffers` while the destination is a separate checkout. An
+    /// all-batch contraction is left to the zeroed path, which runs it
+    /// elementwise instead of as per-element GEMMs.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn execute_dot_into_uninit(
         &self,
         bundle_identity: &Arc<CpuProviderBundleInner>,
         entry: &CpuOperationEntry<'_>,
         entered: Option<&CpuExecutionContext<'_>>,
+        buffers: &mut BufferPool,
         cache: &mut GemmAnalysisCache,
         cache_slot: Option<usize>,
         lhs: &TensorRead<'_>,
@@ -944,33 +984,72 @@ impl DotGeneralRuntime {
                 CpuProviderUnsupported::StridedBatch,
             ));
         }
+        if is_all_batch_contraction(lhs, rhs, config) {
+            return Ok(CpuProviderOutcome::Unsupported(
+                CpuProviderUnsupported::Layout(crate::provider::CpuOperand::Output),
+            ));
+        }
         cache.bind_provider_bundle(bundle_identity);
         entry
             .enter_or_reuse(entered, mode, |provider_context| {
-                let Some(plan) = crate::gemm::prepare_provider_gemm_into_uninit(
+                if let Some(plan) = crate::gemm::prepare_provider_gemm_into_uninit(
                     cache,
                     cache_slot,
                     lhs,
                     rhs,
                     output_shape,
                     config,
-                )?
-                else {
-                    // No direct plan; the canonical path needs the scratch
-                    // pool, which is exclusively held by the uninit checkout.
-                    // The caller falls back to the zeroed path.
-                    return Ok(CpuProviderOutcome::Unsupported(
-                        CpuProviderUnsupported::Layout(crate::provider::CpuOperand::Output),
-                    ));
-                };
-                execute_gemm_plan_into_uninit(
-                    witness,
+                )? {
+                    match execute_gemm_plan_into_uninit(
+                        witness,
+                        provider_context,
+                        plan,
+                        lhs,
+                        rhs,
+                        accumulation,
+                        &mut *output_bytes,
+                    )? {
+                        CpuProviderOutcome::Executed => return Ok(CpuProviderOutcome::Executed),
+                        CpuProviderOutcome::Unsupported(reason)
+                            if !canonical_gemm_fallback_supported(reason) =>
+                        {
+                            return Ok(CpuProviderOutcome::Unsupported(reason));
+                        }
+                        // Unsupported leaves the destination untouched.
+                        CpuProviderOutcome::Unsupported(_) => {}
+                    }
+                }
+                self.with_canonical_operands(
                     provider_context,
-                    plan,
+                    buffers,
                     lhs,
                     rhs,
+                    config,
                     accumulation,
-                    output_bytes,
+                    |lhs, rhs, canonical_config, canonical_accumulation| {
+                        let Some(plan) = crate::gemm::prepare_provider_gemm_canonical_into_uninit(
+                            cache,
+                            cache_slot,
+                            lhs,
+                            rhs,
+                            output_shape,
+                            canonical_config,
+                        )?
+                        else {
+                            return Ok(CpuProviderOutcome::Unsupported(
+                                CpuProviderUnsupported::Layout(crate::provider::CpuOperand::Output),
+                            ));
+                        };
+                        execute_gemm_plan_into_uninit(
+                            witness,
+                            provider_context,
+                            plan,
+                            lhs,
+                            rhs,
+                            canonical_accumulation,
+                            output_bytes,
+                        )
+                    },
                 )
             })
             .map_err(|error| Error::backend_source(OP, error))?

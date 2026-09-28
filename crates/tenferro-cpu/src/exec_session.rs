@@ -568,9 +568,9 @@ impl CpuExecSession<'_> {
         // Uninitialized fast path: beta == 0 here by construction, so the
         // dot output is fully overwritten. Take it only when the GEMM
         // provider is the guaranteed consumer (no general-contraction
-        // provider) and exposes the full-overwrite witness. The uninit
-        // checkout holds the scratch pool exclusively, so only the direct
-        // GEMM plan is attempted; anything else falls back below.
+        // provider) and exposes the full-overwrite witness. Operand packing
+        // draws on the session pool while the destination is its own
+        // checkout; an unsupported plan falls back below.
         let providers = self.providers;
         let runtime = providers.dot_general();
         if runtime.general.is_none() && runtime.gemm.uninit_provider().is_some() {
@@ -583,6 +583,7 @@ impl CpuExecSession<'_> {
                 providers.inner(),
                 &self.entry,
                 self.entered.as_ref(),
+                self.buffers,
                 self.gemm_analysis_cache,
                 cache_slot,
                 &lhs,

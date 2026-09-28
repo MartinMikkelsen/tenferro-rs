@@ -1322,6 +1322,30 @@ pub(crate) fn prepare_provider_gemm_into_uninit(
     )
 }
 
+/// [`prepare_provider_gemm_into_uninit`] for canonically packed operands; plans
+/// are cached under the canonical kind so they never alias direct-plan slots.
+pub(crate) fn prepare_provider_gemm_canonical_into_uninit(
+    cache: &mut GemmAnalysisCache,
+    cache_slot: Option<usize>,
+    lhs: &TensorRead<'_>,
+    rhs: &TensorRead<'_>,
+    output_shape: &[usize],
+    config: &DotGeneralConfig,
+) -> Result<Option<ProviderGemmPlan>> {
+    let output_strides = col_major_strides(output_shape)?;
+    prepare_provider_gemm_kind_with_output(
+        cache,
+        cache_slot,
+        GemmAnalysisCacheKind::Canonical,
+        lhs,
+        rhs,
+        output_shape,
+        &output_strides,
+        0,
+        config,
+    )
+}
+
 pub(crate) fn prepare_provider_gemm(
     cache: &mut GemmAnalysisCache,
     cache_slot: Option<usize>,
