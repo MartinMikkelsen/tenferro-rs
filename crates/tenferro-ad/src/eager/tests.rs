@@ -1491,3 +1491,26 @@ fn warm_extension_install_skips_install_lock() {
         "warm install blocked on the install lock: {elapsed:?}"
     );
 }
+
+#[test]
+fn dropped_values_do_not_accumulate_in_the_runtime_registries() {
+    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
+    let keep = ctx
+        .variable_from(Tensor::from_vec_col_major(vec![1], vec![1.0_f64]).unwrap())
+        .unwrap();
+    for step in 0..1000 {
+        let x = ctx
+            .variable_from(Tensor::from_vec_col_major(vec![1], vec![f64::from(step)]).unwrap())
+            .unwrap();
+        let y = ctx
+            .with_eager_session(|s| s.mul(&x, &keep))
+            .unwrap()
+            .unwrap();
+        drop((x, y));
+    }
+    // Dead weak entries are swept whenever an insert would grow the table, so
+    // the registries track live values rather than every value ever created.
+    assert!(ctx.value_records.lock().unwrap().len() < 64);
+    assert!(ctx.grad_slots.lock().unwrap().len() < 64);
+    assert!(keep.tracks_grad());
+}

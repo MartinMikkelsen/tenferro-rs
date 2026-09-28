@@ -3760,8 +3760,11 @@ impl EagerRuntime {
         key: &ValueKey<StdTensorOp>,
         slot: &GradSlot,
     ) -> Result<()> {
-        self.lock_grad_slots()?
-            .insert(key.clone(), Arc::downgrade(slot));
+        insert_pruning_dead(
+            &mut *self.lock_grad_slots()?,
+            key.clone(),
+            Arc::downgrade(slot),
+        );
         Ok(())
     }
 
@@ -3770,8 +3773,11 @@ impl EagerRuntime {
         key: &ValueKey<StdTensorOp>,
         record: &Arc<EagerTensorRecord>,
     ) -> Result<()> {
-        self.lock_value_records()?
-            .insert(key.clone(), Arc::downgrade(record));
+        insert_pruning_dead(
+            &mut *self.lock_value_records()?,
+            key.clone(),
+            Arc::downgrade(record),
+        );
         Ok(())
     }
 
@@ -5892,6 +5898,24 @@ impl EagerTensor {
         })??;
         Gradients::from_tensors(cotangents)
     }
+}
+
+/// Insert a weak registry entry, first dropping dead entries when the insert
+/// would otherwise grow the table.
+///
+/// Dead entries are otherwise removed only when their own key is looked up, so
+/// a long-running runtime would keep one entry per value it ever created.
+/// Pruning at the growth point keeps the cost amortized O(1) per insert: a
+/// sweep runs at most once per capacity doubling.
+fn insert_pruning_dead<K: std::hash::Hash + Eq, V>(
+    map: &mut HashMap<K, Weak<V>>,
+    key: K,
+    value: Weak<V>,
+) {
+    if map.len() == map.capacity() {
+        map.retain(|_, entry| entry.strong_count() > 0);
+    }
+    map.insert(key, value);
 }
 
 pub(crate) fn eager_val_key() -> ValueKey<StdTensorOp> {
