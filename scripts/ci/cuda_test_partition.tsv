@@ -1,9 +1,6 @@
 # Audited CUDA-feature inventory: lane	binary-id	test-name
 # Audit additions and helper chains; never classify by test-name substrings.
 host	tenferro-ad	eager::tests::deferred_eager_semantic_analysis_seeds_symbolic_leaf_metadata
-host	tenferro-ad	eager::tests::eager_backend_delegates_broadcast_multiply_fusion_to_cpu_backend
-host	tenferro-ad	eager::tests::eager_backend_delegates_elementwise_into_hook_to_cpu_variants
-host	tenferro-ad	eager::tests::eager_backend_session_identity_projects_to_owner
 host	tenferro-ad	eager::tests::eager_backward_with_accepts_vector_cotangent_seed
 host	tenferro-ad	eager::tests::eager_backward_with_rejects_mismatched_seed_shape
 host	tenferro-ad	eager::tests::eager_extension_dispatch_does_not_initialize_lazy_view_materialization_cache
@@ -100,6 +97,40 @@ host	tenferro-ad	eager::tests::residuals::exp_tanh_reuse_saved_outputs_with_drop
 host	tenferro-ad	eager::tests::residuals::intermediate_inputs_are_retained_without_retaining_all_outputs
 host	tenferro-ad	eager::tests::leaf_session::host_leaf_construction_does_not_enter_a_backend_session
 host	tenferro-ad	eager::tests::leaf_session::host_leaf_materialization_matches_the_cpu_backend_acceptance
+host	tenferro-ad	eager::tests::eager_backend_session_dispatches_broadcast_multiply_fusion_to_cpu
+host	tenferro-ad	eager::tests::eager_backend_session_dispatches_elementwise_into_hook_to_cpu_variants
+host	tenferro-ad	eager::tests::eager_backend_session_identity_belongs_to_the_concrete_backend
+host	tenferro-ad	eager::tests::leaf_session::borrowed_eager_no_grad_guard_is_scoped_inside_backend_callback
+host	tenferro-ad	eager::tests::leaf_session::borrowed_leaf_constructors_share_one_runtime_session
+host	tenferro-ad	eager::tests::leaf_session::gradient_slots_accumulate_on_borrowed_cpu_session
+host	tenferro-ad	eager::tests::leaf_session::gradient_slots_share_the_callers_session
+host	tenferro-ad	eager::tests::leaf_session::runtime_bound_binary_family_preserves_broadcast_ad_and_context
+host	tenferro-ad	eager::tests::leaf_session::runtime_bound_captured_views_materialize_untracked_inputs_in_session
+host	tenferro-ad	eager::tests::leaf_session::runtime_bound_conjugating_dot_preserves_fast_and_tracked_paths
+host	tenferro-ad	eager::tests::leaf_session::runtime_bound_diagonals_preserve_values_ad_and_runtime_identity
+host	tenferro-ad	eager::tests::leaf_session::runtime_bound_dynamic_slice_preserves_ad_and_rejects_foreign_indices
+host	tenferro-ad	eager::tests::leaf_session::runtime_bound_eager_binary_ops_preserve_broadcast_and_vjp
+host	tenferro-ad	eager::tests::leaf_session::runtime_bound_eager_convert_preserves_checked_and_lossy_paths
+host	tenferro-ad	eager::tests::leaf_session::runtime_bound_eager_dot_general_preserves_ad_and_validates_dimensions
+host	tenferro-ad	eager::tests::leaf_session::runtime_bound_eager_select_and_clamp_preserve_broadcast_ad
+host	tenferro-ad	eager::tests::leaf_session::runtime_bound_eager_session_reuses_entry_and_rejects_foreign_tensors
+host	tenferro-ad	eager::tests::leaf_session::runtime_bound_eager_transpose_and_slice_preserve_ad_and_ownership
+host	tenferro-ad	eager::tests::leaf_session::runtime_bound_eager_views_preserve_values_and_validate_before_dispatch
+host	tenferro-ad	eager::tests::leaf_session::runtime_bound_gather_and_concatenate_preserve_ad_and_identity
+host	tenferro-ad	eager::tests::leaf_session::runtime_bound_matmul_preserves_values_ad_and_validation
+host	tenferro-ad	eager::tests::leaf_session::runtime_bound_padding_and_reverse_preserve_gradients
+host	tenferro-ad	eager::tests::leaf_session::runtime_bound_reductions_preserve_values_ad_and_axis_errors
+host	tenferro-ad	eager::tests::leaf_session::runtime_bound_scaling_preserves_errors_and_gradient
+host	tenferro-ad	eager::tests::leaf_session::runtime_bound_scatter_preserves_values_ad_and_foreign_checks
+host	tenferro-ad	eager::tests::leaf_session::runtime_bound_triangles_preserve_values_gradients_and_runtime_identity
+host	tenferro-ad	eager::tests::leaf_session::runtime_bound_unary_family_preserves_values_and_ad
+host	tenferro-ad	eager::tests::leaf_session::tracked_eager_operation_uses_the_borrowed_session_once
+host	tenferro-ad	eager_exec::tests::generated_outputs_use_the_callers_borrowed_session
+host	tenferro-ad	extension::tests::eager_extension_borrowed_recording_materializes_untracked_inputs_in_session
+host	tenferro-ad	extension::tests::eager_extension_native_context_fallback_requires_a_separate_region
+host	tenferro-ad	extension::tests::eager_extension_prepared_executor_uses_borrowed_session
+host	tenferro-ad	extension::tests::eager_extension_target_resolves_under_a_borrowed_session
+host	tenferro-ad	extension::tests::eager_extension_targeted_install_and_execution_reuse_the_borrowed_session
 host	tenferro-ad::integration	ad_api_naming_contract::optional_ad_apis_use_optional_suffix_without_try_aliases
 host	tenferro-ad::integration	ad_optimizer::traced_jvp_optimizer_removes_identity_chain_before_compile
 host	tenferro-ad::integration	ad_optimizer::traced_jvp_zero_propagation_returns_none_without_dead_graph
@@ -205,7 +236,6 @@ host	tenferro-ad::integration	dynamic_truncate::pad_to_match_vjp_correct
 compile-only	tenferro-ad::integration	eager_backend_capability_contract::eager_backend_capability_boundary
 host	tenferro-ad::integration	eager_device_placement_contract::eager_ad_seed_and_missing_tangent_zeroes_are_uploaded
 host	tenferro-ad::integration	eager_device_placement_contract::eager_generated_constant_and_shape_outputs_are_uploaded_before_backend_ops
-host	tenferro-ad::integration	eager_device_placement_contract::eager_index_select_uploads_hidden_indices_before_importing_constant
 host	tenferro-ad::integration	eager_fixed_pivot_cross::take_axis_rows_cols_and_block_select_static_indices
 host	tenferro-ad::integration	eager_fixed_pivot_cross::take_block_backward_accumulates_to_source
 host	tenferro-ad::integration	eager_runtime_api::eager_runtime_constructors_return_typed_results
@@ -324,7 +354,6 @@ host	tenferro-ad::integration	multi_input_traced::many_requests_preserve_unreach
 host	tenferro-ad::integration	numpy_api::eager_add_uses_numpy_broadcasting_for_rank_padding_and_singletons
 host	tenferro-ad::integration	numpy_api::eager_compare_returns_bool_and_where_select_accepts_bool_condition
 host	tenferro-ad::integration	numpy_api::eager_tensor_methods_cover_conversion_matmul_and_extension_standard_op
-host	tenferro-ad::integration	numpy_api::eager_tensor_methods_cover_core_elementwise_surface
 host	tenferro-ad::integration	numpy_api::tensor_add_uses_numpy_broadcasting_with_explicit_backend
 host	tenferro-ad::integration	numpy_api::tensor_compare_returns_bool_and_where_select_accepts_bool_condition
 host	tenferro-ad::integration	numpy_api::tensor_extension_trait_exposes_initial_elementwise_methods
@@ -341,7 +370,6 @@ host	tenferro-ad::integration	placement_bound_eager::placement_and_executor_fail
 host	tenferro-ad::integration	placement_bound_eager::placement_binding_is_idle_until_a_session_operation_runs
 host	tenferro-ad::integration	placement_bound_eager::placement_bound_type_is_send_sync_and_callback_may_borrow_stack_data
 host	tenferro-ad::integration	placement_bound_eager::placement_session_matches_graph_execution_for_core_operations
-host	tenferro-ad::integration	placement_bound_eager::same_runtime_eager_reentry_panics_without_deadlock_and_then_recovers
 host	tenferro-ad::integration	primitive_ops::test_add
 host	tenferro-ad::integration	primitive_ops::test_add_broadcast_scalar_plus_vector
 host	tenferro-ad::integration	primitive_ops::test_broadcast_reduce
@@ -458,6 +486,11 @@ host	tenferro-ad::integration	symbolic_input::mixed_graph_static_and_placeholder
 host	tenferro-ad::integration	symbolic_input::same_symbolic_graph_reused_with_different_shapes
 host	tenferro-ad::integration	symbolic_input::symbolic_placeholder_is_concrete_shape_false
 host	tenferro-ad::integration	unification_retirement_contract::unification_7_removes_tidu_dependency_from_production_sources_and_manifests
+host	tenferro-ad::integration	eager_device_placement_contract::eager_index_select_imports_hidden_indices_through_borrowed_session
+gpu	tenferro-ad::integration	gpu_ad_tests::test_gpu_borrowed_concat_gather_and_index_select_stay_resident
+gpu	tenferro-ad::integration	gpu_ad_tests::test_gpu_borrowed_reduce_sum_preserves_residency_and_gradient
+host	tenferro-ad::integration	numpy_api::eager_session_methods_cover_core_elementwise_surface
+host	tenferro-ad::integration	placement_bound_eager::same_runtime_eager_reentry_is_rejected_without_deadlock_and_then_recovers
 host	tenferro-ad::prelude	prelude_calls_traced_ad_operation
 host	tenferro-gpu	cubecl::dispatch::tests::owned_capability_rejection_preserves_the_typed_cuda_source
 host	tenferro-gpu	cubecl::error::tests::provider_status_preserves_classification_and_source
@@ -521,7 +554,7 @@ gpu	tenferro-gpu	cubecl::tests::cubecl_session_tests::cubecl_session_fills_an_ex
 gpu	tenferro-gpu	cubecl::tests::cubecl_session_tests::cubecl_session_flushes_after_error_callback
 gpu	tenferro-gpu	cubecl::tests::cubecl_session_tests::cubecl_session_flushes_on_exit_so_raw_sees_work
 gpu	tenferro-gpu	cubecl::tests::cubecl_session_tests::cubecl_session_scales_output_in_place
-gpu	tenferro-gpu	cubecl::tests::cubecl_session_tests::cuda_with_backend_session_rejects_nested_entry_in_debug_builds
+gpu	tenferro-gpu	cubecl::tests::cubecl_session_tests::cuda_with_backend_session_rejects_nested_entry
 gpu	tenferro-gpu	cubecl::tests::cubecl_session_tests::cuda_with_backend_session_restores_the_in_session_flag_after_panic
 host	tenferro-gpu	cubecl::tests::device_tests::cuda_device_error_discovery_preserves_fields_and_source
 host	tenferro-gpu	cubecl::tests::device_tests::cuda_device_error_initialization_preserves_fields_and_source
@@ -768,7 +801,6 @@ gpu	tenferro-gpu::blas1_cuda	cuda_reductions_accept_a_non_contiguous_read
 gpu	tenferro-gpu::blas1_cuda	cuda_reductions_accept_compact_views_with_offsets
 gpu	tenferro-gpu::blas1_cuda	cuda_vdot_accepts_two_strided_operands
 gpu	tenferro-gpu::blas1_cuda	cuda_vdot_matches_cpu_and_conjugates_the_left_operand
-host	tenferro-gpu::integration	backend_read_contract::cuda_backend_implements_every_view_rejecting_read_entry_point
 host	tenferro-gpu::integration	cubecl_launch_contract::bool_launch_domains_are_checked_before_output_allocation
 host	tenferro-gpu::integration	cubecl_launch_contract::bool_structural_support_uses_copy_kernels_and_scatter_stays_excluded
 host	tenferro-gpu::integration	cubecl_launch_contract::cubecl_binary_elementwise_kernels_do_not_materialize_scalar_broadcasts
@@ -841,6 +873,9 @@ host	tenferro-gpu::integration	public_surface_contract::webgpu_provider_keeps_ru
 host	tenferro-gpu::integration	session_contract::cuda_session_exposes_backend_session_operations
 host	tenferro-gpu::integration	session_contract::cuda_session_type_is_distinct_from_owner
 compile-only	tenferro-gpu::integration	session_contract::execution_session_capability_cannot_project_or_escape_owner_borrow
+host	tenferro-gpu::integration	backend_read_contract::cuda_backend_implements_every_required_read_entry_point
+host	tenferro-gpu::integration	session_surface_parity::cpu_session_exposes_the_common_surface
+host	tenferro-gpu::integration	session_surface_parity::cuda_session_exposes_the_common_surface
 gpu	tenferro-gpu::storage_provider_cuda	cuda_duplicate_is_explicit_same_placement_allocation
 gpu	tenferro-gpu::storage_provider_cuda	cuda_prepared_state_is_consumed_by_the_exact_binding_without_host_mapping
 host	tenferro-gpu::storage_provider_cuda	cuda_provider_does_not_expose_safe_unscoped_raw_access
@@ -973,6 +1008,7 @@ gpu	tenferro-linalg	gpu::linalg::tests::xgesvdp::test_cubecl_svd_xgesvdp_full_an
 host	tenferro-linalg	cpu::tests::faer_lanes::batched_faer_lanes_reproduce_the_serial_batch
 host	tenferro-linalg	cpu::tests::faer_lanes::batched_faer_lanes_report_a_singular_member
 host	tenferro-linalg	traced::tests::p_norm_rejects_zero_and_non_finite_orders
+host	tenferro-linalg	cpu::tests::faer_lanes::forced_batch_strategies_reproduce_the_serial_batch_or_fail_typed
 host	tenferro-linalg::integration	backend_errors::cholesky_rejects_rank_less_than_two_even_when_zero_dim
 host	tenferro-linalg::integration	backend_errors::cpu_linalg_rejects_backend_buffers_without_panicking_or_downloading
 host	tenferro-linalg::integration	backend_errors::cpu_linalg_rejects_backend_rhs_before_zero_dim_fast_paths
@@ -1213,4 +1249,5 @@ host	tenferro-linalg::integration	traced_extension::traced_norm_rejects_integer_
 host	tenferro-linalg::integration	traced_extension::traced_norm_rejects_out_of_range_axis_without_panicking
 host	tenferro-linalg::integration	traced_extension::traced_pinv_rejects_integer_and_bool_dtypes_before_scalar_rounding
 host	tenferro-linalg::integration	traced_extension::traced_svd_eigh_qr_cholesky_reject_integer_and_bool_dtypes_at_construction
+gpu	tenferro-linalg::integration	gpu_linalg::test_cubecl_solve_vector_rhs_uses_borrowed_session_reshape
 host	tenferro-linalg::prelude	prelude_calls_concrete_linalg_operation
