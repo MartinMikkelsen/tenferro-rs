@@ -574,8 +574,18 @@ fn tensor_public_surface_has_no_context_free_materialization_api() {
     // name check while every other check below still covers them. The exclusion
     // is only sound while they stay host-only, which the next assertion pins.
     const HOST_CONTAINER_MODULES: [&str; 2] = ["host_container.rs", "erased_host.rs"];
-    const SESSION_IDENTIFIERS: [&str; 3] =
-        ["BackendSession", "BackendSessionHost", "TensorStructural"];
+    // A host-only exception has to stay host-only, so the excluded modules are
+    // also required to contain no backend/device vocabulary: the identifiers a
+    // context-free materialization could hide behind, including under a new name.
+    const SESSION_IDENTIFIERS: [&str; 7] = [
+        "BackendSession",
+        "BackendSessionHost",
+        "TensorStructural",
+        "BackendAllocation",
+        "BackendStorage",
+        "ProviderKind",
+        "AllocationGroup",
+    ];
     for path in files {
         let source = fs::read_to_string(&path).expect("Rust source file must be readable");
         let tokens = rust_tokens(&source);

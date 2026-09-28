@@ -2692,14 +2692,18 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorView<'a, T, R, Host> {
         offset: isize,
         data: &'a [T],
     ) -> crate::Result<Self> {
-        Self::from_buffer_ref(
-            shape,
-            strides,
-            offset,
-            TensorStorageRef::Host(data),
-            default_placement(),
-            "TypedTensorView::from_host_slice",
-        )
+        // Built here rather than through the shared helper so that the Host
+        // marker can only ever be paired with a host slice.
+        let buffer = TensorStorageRef::Host(data);
+        let layout = TensorLayout::from_parts(shape.into(), strides.into(), offset, buffer.len())
+            .map_err(|err| tensor_layout_error("TypedTensorView::from_host_slice", err))?;
+        Ok(Self {
+            buffer,
+            root: None,
+            layout,
+            placement: default_placement(),
+            _representation: std::marker::PhantomData,
+        })
     }
 
     /// Borrow the host elements without a runtime representation check.
@@ -3838,14 +3842,22 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorViewMut<'a, T, R, Host> {
         offset: isize,
         data: &'a mut [T],
     ) -> crate::Result<Self> {
-        Self::from_buffer_ref_mut(
-            shape,
-            strides,
-            offset,
-            TensorStorageRefMut::Host(data),
-            default_placement(),
-            "TypedTensorViewMut::from_host_slice",
-        )
+        // Built here rather than through the shared helper so that the Host
+        // marker can only ever be paired with a host slice.
+        let buffer = TensorStorageRefMut::Host(data);
+        let layout =
+            TensorLayout::from_parts(shape.into(), strides.into(), offset, buffer.len())
+                .map_err(|err| tensor_layout_error("TypedTensorViewMut::from_host_slice", err))?;
+        layout
+            .validate_mutable_no_overlap()
+            .map_err(|err| tensor_layout_error("TypedTensorViewMut::from_host_slice", err))?;
+        Ok(Self {
+            buffer,
+            root: None,
+            layout,
+            placement: default_placement(),
+            _representation: std::marker::PhantomData,
+        })
     }
 
     /// Exclusively borrow the host elements without a runtime check.

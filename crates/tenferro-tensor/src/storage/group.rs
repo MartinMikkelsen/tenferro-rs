@@ -1657,6 +1657,9 @@ impl AllocationGroup {
 
     // INVARIANT: a rejected host export must return the unchanged group, so the
     // wide `(Self, String)` pair is the ownership contract rather than a bug.
+    // A host group's descriptor always spans its whole allocation
+    // (`from_host_vec` records `ByteRange::new(0, span.byte_len())`), so handing
+    // back the allocation's vector is exactly the descriptor's logical range.
     #[allow(clippy::result_large_err)]
     pub(crate) fn into_host_vec<T: 'static>(
         mut self,
