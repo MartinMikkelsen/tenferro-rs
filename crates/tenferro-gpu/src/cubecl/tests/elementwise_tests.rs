@@ -2678,15 +2678,16 @@ fn test_cubecl_complex_elementwise_matches_cpu_and_rejects_unsupported_ops() {
         .unwrap_err();
     assert_cuda_unsupported_dtype(&err, "compare", DType::C64);
 
-    gpu.with_backend_session(|__s| {
-        __s.select_read(
-            TensorRead::from_tensor(&gpu_lhs),
-            TensorRead::from_tensor(&gpu_lhs),
-            TensorRead::from_tensor(&gpu_rhs),
-        )
-    })
-    .unwrap()
-    .unwrap_err();
+    let err = gpu
+        .with_backend_session(|__s| {
+            __s.select_read(
+                TensorRead::from_tensor(&gpu_lhs),
+                TensorRead::from_tensor(&gpu_lhs),
+                TensorRead::from_tensor(&gpu_rhs),
+            )
+        })
+        .unwrap()
+        .unwrap_err();
     assert_cuda_unsupported_dtype(&err, "select", DType::C64);
 
     let err = gpu
