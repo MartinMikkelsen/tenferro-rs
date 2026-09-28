@@ -213,8 +213,7 @@ pub fn apply_eager(op: Arc<dyn ExtensionOp>, inputs: &[&EagerTensor]) -> Result<
 ///
 /// Returns a typed context mismatch, validation, unsupported capability, or
 /// backend/extension error without replacing its source.
-#[doc(hidden)]
-pub fn apply_eager_in_session(
+pub(crate) fn apply_eager_in_session(
     session: &mut EagerSession<'_>,
     op: Arc<dyn ExtensionOp>,
     inputs: &[&EagerTensor],

@@ -2230,8 +2230,8 @@ impl EagerSession<'_> {
     /// Returns [`Error::ContextMismatch`] when an input belongs to another eager
     /// runtime, a validation error with
     /// `ValidationError::ShapeMismatch` when the operands cannot broadcast, or
-    /// [`Error::TensorRuntime`] for a typed backend failure (including integer division by zero
-    /// or a negative integer exponent).
+    /// [`Error::TensorRuntime`] for a typed backend failure (including integer division by
+    /// zero).
     pub fn div(&mut self, lhs: &EagerTensor, rhs: &EagerTensor) -> Result<EagerTensor> {
         self.run_binary("div", lhs, rhs, StdTensorOp::Div)
     }
@@ -2254,8 +2254,8 @@ impl EagerSession<'_> {
     /// Returns [`Error::ContextMismatch`] when an input belongs to another eager
     /// runtime, a validation error with
     /// `ValidationError::ShapeMismatch` when the operands cannot broadcast, or
-    /// [`Error::TensorRuntime`] for a typed backend failure (including integer division by zero
-    /// or a negative integer exponent).
+    /// [`Error::TensorRuntime`] for a typed backend failure (including an integer remainder by
+    /// zero).
     pub fn rem(&mut self, lhs: &EagerTensor, rhs: &EagerTensor) -> Result<EagerTensor> {
         self.run_binary("rem", lhs, rhs, StdTensorOp::Rem)
     }
@@ -2278,8 +2278,8 @@ impl EagerSession<'_> {
     /// Returns [`Error::ContextMismatch`] when an input belongs to another eager
     /// runtime, a validation error with
     /// `ValidationError::ShapeMismatch` when the operands cannot broadcast, or
-    /// [`Error::TensorRuntime`] for a typed backend failure (including integer division by zero
-    /// or a negative integer exponent).
+    /// [`Error::TensorRuntime`] for a typed backend failure (including a negative integer
+    /// exponent).
     pub fn pow(&mut self, lhs: &EagerTensor, rhs: &EagerTensor) -> Result<EagerTensor> {
         self.run_binary("pow", lhs, rhs, StdTensorOp::Pow)
     }
@@ -2536,9 +2536,9 @@ impl EagerSession<'_> {
     /// ```
     /// # Errors
     /// Returns [`Error::ContextMismatch`] when an input belongs to another eager
-    /// runtime, a validation error with
-    /// `ValidationError::DTypeMismatch` when the input dtype is not complex, or
-    /// [`Error::TensorRuntime`] for a typed backend failure.
+    /// runtime, [`Error::TensorRuntime`] containing
+    /// `ValidationError::InvalidArgument` when the input dtype is not complex,
+    /// or [`Error::TensorRuntime`] for a typed backend failure.
     pub fn scale_complex(&mut self, input: &EagerTensor, factor: Complex64) -> Result<EagerTensor> {
         self.ensure_runtime(input)?;
         let scalar = match input.dtype() {
@@ -3681,7 +3681,9 @@ impl EagerRuntime {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::RuntimeState`] if the backend lock is poisoned. The
+    /// Returns [`Error::RuntimeState`] if the backend lock is poisoned, or
+    /// [`tenferro_runtime::Error::SessionEntry`] without running the callback when the backend
+    /// cannot admit the session (for example same-thread reentry). The
     /// callback retains typed eager/backend errors in its return value.
     pub fn with_eager_session<R: Send>(
         self: &Arc<Self>,

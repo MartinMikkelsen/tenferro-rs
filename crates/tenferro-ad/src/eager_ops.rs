@@ -156,6 +156,8 @@ impl EagerTensor {
             shape: DimExpr::from_concrete(shape),
             dims: dims.to_vec(),
         };
+        // INVARIANT: output descriptors cannot borrow the input's move-only
+        // allocation group, so this explicit duplicate owns the view's root.
         let base = self.duplicate_value_in_session(session)?;
         let value = TensorValue::from_tensor(base)
             .broadcast_in_dim_view(shape, dims)

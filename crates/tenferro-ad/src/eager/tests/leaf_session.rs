@@ -962,18 +962,19 @@ fn backward_enters_a_bounded_number_of_backend_sessions() -> Result<(), Error> {
 }
 
 #[test]
-fn calling_thread_no_grad_governs_a_session_callback_on_a_worker() -> Result<(), Error> {
+fn calling_thread_no_grad_governs_a_session_callback() -> Result<(), Error> {
     let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
     let x = ctx.variable_from(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?)?;
-    let caller = std::thread::current().id();
 
-    let (inside, y) = {
+    // Whichever thread the managed executor picks, the outer guard governs it.
+    let y = {
         let _guard = ctx.no_grad();
-        ctx.with_eager_session(|s| Ok::<_, Error>((std::thread::current().id(), s.neg(&x)?)))??
+        ctx.with_eager_session(|s| s.neg(&x))??
     };
-    // The premise: the managed CPU executor ran the callback on a worker.
-    assert_ne!(inside, caller);
-    assert!(!y.tracks_grad(), "the outer no_grad must reach the worker");
+    assert!(
+        !y.tracks_grad(),
+        "the outer no_grad must reach the callback"
+    );
 
     // The worker's counters are restored: without the guard, recording resumes
     // for a callback that may land on the same worker.
@@ -1021,4 +1022,48 @@ fn calling_thread_capture_trace_governs_a_session_callback() -> Result<(), Error
     let dx = ctx.vjp(&y, &x, &seed)?;
     assert_eq!(dx.value()?.as_slice::<f64>()?, &[2.0, 4.0]);
     Ok(())
+}
+
+#[test]
+fn inherited_modes_apply_on_another_thread_and_are_restored() {
+    use super::super::{eager_capture_active, eager_grad_recording_enabled, InheritedEagerModes};
+
+    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
+    let modes = {
+        let _no_grad = ctx.no_grad();
+        let _capture = ctx.capture_trace();
+        InheritedEagerModes::capture()
+    };
+    // An explicitly spawned thread stands in for an executor worker, so the
+    // cross-thread path is exercised independent of executor scheduling.
+    std::thread::scope(|scope| {
+        scope
+            .spawn(|| {
+                assert!(eager_grad_recording_enabled());
+                assert!(!eager_capture_active());
+                {
+                    let _inherited = modes.enter();
+                    assert!(!eager_grad_recording_enabled());
+                    assert!(eager_capture_active());
+                }
+                assert!(eager_grad_recording_enabled());
+                assert!(!eager_capture_active());
+
+                // Restored on unwind as well.
+                let unwound = std::panic::catch_unwind(|| {
+                    let _inherited = modes.enter();
+                    panic!("callback panicked");
+                });
+                assert!(unwound.is_err());
+                assert!(eager_grad_recording_enabled());
+                assert!(!eager_capture_active());
+            })
+            .join()
+            .unwrap();
+    });
+    // On the capturing thread itself entering adds nothing.
+    {
+        let _inherited = modes.enter();
+        assert!(eager_grad_recording_enabled());
+    }
 }
