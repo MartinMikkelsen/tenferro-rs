@@ -329,7 +329,7 @@ impl<'a, T> HostTensorView<'a, T> {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_tensor_core::HostTensorView;
+    /// use tenferro_tensor::HostTensorView;
     ///
     /// let data = [1.0_f64, 2.0, 3.0, 4.0];
     /// let view = HostTensorView::from_slice(vec![2], vec![1], 1, &data)?;
@@ -425,7 +425,7 @@ impl<'a, T> HostTensorView<'a, T> {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_tensor_core::HostTensorView;
+    /// use tenferro_tensor::HostTensorView;
     ///
     /// let data = [1.0_f64];
     /// let view = HostTensorView::from_slice(vec![0], vec![1], 0, &data)?;
@@ -481,7 +481,7 @@ impl<'a, T> HostTensorView<'a, T> {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_tensor_core::HostTensorView;
+    /// use tenferro_tensor::HostTensorView;
     ///
     /// let data = [1_i32, 2, 3, 4];
     /// let view = HostTensorView::from_slice(vec![2], vec![1], 1, &data)?;
@@ -584,7 +584,7 @@ impl<'a, T> HostTensorView<'a, T> {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_tensor_core::{SliceSpec, HostTensor};
+    /// use tenferro_tensor::{HostTensor, SliceSpec};
     ///
     /// let tensor = HostTensor::from_vec_col_major(vec![4], vec![1_i64, 2, 3, 4])?;
     /// let view = tensor
@@ -668,7 +668,8 @@ impl<'a, T> HostTensorView<'a, T> {
 /// # Examples
 ///
 /// ```rust
-/// use tenferro_tensor::{DefaultScalars, DType, ScalarSet};
+/// use tenferro_tensor::{DefaultScalars, DType};
+/// use tenferro_tensor_core::ScalarSet;
 ///
 /// let value = DefaultScalars::from_vec_col_major(vec![1], vec![7_i32])?;
 /// assert_eq!(value.tag(), DType::I32);
@@ -755,7 +756,7 @@ impl DefaultScalarsValue {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_tensor_core::Tensor;
+    /// use tenferro_tensor::DefaultScalars;
     ///
     /// let tensor = DefaultScalars::from_vec_col_major(vec![2], vec![1_i32, 2])?;
     /// assert_eq!(tensor.shape(), &[2]);
@@ -778,7 +779,7 @@ impl DefaultScalarsValue {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_tensor_core::Tensor;
+    /// use tenferro_tensor::DefaultScalars;
     ///
     /// let tensor = DefaultScalars::from_vec_col_major(vec![1, 1], vec![1_i64])?;
     /// assert_eq!(tensor.rank(), 2);
@@ -793,7 +794,7 @@ impl DefaultScalarsValue {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_tensor_core::Tensor;
+    /// use tenferro_tensor::DefaultScalars;
     ///
     /// let tensor = DefaultScalars::from_vec_col_major(vec![0], Vec::<f64>::new())?;
     /// assert!(tensor.is_empty());
@@ -880,7 +881,7 @@ impl DefaultScalars {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_tensor_core::Tensor;
+    /// use tenferro_tensor::DefaultScalars;
     ///
     /// let tensor = DefaultScalars::from_vec_col_major(vec![2], vec![1_i32, 2])?;
     /// assert_eq!(tensor.shape(), &[2]);
@@ -895,7 +896,7 @@ impl DefaultScalars {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_tensor_core::Tensor;
+    /// use tenferro_tensor::DefaultScalars;
     ///
     /// let tensor = DefaultScalars::from_vec_col_major(vec![1, 1], vec![1_i64])?;
     /// assert_eq!(tensor.rank(), 2);
@@ -910,7 +911,7 @@ impl DefaultScalars {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_tensor_core::Tensor;
+    /// use tenferro_tensor::DefaultScalars;
     ///
     /// let tensor = DefaultScalars::from_vec_col_major(vec![0], Vec::<f64>::new())?;
     /// assert!(tensor.is_empty());
@@ -925,7 +926,7 @@ impl DefaultScalars {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_tensor_core::Tensor;
+    /// use tenferro_tensor::DefaultScalars;
     ///
     /// let tensor = DefaultScalars::from_vec_col_major(vec![1], vec![3.0_f64])?;
     /// assert_eq!(tensor.as_slice::<f64>()?, &[3.0]);
@@ -950,7 +951,7 @@ impl DefaultScalars {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_tensor_core::Tensor;
+    /// use tenferro_tensor::DefaultScalars;
     ///
     /// let mut tensor = DefaultScalars::from_vec_col_major(vec![1], vec![3.0_f64])?;
     /// tensor.as_mut_slice::<f64>()?[0] = 4.0;
@@ -990,7 +991,7 @@ impl DefaultScalars {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_tensor_core::Tensor;
+    /// use tenferro_tensor::DefaultScalars;
     ///
     /// let tensor = DefaultScalars::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?;
     /// let (shape, data) = tensor.into_vec_col_major::<f64>()?;
@@ -1058,7 +1059,7 @@ impl ScalarSet for DefaultScalars {
 /// ```
 ///
 /// ```compile_fail
-/// # use tenferro_tensor_core::Tensor;
+/// # use tenferro_tensor::DefaultScalars;
 /// # let tensor = DefaultScalars::from_vec_col_major(vec![1], vec![1.0_f64]).unwrap();
 /// let a = tensor.as_view();
 /// let b = tensor.as_view();
@@ -1118,7 +1119,7 @@ impl<'a> DefaultScalarsView<'a> {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_tensor_core::Tensor;
+    /// use tenferro_tensor::DefaultScalars;
     ///
     /// let tensor = DefaultScalars::from_vec_col_major(vec![1], vec![1.0_f64])?;
     /// assert_eq!(tensor.as_view().shape(), &[1]);
@@ -1141,7 +1142,7 @@ impl<'a> DefaultScalarsView<'a> {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_tensor_core::Tensor;
+    /// use tenferro_tensor::DefaultScalars;
     ///
     /// let tensor = DefaultScalars::from_vec_col_major(vec![1, 1], vec![1_i64])?;
     /// assert_eq!(tensor.as_view().rank(), 2);
@@ -1156,7 +1157,7 @@ impl<'a> DefaultScalarsView<'a> {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_tensor_core::Tensor;
+    /// use tenferro_tensor::DefaultScalars;
     ///
     /// let tensor = DefaultScalars::from_vec_col_major(vec![0], Vec::<f64>::new())?;
     /// assert!(tensor.as_view().is_empty());
@@ -1179,7 +1180,7 @@ impl<'a> DefaultScalarsView<'a> {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_tensor_core::Tensor;
+    /// use tenferro_tensor::DefaultScalars;
     ///
     /// let tensor = DefaultScalars::from_vec_col_major(vec![4], vec![1_i32, 2, 3, 4])?;
     /// assert_eq!(tensor.as_view().reshape_view(vec![2, 2])?.shape(), &[2, 2]);
@@ -1202,7 +1203,7 @@ impl<'a> DefaultScalarsView<'a> {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_tensor_core::Tensor;
+    /// use tenferro_tensor::DefaultScalars;
     ///
     /// let tensor = DefaultScalars::from_vec_col_major(vec![1, 2], vec![1_i64, 2])?;
     /// assert_eq!(tensor.as_view().transpose_view(&[1, 0])?.shape(), &[2, 1]);
@@ -1224,7 +1225,7 @@ impl<'a> DefaultScalarsView<'a> {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_tensor_core::{SliceSpec, DefaultScalars};
+    /// use tenferro_tensor::{DefaultScalars, SliceSpec};
     ///
     /// let tensor = DefaultScalars::from_vec_col_major(vec![3], vec![1_i64, 2, 3])?;
     /// assert_eq!(
@@ -1268,7 +1269,7 @@ impl<'a> DefaultScalarsRef<'a> {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_tensor_core::{DType, DefaultScalars, DefaultScalarsRef};
+    /// use tenferro_tensor::{DefaultScalars, DefaultScalarsRef, DType};
     ///
     /// let tensor = DefaultScalars::from_vec_col_major(vec![1], vec![1_i64])?;
     /// assert_eq!(DefaultScalarsRef::Tensor(&tensor).dtype(), DType::I64);
