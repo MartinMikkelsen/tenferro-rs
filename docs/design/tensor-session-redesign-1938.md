@@ -162,6 +162,26 @@ attempt does not rediscover it:
   = self;`) must be rewritten with exact-match edits. Scripted line surgery over
   this file corrupted it once and had to be reverted, so a linear scan with
   line-range-limited edits is the safer tool.
+- The read-only side turned out to be much cheaper than the mutable side, and a
+  second attempt confirmed the split. For `TypedTensorView` the trait needs six
+  accessors (`host_slice`, `backend_buffer`, `backend_allocation`,
+  `buffer_len`, `retained_root`, `join_dynamic`) and eleven method bodies change;
+  the struct's two fields become `D::Buffer` and `D::Root`, which keeps every
+  `Dynamic` literal and every `Dynamic`-only impl textually unchanged, with the
+  `GroupReadView`/`GroupWriteView` retained regions wrapped in public
+  `RetainedRead`/`RetainedWrite` newtypes so the associated types stay nameable.
+  Name both storage newtypes 'Dynamic...' only if the trait keeps a single
+  buffer per direction; `RetainedRead` must carry a hand-written `Clone` because
+  a derive would demand `T: Clone`.
+- `TypedTensorViewMut` is the expensive half: its methods split and rebuild
+  mutable buffers (`try_multi_slice_mut` splits two disjoint ranges,
+  `try_slice`/`try_reshape` reborrow, `transpose_view` consumes), so the trait
+  needs about seven more accessors (`host_slice_mut`, `host_slice_of_mut`,
+  `backend_buffer_of_mut`, `buffer_len_of_mut`, `retained_root_mut`,
+  `reborrow_dynamic_mut`, `into_dynamic_mut`) and eight method bodies change,
+  several of them the disjoint-split paths. Budget for that half explicitly, and
+  keep the `Dynamic`-only constructors, `as_read_only`/`into_read_only`,
+  `try_multi_slice_mut` and `try_reshape` in their own `Dynamic` impl block.
 
 ### D2. Allocation ownership, recycling, groups and extraction
 
