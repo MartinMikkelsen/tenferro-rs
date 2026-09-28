@@ -632,6 +632,37 @@ impl<'a, T> HostReadGuard<'a, T> {
             access: Box::new(guard),
         }
     }
+
+    /// Borrow the mapped elements as a rank-1 host view.
+    ///
+    /// The view lends the mapping's shared borrow, so the guard stays alive for
+    /// as long as the view is used and no copy or transfer happens.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::HostReadGuard;
+    ///
+    /// let guard = HostReadGuard::new(vec![3_i32, 4]);
+    /// let view = guard.as_view()?;
+    /// assert_eq!(view.shape(), &[2]);
+    /// assert_eq!(view.get(&[1]), Some(&4));
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::IntegerOverflow`] or
+    /// [`tenferro_tensor_core::ValidationError::ViewOutOfBounds`] when the
+    /// mapped length cannot be represented as a rank-1 layout.
+    pub fn as_view(&self) -> crate::Result<TypedTensorView<'_, T, DynRank>>
+    where
+        T: 'static,
+    {
+        let data: &[T] = self;
+        TypedTensorView::from_slice(vec![data.len()], vec![1], 0, data)
+    }
 }
 
 impl<T> Deref for HostReadGuard<'_, T> {

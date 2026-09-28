@@ -265,3 +265,17 @@ fn erased_host_export_dtype_mismatch_retains_the_tensor() {
     assert_eq!(retained.dtype(), DType::F64);
     assert_eq!(retained.as_slice::<f64>().unwrap(), &[1.0, 2.0]);
 }
+
+#[test]
+fn read_mapping_lends_a_host_view_without_copying() {
+    let host = TypedTensor::<f64, DynRank, Host>::from_host_vec_col_major(vec![2], vec![1.0, 2.0])
+        .unwrap();
+    let guard = host.map_read();
+    let view = guard.as_view().unwrap();
+    assert_eq!(view.shape(), &[2]);
+    assert_eq!(view.strides(), &[1]);
+    assert_eq!(view.get(&[1]), Some(&2.0));
+    // The view is a genuine borrow of the mapping, not a copy: its base pointer
+    // is the guard's slice.
+    assert_eq!(view.host_storage().unwrap().as_ptr(), guard.as_ptr());
+}
