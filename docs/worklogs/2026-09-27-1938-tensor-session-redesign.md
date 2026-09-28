@@ -92,6 +92,68 @@ Rejected with evidence:
 - `CpuBatchPolicy` is CPU-only (maintainer decision): the neutral `DotGeneralConfig` is built with struct literals in many places, and CUDA has no route to honor a policy yet. Per-operation choice is a scope around one call rather than a config field; nesting gives the required precedence. The grouped-config builder method mentioned during planning was dropped because `GroupedGemmConfig` lives in `tenferro-tensor`, which cannot name a CPU type.
 - The scoped override first ran `f` on the CPU session recovered from the native token; that let a forwarding wrapper's overrides be bypassed inside the scope. It now sets and restores the policy through two visitor calls and runs `f` on the caller's session, restoring before resuming an unwind.
 - The policy is carried on `CpuOperationEntry`/`CpuExecutionContext` and resolved per execution, so "policy/provider changes invalidate a prepared strategy" holds without invalidation state. Thresholds default to the constants they replaced; no tuning was done.
-- New routes: forced `OuterParallel` grouped GEMM inside an entered session fans out over the context's lanes (previously outer grouped execution only ran from unentered entries); the strided-batched BLAS path reaches `cblas_?gemm_batch` (default for items with every dimension at most 16, as grouped GEMM already did); all-batch contractions run as an elementwise product with conjugation and alpha/beta instead of one 1x1 GEMM per element. `OuterParallel` for strided-batched contractions is a typed error rather than a new per-item split, recorded as a gap.
+- New routes: forced `OuterParallel` grouped GEMM inside an entered session fans out over the context's lanes (previously outer grouped execution only ran from unentered entries); the strided-batched BLAS path reaches `cblas_?gemm_batch` (first by default for items with every dimension at most 16, as grouped GEMM already did; the performance pass below moved strided `Auto` back to per-item GEMM); all-batch contractions run as an elementwise product with conjugation and alpha/beta instead of one 1x1 GEMM per element. `OuterParallel` for strided-batched contractions is a typed error rather than a new per-item split, recorded as a gap.
 - The provider-facing `CpuVendorBatch` (`Allowed { max_item_dim }`/`Required`/`Forbidden`) on GEMM and grouped requests moves the grouped cutoff out of the BLAS provider. faer reports `RuntimeUnavailable` for `Required`; the uninitialized-output path declines a forced vendor batch so the zeroed path, which carries the control, handles it.
 - Evidence: route tests for every strategy on grouped and strided paths (mode, vendor control, fan-out, typed failure before writes), the all-batch elementwise path with permuted batch axes, alpha/beta and conjugation, scope precedence and restoration after error and unwind, packed LU strategies reproducing the serial factors bit for bit or failing typed, and an OpenBLAS run (OpenBLAS 0.3.32 source-built by `openblas-src` 0.10.16 through `blas-openblas`, one-thread backend, provider thread variables unset) in which `Auto`, `WholeBatchVendor` and `ProviderItems` strided batches match a faer reference; the full `tenferro-cpu` suite passes with `blas-openblas` (664 tests). No timing was taken; the vendor route for strided batches is a correctness change awaiting the bounded performance pass.
+
+## Output/scratch and plan phase (D11)
+
+- An audit of the output/scratch sequence against D11 found the lease itself already in place: `PooledUninitOutput` owns a pool handle and a single-use token, not `&mut BufferPool`. Two comments still described the old exclusive borrow and made the allocated-dot uninit path give up whenever the direct GEMM plan did not fit. That path now also packs canonical operands into the uninitialized destination, under its own `Canonical` plan-cache kind so direct and canonical plans never share a slot.
+- A reported "plain-path in-flight leak" in `PooledUninitOutput::finish` is intentional: a reused buffer handed out as a plain output stays counted until the session settles the pool, and an unwind replenishes one replacement (already pinned by a test). It is now documented by an INVARIANT comment instead of being changed.
+- Packing now depends on what each operand needs. The canonical fallback borrows an operand whose permuted view is already compact column-major and unconjugated, and copies only the other one. Existing spies that required both operands to be packed were changed to check values.
+- `_into` without a temporary result:
+  - The all-batch elementwise contraction writes an overwrite product straight into `out`.
+  - The N-ary einsum read-into lets its last contraction step write into the destination when that step's result labels are the output labels. The tree walk hands the destination back otherwise; a unary tree still copies.
+  - The elementwise read-into fallback returns its staged result to the pool.
+  - Reductions write through `execute_uninit` into `MaybeUninit` storage instead of a zero-filled vector.
+- All-batch contractions on the allocated path used to reach the uninit GEMM planner as per-element GEMMs. They now go to the elementwise route on both paths.
+- GPU ordering: raw `DeviceBytes` workspaces have no retirement event, and that is correct. They are `!Send`, so they drop on the thread whose captured CubeCL stream ran the vendor work, and CubeCL CUDA keeps one memory pool per stream (`streams.current().memory_management_gpu`). A freed block is therefore reused only by later work on the same stream. The cuTENSOR plan-cache workspace can drop on another thread and keeps its event-based retirement. Recorded as an INVARIANT on `DeviceByteBuffer`.
+- Residuals, not done:
+  - A `ConcreteEinsumPlan` GEMM analysis slot (D11-4). Engine cache slots belong to compiled-program nodes, so a plan choosing its own index would thrash theirs; this needs a slot-allocation contract.
+  - Skipping the LU in `solve_read_into_default` for an empty right-hand side (D11-8). It would need an ungated copy of the full solve validation.
+  - The session-long `engine.resources` lock.
+  - GPU memoized addresses still keyed on pointer stability rather than provider generation, stream and access rules.
+  - The compiled fallback running under the owner lock.
+  - Per-loop cache entries not visible in stats.
+
+## Runtime/AD integration phase (D12)
+
+- Backward staged each residual, each primal binding and the seed through its own backend session. It also duplicated shared-handle gradients in a separate session before storing them. Staging and storage now each share one session; JVP staging does too. A session-count test on the recording backend pins this (7 to 3 entries for a two-variable graph, independent of value count). The recording backend gained an opt-in runtime engine so the test can run the compiled derivative.
+- The owned-tensor eager dispatch table was a 262-line copy of the `TensorRead` table. It now delegates, so the two entry points cannot drift apart.
+- `value_records` and `grad_slots` dropped dead weak entries only when that same key was looked up again. Inserts now sweep dead entries at the table growth point (amortized O(1)), pinned by a create-and-drop loop test that fails without the sweep.
+- Untracked eager results no longer build a one-slot allocation group; they are retained as the tensor itself (`RetentionContainer::Owned`). Oracle replay and the full AD suite were run before and after.
+- Not migrated (D12-4): the expanded eager einsum still enters one session per instruction. Moving it into one `with_eager_session` changes observable behaviour: a caller's thread-local `no_grad`/`capture_trace` is not visible when the managed CPU executor runs the callback. Checked on this branch under an outer `ctx.no_grad()`: the 2-operand einsum fast path and a `with_eager_session` op both produce grad-tracking results, while the N-ary per-op path does not. This inconsistency predates this phase. Fixing it needs a decision on propagating calling-thread modes into session callbacks.
+- A2 stays deferred as the design states. Nothing measured in this phase makes evaluation-wide entry the dominant residual.
+- Test isolation: the CUDA strided-AXPBY pass counter was process-global and flaked under parallel tests; it is now thread-local.
+
+## Bounded performance pass (§5)
+
+Revisions:
+- **Baseline:** `e55c0e17a` (the #1929 handoff).
+- **Candidate:** this branch at `129cdd496`.
+
+Each revision was built from its own bench sources, which measure the same cases; HEAD adds one session variant. Setup: 64-core Linux host, `bench` profile, `RAYON_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1`, and one-thread backends verified by assertion in each bench. Criterion used its default sample settings; the eager figures are about ±15% noise. No GPU timing was taken.
+
+- **1T overhead** (median, baseline → HEAD) is neutral within noise; nothing regresses beyond it:
+
+  | Bench | Baseline | HEAD |
+  |---|---|---|
+  | `view_materialization` `compact_3d` | 628 µs | 680 µs |
+  | `view_materialization` `permuted_3d` | 6.29 ms | 6.55 ms |
+  | `view_materialization` `high_rank_contiguous_permutation` | 103 ms | 97.6 ms |
+  | `view_materialization` `scattered_24d` | 110 ms | 105 ms |
+  | `view_materialization` `tiny_transpose` | 11.1 µs | 10.7 µs |
+  | `dot_general_overhead`, single session, `chi` 4 | 315 µs | 261 µs |
+  | `dot_general_overhead`, single session, `chi` 64 | 6.50 ms | 6.19 ms |
+
+  The fresh and persistent cache variants improved by 3–10%. `eager_dispatch_baseline` stays in the same ~9–14 µs band on both revisions.
+- **Strided-batch route** (same revision, OpenBLAS 0.3.32 `blas-openblas`, new `strided_batch_route` bench): the D9 default of sending small strided batches to `cblas_dgemm_batch` was a regression.
+
+  | Item, batch | Vendor call | Per-item |
+  |---|---|---|
+  | 4³, 2048 | 196 µs | 214 µs |
+  | 8³, 512 | 159 µs | 86 µs |
+  | 16³, 128 | 268 µs | 69 µs |
+
+  Strided `Auto` now keeps per-item GEMM (rerun: `Auto` 80/65 µs against per-item 81/65 µs for 8³/16³). The vendor call stays available through `WholeBatchVendor`. The grouped-GEMM cutoff was carried over unchanged from the BLAS provider and was not re-measured here.
+- **Deferred:** A2 (evaluation-wide entry is not the dominant 1T cost measured here), GPU chain timing, and multi-thread throughput experiments.

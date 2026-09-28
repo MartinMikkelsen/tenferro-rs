@@ -214,9 +214,12 @@ wrapping a single call is a per-operation choice. The innermost scope wins and
 the previous policy is restored on return, error or unwind. Nothing is
 process-global.
 
-`Auto` keeps the pre-existing behavior: a batch of small GEMMs (every
+`Auto` keeps the pre-existing behavior: a grouped batch of small GEMMs (every
 dimension at most `vendor_batch_max_item_dim`, default 16) may use the vendor
-batch call when the build links one (`blas-openblas`, `blas-mkl`); outer lanes
+batch call when the build links one (`blas-openblas`, `blas-mkl`), while a
+strided-batched contraction runs one provider GEMM per item and reaches the
+vendor batch call only through `WholeBatchVendor` (with OpenBLAS at one thread
+the per-item route was measured faster for items of 8 and larger); outer lanes
 are used when the batch has at least `outer_min_items` items and
 `outer_min_items_per_lane` per lane. A forced strategy never overrides a safety
 rule or invents a missing route: `Sequential` with a provider that declares

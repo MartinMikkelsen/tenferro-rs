@@ -2795,11 +2795,13 @@ fn run_batched_dot(
 #[test]
 fn strided_batch_strategy_sets_mode_and_vendor_control_or_fails_before_writes() {
     let cases = [
+        // Auto keeps per-item GEMM for strided batches (measured slower as a
+        // vendor batch call); only WholeBatchVendor requests it.
         (
             crate::CpuBatchStrategy::Auto,
             Some((
                 ParallelMode::Sequential,
-                crate::provider::CpuVendorBatch::default(),
+                crate::provider::CpuVendorBatch::Forbidden,
             )),
         ),
         (

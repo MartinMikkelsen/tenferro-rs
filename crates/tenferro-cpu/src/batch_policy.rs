@@ -87,7 +87,11 @@ impl Default for CpuBatchThresholds {
 
 impl CpuBatchThresholds {
     /// Per-item work: the largest `m`, `n` and `k` for which `Auto` lets a
-    /// vendor batch call (`cblas_?gemm_batch`) handle a batch of GEMMs.
+    /// vendor batch call (`cblas_?gemm_batch`) handle a grouped GEMM batch.
+    ///
+    /// Strided batched contractions do not use this cutoff: under `Auto` they
+    /// keep one provider GEMM per item, and reach the vendor batch call only
+    /// through [`CpuBatchStrategy::WholeBatchVendor`].
     ///
     /// # Examples
     ///

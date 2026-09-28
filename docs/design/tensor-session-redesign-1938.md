@@ -567,7 +567,9 @@ thresholds default to the constants they replace: `vendor_batch_max_item_dim`
 inside an entered session fans out over the context's own lanes); strided
 batched contractions support all but `OuterParallel`, which is a typed error;
 packed LU/solve supports all but `WholeBatchVendor`. The strided path now
-reaches the existing `cblas_?gemm_batch` binding (by default for small items).
+reaches the existing `cblas_?gemm_batch` binding through `WholeBatchVendor`;
+`Auto` keeps per-item GEMM there, because the bounded performance pass measured
+the vendor call 1.8x/3.8x slower for 8^3/16^3 items on OpenBLAS 0.3.32 at 1T.
 A contraction whose axes are all batch axes is executed as an elementwise
 product (with conjugation and alpha/beta) before GEMM lowering. Forced routes
 that conflict with a provider's declaration (for example `Sequential` with the
@@ -647,6 +649,27 @@ existing claim protocol or execution completes before its Rust borrow ends;
 returning from an enqueue is not permission for conflicting host/device access.
 Mappings, views and early backend destruction obey the same retirement protocol.
 
+**Implemented mapping (#1938 session phase).** The uninitialized output is the
+owning `PooledUninitOutput` lease (pool handle plus single-use token), so
+operand packing draws on the session pool while the destination is checked out.
+The allocated-dot uninit path therefore takes the direct plan or canonical
+packing into the uninit destination, with direct and canonical plans cached
+under separate kinds. The canonical fallback packs only an operand that needs
+it: a permuted view that is already compact column-major and unconjugated is
+borrowed. `_into` avoids full temporaries on these paths:
+- all-batch overwrite products are written in place;
+- the N-ary einsum's last contraction step writes into the destination when its
+  result labels are the output labels;
+- the elementwise fallback reclaims its staged result;
+- reductions write uninitialized storage.
+
+GPU raw `DeviceBytes` need no retirement event: they drop on the capturing
+thread and CubeCL keeps one pool per stream. The cross-thread cuTENSOR
+workspace keeps event retirement. Residuals:
+- a prepared einsum GEMM analysis slot (needs a slot-allocation contract);
+- skipping the LU for an empty solve right-hand side;
+- GPU address memoization keyed on pointer stability.
+
 ### D12. AD/runtime integration and the A2 decision
 
 Reuse #1929's borrowed `EagerSession`, runtime identity checks and compiled
@@ -675,6 +698,18 @@ and test a revised public mode contract; renaming it is not enough. Preserve
 consuming in-place FFT's ownership guarantee. Saved values and factors survive
 dropped forward handles; unrelated live leaves must not become a mandatory cost
 of ordinary tensors. #1803 residual tuning remains separate from AD correctness.
+
+**Implemented mapping (#1938 session phase).** Backward and JVP stage residuals,
+bindings and the seed in one backend session. Gradient duplication and storage
+share one session. Untracked eager results are retained without an allocation
+group, and the weak value/gradient registries sweep dead entries at their
+growth point. The owned and borrowed eager dispatch tables are one table. The
+expanded eager einsum still enters a session per instruction. Moving it into
+one borrowed session would change how a caller's thread-local
+`no_grad`/`capture_trace` applies when the managed executor runs the callback,
+and the existing session fast paths already differ from per-op execution in
+that respect. Resolving it needs an explicit mode-propagation decision; until
+then the per-op path keeps calling-thread semantics. A2 remains deferred.
 
 ## 4. Focused implementation evidence
 

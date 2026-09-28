@@ -1274,9 +1274,17 @@ fn execute_gemm_plan(
     } else {
         CpuBatchStrategy::Auto
     };
+    // A strided batch keeps per-item GEMM unless the whole-batch vendor call
+    // is requested: on OpenBLAS 0.3.32 at one thread `cblas_dgemm_batch` was
+    // 1.8x slower at 8^3 and 3.8x at 16^3 items (the `strided_batch_route`
+    // bench), so the grouped cutoff does not transfer to strided batches.
+    let vendor_batch = match strategy {
+        CpuBatchStrategy::Auto if batch_count > 1 => crate::provider::CpuVendorBatch::Forbidden,
+        _ => vendor_batch_for(policy, strategy),
+    };
     let request = plan
         .request(lhs, rhs, output, accumulation)
-        .with_vendor_batch(vendor_batch_for(policy, strategy));
+        .with_vendor_batch(vendor_batch);
     let outcome = if batch_count == 1 {
         provider.gemm(context, request)?
     } else {
