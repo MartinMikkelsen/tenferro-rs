@@ -129,6 +129,40 @@ Host-representation constructors are spelled `from_host_vec_col_major` /
 `from_host_vec_row_major` so that `TypedTensor::from_vec_col_major` stays
 unambiguous for the default `Dynamic` representation.
 
+**View parameterization status.** The owner half of this mapping is implemented;
+the view half is not, and the deviation is deliberate rather than an oversight.
+`TypedTensorView`/`TypedTensorViewMut` still carry one public type with the
+runtime union storage (`buffer` = host slice | backend | root, plus an optional
+retained region). A host owner's `as_view`/`as_view_mut` already produce a view
+with a plain host-slice buffer and no retained region, so the *runtime* property
+D3 asks for holds; what is missing is the type-level `D` parameter on the two
+view types. Landing it means splitting the view storage per representation and
+re-homing roughly eighty view methods, so it is a change of its own rather than
+an appendix to the owner work. The attempted shape, kept here so the next
+attempt does not rediscover it:
+
+- Extend the sealed `Representation` trait with `ViewStorage<'a, T, R>` and
+  `ViewStorageMut<'a, T, R>`. `Host` selects `&'a [T]` / `&'a mut [T]`, so a host
+  view is a slice, a layout and a placement with no descriptor slot. `Gpu` and
+  `Dynamic` share one union storage (`buffer` + optional retained region),
+  because a group-backed view already knows whether it holds a backend buffer or
+  a root; splitting them further buys no guarantee.
+- Give the trait the accessors the view methods need, so those methods can stay
+  on one `impl<... D: Representation>` block instead of being duplicated:
+  `host_slice`, `backend_buffer`, `backend_allocation`, `retained_root`,
+  `backing_len`, `into_dynamic_storage` (to widen a `Host` view into the union
+  for erased dispatch) and `as_read_only_storage`.
+- Only the view methods that rebuild a view (`transpose_view`, `try_slice`,
+  `try_reshape`, `as_read_only`) need a storage clone; `ViewStorage` is
+  `Clone`, and a host slice clones for free.
+- Keep the constructor blocks on the default `Dynamic` representation, and add
+  host-slice constructors plus the host-only infallible accessors for `Host`.
+- Editing caution learned the hard way: the ~20 view struct literals and the
+  handful of destructuring patterns (`let Self { buffer, root, layout, placement }
+  = self;`) must be rewritten with exact-match edits. Scripted line surgery over
+  this file corrupted it once and had to be reverted, so a linear scan with
+  line-range-limited edits is the safer tool.
+
 ### D2. Allocation ownership, recycling, groups and extraction
 
 For a plain host tensor, adopt a `Vec<T>` directly; no group, `Arc` or extra
