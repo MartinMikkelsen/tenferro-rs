@@ -9,7 +9,7 @@ use tenferro_df64_proof::Df64;
 use tenferro_runtime::ad_support::ones_tensor;
 use tenferro_tensor::BackendSessionHost;
 use tenferro_tensor::{DType, Tensor, TensorRead};
-use tenferro_tensor_core::{ErasedHostTensor, HostTensor};
+use tenferro_tensor::{ErasedHostTensor, HostTensor};
 
 fn external(values: Vec<Df64>, shape: Vec<usize>) -> Tensor {
     Tensor::external(ErasedHostTensor::new(

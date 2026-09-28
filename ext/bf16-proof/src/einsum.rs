@@ -401,11 +401,11 @@ fn contract(op: &dyn ExtensionOp, inputs: &[&Tensor]) -> tenferro_runtime::Resul
 
     // One rounding, after the accumulation rather than at every step.
     let rounded: Vec<Bf16> = accumulated.into_iter().map(Bf16::from_f32).collect();
-    let tensor = tenferro_tensor_core::HostTensor::from_vec_col_major(out_shape, rounded)
+    let tensor = tenferro_tensor::HostTensor::from_vec_col_major(out_shape, rounded)
         .map_err(|source| tenferro_tensor::Error::validation(name, source))
         .map_err(tenferro_runtime::Error::from)?;
     Ok(vec![Tensor::external(
-        tenferro_tensor_core::ErasedHostTensor::new(tensor),
+        tenferro_tensor::ErasedHostTensor::new(tensor),
     )])
 }
 

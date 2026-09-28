@@ -8,7 +8,7 @@ use tenferro_cpu::{scalar_binary_into, CpuBackend};
 use tenferro_df64_proof::{Df64, Df64Add};
 use tenferro_tensor::TensorRead;
 use tenferro_tensor::{BackendSessionHost, Tensor};
-use tenferro_tensor_core::{ErasedHostTensor, HostTensor};
+use tenferro_tensor::{ErasedHostTensor, HostTensor};
 
 fn external<T>(values: Vec<T>) -> Tensor
 where

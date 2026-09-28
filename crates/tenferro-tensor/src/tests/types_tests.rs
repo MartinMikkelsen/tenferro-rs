@@ -2319,7 +2319,7 @@ fn erased_payload_accessors_cover_every_preset_dtype() {
 
 #[test]
 fn an_external_payload_is_carried_by_the_value_type() {
-    use tenferro_tensor_core::{ErasedHostTensor, HostTensor};
+    use crate::{ErasedHostTensor, HostTensor};
 
     let payload =
         ErasedHostTensor::new(HostTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap());

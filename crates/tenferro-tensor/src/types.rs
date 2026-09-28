@@ -5054,7 +5054,7 @@ impl_tensor_scalar!(Complex32, f32, C32, C32);
 #[derive(Debug)]
 enum TensorPayload {
     Native(PresetTensor),
-    External(tenferro_tensor_core::ErasedHostTensor, Placement),
+    External(crate::ErasedHostTensor, Placement),
 }
 
 #[derive(Debug)]
@@ -5124,7 +5124,7 @@ impl Tensor {
     ///
     /// ```rust
     /// use tenferro_tensor::{DType, Tensor};
-    /// use tenferro_tensor_core::{ErasedHostTensor, HostTensor};
+    /// use tenferro_tensor::{ErasedHostTensor, HostTensor};
     ///
     /// let payload = ErasedHostTensor::new(HostTensor::from_vec_col_major(vec![1], vec![1.0_f64])?);
     /// let element = payload.element_type_id();
@@ -5134,7 +5134,7 @@ impl Tensor {
     /// # Ok::<(), tenferro_tensor_core::ValidationError>(())
     /// ```
     #[must_use]
-    pub fn external(payload: tenferro_tensor_core::ErasedHostTensor) -> Self {
+    pub fn external(payload: crate::ErasedHostTensor) -> Self {
         Self {
             payload: TensorPayload::External(payload, Placement::default()),
         }
@@ -5174,7 +5174,7 @@ impl Tensor {
     ///
     /// ```
     /// use tenferro_tensor::Tensor;
-    /// use tenferro_tensor_core::{ErasedHostTensor, HostTensor};
+    /// use tenferro_tensor::{ErasedHostTensor, HostTensor};
     ///
     /// let payload = ErasedHostTensor::new(HostTensor::from_vec_col_major(vec![1], vec![1.0_f64])?);
     /// let tensor = Tensor::external(payload);
@@ -5182,7 +5182,7 @@ impl Tensor {
     /// # Ok::<(), tenferro_tensor_core::ValidationError>(())
     /// ```
     #[must_use]
-    pub fn external_payload(&self) -> Option<&tenferro_tensor_core::ErasedHostTensor> {
+    pub fn external_payload(&self) -> Option<&crate::ErasedHostTensor> {
         match &self.payload {
             TensorPayload::External(payload, _) => Some(payload),
             TensorPayload::Native(_) => None,
@@ -5199,7 +5199,7 @@ impl Tensor {
     ///
     /// ```
     /// use tenferro_tensor::{Placement, Tensor};
-    /// use tenferro_tensor_core::{ErasedHostTensor, HostTensor};
+    /// use tenferro_tensor::{ErasedHostTensor, HostTensor};
     ///
     /// let payload = ErasedHostTensor::new(HostTensor::from_vec_col_major(vec![1], vec![1.0_f64])?);
     /// let tensor = Tensor::external_with_placement(payload, Placement::default());
@@ -5207,10 +5207,7 @@ impl Tensor {
     /// # Ok::<(), tenferro_tensor_core::ValidationError>(())
     /// ```
     #[must_use]
-    pub fn external_with_placement(
-        payload: tenferro_tensor_core::ErasedHostTensor,
-        placement: Placement,
-    ) -> Self {
+    pub fn external_with_placement(payload: crate::ErasedHostTensor, placement: Placement) -> Self {
         Self {
             payload: TensorPayload::External(payload, placement),
         }
@@ -5225,7 +5222,7 @@ impl Tensor {
     ///
     /// ```
     /// use tenferro_tensor::Tensor;
-    /// use tenferro_tensor_core::{ErasedHostTensor, HostTensor};
+    /// use tenferro_tensor::{ErasedHostTensor, HostTensor};
     ///
     /// let mut tensor = Tensor::external(ErasedHostTensor::new(
     ///     HostTensor::from_vec_col_major(vec![1], vec![1.0_f64])?,
@@ -5234,7 +5231,7 @@ impl Tensor {
     /// # Ok::<(), tenferro_tensor_core::ValidationError>(())
     /// ```
     #[must_use]
-    pub fn external_payload_mut(&mut self) -> Option<&mut tenferro_tensor_core::ErasedHostTensor> {
+    pub fn external_payload_mut(&mut self) -> Option<&mut crate::ErasedHostTensor> {
         match &mut self.payload {
             TensorPayload::External(payload, _) => Some(payload),
             TensorPayload::Native(_) => None,

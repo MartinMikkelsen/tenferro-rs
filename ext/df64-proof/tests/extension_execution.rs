@@ -9,7 +9,7 @@ use tenferro_cpu::CpuBackend;
 use tenferro_df64_proof::extension::{apply_total, Df64Total};
 use tenferro_df64_proof::Df64;
 use tenferro_tensor::{AllocationGroup, BackendSessionHost, GroupError, Tensor, TensorRead};
-use tenferro_tensor_core::{ErasedHostTensor, HostTensor};
+use tenferro_tensor::{ErasedHostTensor, HostTensor};
 
 fn external(values: Vec<Df64>) -> Tensor {
     Tensor::external(ErasedHostTensor::new(

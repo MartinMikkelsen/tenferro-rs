@@ -10,7 +10,7 @@ use tenferro_cpu::CpuBackend;
 use tenferro_df64_proof::Df64;
 use tenferro_tensor::validate::{can_convert_dtype, promote_dtype};
 use tenferro_tensor::{BackendSessionHost, DType, Tensor, TensorRead};
-use tenferro_tensor_core::{ErasedHostTensor, HostTensor};
+use tenferro_tensor::{ErasedHostTensor, HostTensor};
 
 fn external_df64(values: &[Df64]) -> Tensor {
     Tensor::external(ErasedHostTensor::new(

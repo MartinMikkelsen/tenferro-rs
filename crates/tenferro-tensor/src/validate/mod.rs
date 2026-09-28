@@ -57,7 +57,7 @@ pub fn promote_dtype(lhs: DType, rhs: DType) -> DType {
     // derived from each member's declared kind, rank, and width. A set that
     // declares a different set of scalars promotes within that set instead of
     // using this one.
-    <tenferro_tensor_core::DefaultScalars as tenferro_tensor_core::ScalarSet>::promote(lhs, rhs)
+    <crate::DefaultScalars as crate::ScalarSet>::promote(lhs, rhs)
 }
 
 /// Return whether public `convert` may change `from` into `to`.

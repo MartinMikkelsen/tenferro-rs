@@ -14,7 +14,7 @@ use tenferro_tensor::{
     BackendSessionHost, MemoryKind, Placement, Tensor, TensorRead, TensorView, TypedTensor,
     TypedTensorView,
 };
-use tenferro_tensor_core::{ErasedHostTensor, HostTensor};
+use tenferro_tensor::{ErasedHostTensor, HostTensor};
 
 use super::super::EagerTensor;
 

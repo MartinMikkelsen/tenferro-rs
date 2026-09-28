@@ -11,7 +11,7 @@
 use std::hint::black_box;
 use std::time::Instant;
 
-use tenferro_tensor_core::{ErasedHostTensor, HostTensor};
+use tenferro_tensor::{ErasedHostTensor, HostTensor};
 
 const ITERATIONS: usize = 200_000;
 const ELEMENTS: usize = 64;

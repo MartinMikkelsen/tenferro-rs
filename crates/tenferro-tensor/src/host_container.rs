@@ -8,11 +8,11 @@
 
 use num_complex::{Complex32, Complex64};
 use tenferro_tensor_core::{
-    col_major_strides, promote_in_set, DType, DynRank, Result, ScalarSet, ShapeMismatch, ShapeVec,
-    SliceSpec, StrideVec, TensorLayout, ValidationError,
+    col_major_strides, promote_in_set, DType, DynRank, Result, ShapeMismatch, ShapeVec, SliceSpec,
+    StrideVec, TensorLayout, ValidationError,
 };
 
-use crate::TensorScalar;
+use crate::{ScalarSet, TensorScalar};
 
 fn checked_product(shape: &[usize]) -> Result<usize> {
     shape.iter().try_fold(1usize, |acc, &dim| {
@@ -669,7 +669,7 @@ impl<'a, T> HostTensorView<'a, T> {
 ///
 /// ```rust
 /// use tenferro_tensor::{DefaultScalars, DType};
-/// use tenferro_tensor_core::ScalarSet;
+/// use tenferro_tensor::ScalarSet;
 ///
 /// let value = DefaultScalars::from_vec_col_major(vec![1], vec![7_i32])?;
 /// assert_eq!(value.tag(), DType::I32);

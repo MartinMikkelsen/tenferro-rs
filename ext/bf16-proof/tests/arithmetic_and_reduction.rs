@@ -8,7 +8,7 @@
 use tenferro_bf16_proof::reduction::{sum_in_f32_accumulation, sum_with_per_step_rounding};
 use tenferro_bf16_proof::{Bf16, Bf16Add, Bf16Mul, Bf16Sub};
 use tenferro_cpu::{scalar_binary_into, scalar_fold};
-use tenferro_tensor_core::HostTensor;
+use tenferro_tensor::HostTensor;
 
 fn values(input: &[f32]) -> HostTensor<Bf16> {
     HostTensor::from_vec_col_major(

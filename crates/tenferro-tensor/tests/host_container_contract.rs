@@ -1,8 +1,10 @@
 use num_complex::{Complex32, Complex64};
+use tenferro_tensor::{
+    DefaultScalars, DefaultScalarsRef, HostTensor, HostTensorView, TensorScalar,
+};
 use tenferro_tensor_core::{
-    col_major_strides, DType, DynRank, ErrorKind, HostTensor, HostTensorView, IntoRankShape, Rank,
-    ShapeMismatch, ShapeVec, SliceSpec, Tensor, TensorLayout, TensorRank, TensorRef, TensorScalar,
-    ValidationError, ValidationKind,
+    col_major_strides, DType, DynRank, ErrorKind, IntoRankShape, Rank, ShapeMismatch, ShapeVec,
+    SliceSpec, TensorLayout, TensorRank, ValidationError, ValidationKind,
 };
 
 #[test]
@@ -15,12 +17,10 @@ fn shape_mismatch_keeps_machine_readable_payload() {
 
     assert_eq!(err.kind(), ValidationKind::ShapeMismatch);
     assert!(matches!(
-        err,
-        ValidationError::ShapeMismatch(ref mismatch)
-            if matches!(mismatch.as_ref(), ShapeMismatch::IncompatibleShapes {
-                ref lhs,
-                ref rhs,
-            } if lhs.as_slice() == [2, 3] && rhs.as_slice() == [2, 4])
+        &err,
+        ValidationError::ShapeMismatch(mismatch)
+            if matches!(mismatch.as_ref(), ShapeMismatch::IncompatibleShapes { lhs, rhs }
+                if lhs.as_slice() == [2, 3] && rhs.as_slice() == [2, 4])
     ));
 
     let source = std::error::Error::source(&err).expect("shape mismatch source");
@@ -306,8 +306,8 @@ fn dynamic_layout_rejects_shape_stride_rank_mismatch() {
 #[test]
 fn scalar_layout_with_static_rank_zero_is_compact() {
     let layout = TensorLayout::<Rank<0>>::compact([]).unwrap();
-    assert_eq!(layout.shape(), &[]);
-    assert_eq!(layout.strides(), &[]);
+    assert_eq!(layout.shape(), &[] as &[usize]);
+    assert_eq!(layout.strides(), &[] as &[isize]);
     assert_eq!(layout.offset(), 0);
     assert!(layout.is_compact_col_major().unwrap());
 }
@@ -341,7 +341,7 @@ fn layout_rejects_non_empty_broadcast_shape_product_overflow() {
 
 #[test]
 fn compact_host_tensor_view_reuses_checked_col_major_stride_helper() {
-    let source = include_str!("../src/lib.rs");
+    let source = include_str!("../src/host_container.rs");
     let helper = source
         .split("fn compact_col_major_strides")
         .nth(1)
@@ -555,7 +555,7 @@ fn slice_view_positive_step_and_empty_slice() {
         }])
         .unwrap();
     assert!(empty.is_empty());
-    assert_eq!(empty.as_slice().unwrap(), &[]);
+    assert_eq!(empty.as_slice().unwrap(), &[] as &[i64]);
 }
 
 #[test]
@@ -612,7 +612,7 @@ fn empty_view_offsets_may_point_one_past_the_borrowed_slice() {
     let data = [1_i32, 2, 3];
     let empty = HostTensorView::from_slice(vec![0], vec![-1], 3, &data).unwrap();
     assert!(empty.is_empty());
-    assert_eq!(empty.as_slice().unwrap(), &[]);
+    assert_eq!(empty.as_slice().unwrap(), &[] as &[i32]);
 
     assert!(matches!(
         HostTensorView::from_slice(vec![0], vec![1], 4, &data).unwrap_err(),
@@ -625,7 +625,7 @@ fn empty_views_are_contiguous_even_with_degenerate_strides() {
     let data = [1_i32, 2, 3];
     let empty = HostTensorView::from_slice(vec![0, 3], vec![1, 0], 3, &data).unwrap();
     assert!(empty.is_empty());
-    assert_eq!(empty.as_slice().unwrap(), &[]);
+    assert_eq!(empty.as_slice().unwrap(), &[] as &[i32]);
     assert_eq!(empty.reshape_view(vec![0]).unwrap().shape(), &[0]);
 
     let layout =
@@ -674,7 +674,7 @@ fn as_slice_accepts_nonzero_offset_and_rejects_non_contiguous_views() {
 
 #[test]
 fn dynamic_tensor_and_view_report_dtype_mismatch() {
-    let tensor = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
+    let tensor = DefaultScalars::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
     assert_eq!(tensor.dtype(), DType::F64);
     assert_eq!(tensor.as_slice::<f64>().unwrap(), &[1.0, 2.0]);
     assert!(matches!(
@@ -692,7 +692,8 @@ fn dynamic_tensor_and_view_report_dtype_mismatch() {
 
 #[test]
 fn tensor_scalar_into_tensor_rejects_shape_data_length_mismatch() {
-    let err = <f64 as TensorScalar>::into_tensor(vec![2, 3].into(), vec![1.0, 2.0]).unwrap_err();
+    let err =
+        <f64 as TensorScalar>::into_default_scalars(vec![2, 3].into(), vec![1.0, 2.0]).unwrap_err();
 
     assert!(matches!(
         err,
@@ -738,7 +739,7 @@ fn typed_owned_accessors_and_exports_cover_success_and_errors() {
 #[test]
 fn scalar_col_major_helpers_cover_scalar_and_empty_shapes() {
     let scalar = HostTensor::from_vec_col_major(vec![], vec![7_i64]).unwrap();
-    assert_eq!(scalar.shape(), &[]);
+    assert_eq!(scalar.shape(), &[] as &[usize]);
     assert_eq!(scalar.into_vec_col_major().1, vec![7]);
 
     let empty = HostTensor::<i64>::from_vec_col_major(vec![0, 3], vec![]).unwrap();
@@ -749,13 +750,13 @@ fn scalar_col_major_helpers_cover_scalar_and_empty_shapes() {
 #[test]
 fn dynamic_tensor_accessors_cover_all_dtype_variants() {
     let tensors = [
-        Tensor::from_vec_col_major(vec![1], vec![1.0_f32]).unwrap(),
-        Tensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap(),
-        Tensor::from_vec_col_major(vec![1], vec![3_i32]).unwrap(),
-        Tensor::from_vec_col_major(vec![1], vec![4_i64]).unwrap(),
-        Tensor::from_vec_col_major(vec![1], vec![true]).unwrap(),
-        Tensor::from_vec_col_major(vec![1], vec![Complex32::new(1.0, 2.0)]).unwrap(),
-        Tensor::from_vec_col_major(vec![1], vec![Complex64::new(3.0, 4.0)]).unwrap(),
+        DefaultScalars::from_vec_col_major(vec![1], vec![1.0_f32]).unwrap(),
+        DefaultScalars::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap(),
+        DefaultScalars::from_vec_col_major(vec![1], vec![3_i32]).unwrap(),
+        DefaultScalars::from_vec_col_major(vec![1], vec![4_i64]).unwrap(),
+        DefaultScalars::from_vec_col_major(vec![1], vec![true]).unwrap(),
+        DefaultScalars::from_vec_col_major(vec![1], vec![Complex32::new(1.0, 2.0)]).unwrap(),
+        DefaultScalars::from_vec_col_major(vec![1], vec![Complex64::new(3.0, 4.0)]).unwrap(),
     ];
     let expected = [
         DType::F32,
@@ -780,14 +781,14 @@ fn dynamic_tensor_accessors_cover_all_dtype_variants() {
         assert!(!view.is_empty());
     }
 
-    let empty = Tensor::from_vec_col_major(vec![0], Vec::<f64>::new()).unwrap();
+    let empty = DefaultScalars::from_vec_col_major(vec![0], Vec::<f64>::new()).unwrap();
     assert!(empty.is_empty());
     assert!(empty.as_view().is_empty());
 }
 
 #[test]
 fn dynamic_tensor_mutation_and_owned_exports_validate_dtype() {
-    let mut tensor = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
+    let mut tensor = DefaultScalars::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
     tensor.as_mut_slice::<f64>().unwrap()[0] = 5.0;
     assert_eq!(tensor.as_slice::<f64>().unwrap(), &[5.0, 2.0]);
     assert!(matches!(
@@ -802,7 +803,7 @@ fn dynamic_tensor_mutation_and_owned_exports_validate_dtype() {
     assert_eq!(shape.as_slice(), &[2]);
     assert_eq!(data, vec![5.0, 2.0]);
 
-    let tensor = Tensor::from_vec_col_major(vec![1], vec![1_i32]).unwrap();
+    let tensor = DefaultScalars::from_vec_col_major(vec![1], vec![1_i32]).unwrap();
     assert!(matches!(
         tensor.into_vec_col_major::<i64>().unwrap_err(),
         ValidationError::DTypeMismatch {
@@ -814,7 +815,7 @@ fn dynamic_tensor_mutation_and_owned_exports_validate_dtype() {
 
 #[test]
 fn dynamic_col_major_and_view_metadata_ops_cover_all_variants() {
-    let tensor = Tensor::from_vec_col_major(vec![1, 2], vec![10_i64, 20]).unwrap();
+    let tensor = DefaultScalars::from_vec_col_major(vec![1, 2], vec![10_i64, 20]).unwrap();
     assert_eq!(tensor.shape(), &[1, 2]);
     assert_eq!(tensor.as_slice::<i64>().unwrap(), &[10, 20]);
 
@@ -905,15 +906,15 @@ fn view_validation_reports_rank_permutation_and_slice_errors() {
 
 #[test]
 fn tensor_ref_reports_tensor_and_view_metadata() {
-    let tensor = Tensor::from_vec_col_major(vec![2], vec![1_i64, 2]).unwrap();
-    let tensor_ref = TensorRef::Tensor(&tensor);
+    let tensor = DefaultScalars::from_vec_col_major(vec![2], vec![1_i64, 2]).unwrap();
+    let tensor_ref = DefaultScalarsRef::Tensor(&tensor);
     assert_eq!(tensor_ref.dtype(), DType::I64);
     assert_eq!(tensor_ref.shape(), &[2]);
     assert_eq!(tensor_ref.rank(), 1);
     assert!(!tensor_ref.is_empty());
 
     let view = tensor.as_view();
-    let view_ref = TensorRef::View(view);
+    let view_ref = DefaultScalarsRef::View(view);
     assert_eq!(view_ref.dtype(), DType::I64);
     assert_eq!(view_ref.shape(), &[2]);
     assert_eq!(view_ref.rank(), 1);

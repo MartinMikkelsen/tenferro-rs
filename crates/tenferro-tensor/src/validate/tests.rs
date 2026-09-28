@@ -748,7 +748,7 @@ fn c64_tiny_nonzero_complex_diagonal_is_nonsingular() {
 #[test]
 fn derived_promotion_matches_the_recorded_lattice() {
     use crate::DType::*;
-    use tenferro_tensor_core::{DefaultScalars, ScalarSet};
+    use crate::{DefaultScalars, ScalarSet};
 
     // The lattice as the hand-written table defined it, recorded here so the
     // derived version is checked against every pair rather than a sample.

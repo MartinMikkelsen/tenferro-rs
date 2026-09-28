@@ -567,9 +567,30 @@ fn tensor_public_surface_has_no_context_free_materialization_api() {
         "to_contiguous",
         "to_tensor",
     ]);
+    // D4 host-container compaction: tenferro-tensor owns a host container whose
+    // compaction copies host elements with no backend, session or device, and
+    // `ErasedHostTensor` exposes exactly that. It is the named exception to this
+    // rule, so those two modules are excluded from the *public materialization*
+    // name check while every other check below still covers them. The exclusion
+    // is only sound while they stay host-only, which the next assertion pins.
+    const HOST_CONTAINER_MODULES: [&str; 2] = ["host_container.rs", "erased_host.rs"];
+    const SESSION_IDENTIFIERS: [&str; 3] =
+        ["BackendSession", "BackendSessionHost", "TensorStructural"];
     for path in files {
         let source = fs::read_to_string(&path).expect("Rust source file must be readable");
         let tokens = rust_tokens(&source);
+        let is_host_container = HOST_CONTAINER_MODULES
+            .iter()
+            .any(|module| path.ends_with(module));
+        if is_host_container {
+            for identifier in SESSION_IDENTIFIERS {
+                assert!(
+                    !source.contains(identifier),
+                    "{} is the host-only container exception and must not reach {identifier}",
+                    path.display()
+                );
+            }
+        }
         assert!(
             !contains_include_macro(&tokens),
             "`include!` can hide generated public API and is forbidden in tenferro-tensor source: {}",
@@ -585,8 +606,10 @@ fn tensor_public_surface_has_no_context_free_materialization_api() {
             path.display(),
             forbidden_macro_identifiers
         );
-        for name in public_function_names(&tokens) {
-            public_functions.entry(name).or_default().push(path.clone());
+        if !is_host_container {
+            for name in public_function_names(&tokens) {
+                public_functions.entry(name).or_default().push(path.clone());
+            }
         }
         for name in function_names(&tokens) {
             all_functions.entry(name).or_default().push(path.clone());

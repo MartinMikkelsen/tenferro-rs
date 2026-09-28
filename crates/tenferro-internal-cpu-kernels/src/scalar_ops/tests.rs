@@ -1,4 +1,4 @@
-use tenferro_tensor_core::HostTensor;
+use tenferro_tensor::HostTensor;
 
 use super::{scalar_binary_into, scalar_fold, AddOp, SubOp};
 
@@ -68,7 +68,7 @@ fn fold_uses_the_caller_operation_and_initial_value() {
 #[test]
 fn integer_arithmetic_through_the_shared_entry_point_wraps() {
     use crate::scalar_ops::{scalar_binary_into, scalar_fold, AddOp, MulOp, SubOp};
-    use tenferro_tensor_core::HostTensor;
+    use tenferro_tensor::HostTensor;
 
     // The preset path wraps for integers, and the shared entry points have to agree with it in
     // every build: the operator would panic on overflow in a debug build instead.

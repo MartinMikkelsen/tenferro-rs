@@ -40,10 +40,13 @@
 /// Execution-capable tensors and backends in this crate remain separate from
 /// the host-only core model during the crate-boundary split.
 pub mod core {
+    pub use crate::{
+        DefaultScalars, DefaultScalarsRef, DefaultScalarsView, HostTensor, HostTensorView,
+    };
     pub use tenferro_tensor_core::{
-        col_major_strides, DType, DynRank, ErrorKind, HostTensor, HostTensorView, IntoShapeVec,
-        Rank, Result, ShapeMismatch, ShapeVec, SliceSpec, StrideVec, Tensor, TensorLayout,
-        TensorRank, TensorRef, TensorScalar, TensorView, ValidationError, ValidationKind,
+        col_major_strides, DType, DynRank, ErrorKind, IntoShapeVec, Rank, Result, ShapeMismatch,
+        ShapeVec, SliceSpec, StrideVec, TensorLayout, TensorRank, TensorScalar, ValidationError,
+        ValidationKind,
     };
 }
 
@@ -74,11 +77,12 @@ pub type Complex64 = Complex<f64>;
 
 pub use tenferro_tensor_core::{
     ErrorKind, IntoRankShape, IntoShapeVec, ShapeMismatch, ShapeVec, SliceSpec, StrideVec,
-    TensorRef, ValidationError, ValidationKind,
+    ValidationError, ValidationKind,
 };
 
 mod erased_host;
 mod host_container;
+mod scalar_set;
 
 pub mod backend;
 pub mod cache;
@@ -107,6 +111,7 @@ pub use config::{
 };
 pub use erased_host::ErasedHostTensor;
 pub use error::{BoxError, Error, ReinterpretError, Result};
+pub use scalar_set::ScalarSet;
 
 pub use host_container::{
     DefaultScalars, DefaultScalarsRef, DefaultScalarsView, HostTensor, HostTensorView,

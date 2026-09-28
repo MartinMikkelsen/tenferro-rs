@@ -6,7 +6,8 @@
 //! [`half::bf16::from_f32`] does. Neither direction is a promotion rule, and neither is implicit.
 
 use crate::Bf16;
-use tenferro_tensor_core::{HostTensor, ValidationError};
+use tenferro_tensor::HostTensor;
+use tenferro_tensor_core::ValidationError;
 
 /// Widen every stored value to `f32`, which is exact.
 ///
@@ -19,7 +20,7 @@ use tenferro_tensor_core::{HostTensor, ValidationError};
 ///
 /// ```rust
 /// use tenferro_bf16_proof::{conversion::widen, Bf16};
-/// use tenferro_tensor_core::HostTensor;
+/// use tenferro_tensor::HostTensor;
 ///
 /// let source = HostTensor::from_vec_col_major(vec![2], vec![Bf16::from_f32(1.0), Bf16::from_f32(2.5)])?;
 /// let widened = widen(&source)?;
@@ -48,7 +49,7 @@ pub fn widen(source: &HostTensor<Bf16>) -> Result<HostTensor<f32>, ValidationErr
 ///
 /// ```rust
 /// use tenferro_bf16_proof::conversion::narrow;
-/// use tenferro_tensor_core::HostTensor;
+/// use tenferro_tensor::HostTensor;
 ///
 /// // 1.00390625 rounds down to 1.0: bfloat16 keeps eight bits of significand.
 /// let source = HostTensor::from_vec_col_major(vec![1], vec![1.00390625_f32])?;

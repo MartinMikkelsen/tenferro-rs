@@ -9,7 +9,8 @@
 
 use tenferro_cpu::scalar_binary_into;
 use tenferro_df64_proof::{Df64, Df64Add, ExtendedSet};
-use tenferro_tensor_core::{HostTensor, ScalarSet};
+use tenferro_tensor::HostTensor;
+use tenferro_tensor::ScalarSet;
 
 fn vector(values: Vec<Df64>) -> HostTensor<Df64> {
     HostTensor::from_vec_col_major(vec![values.len()], values).expect("shape matches data")

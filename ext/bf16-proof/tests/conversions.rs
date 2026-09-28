@@ -6,7 +6,7 @@
 
 use tenferro_bf16_proof::conversion::{narrow, widen};
 use tenferro_bf16_proof::Bf16;
-use tenferro_tensor_core::HostTensor;
+use tenferro_tensor::HostTensor;
 
 fn bf16(values: &[f32]) -> HostTensor<Bf16> {
     HostTensor::from_vec_col_major(
