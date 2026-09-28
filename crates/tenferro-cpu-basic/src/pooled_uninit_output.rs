@@ -292,6 +292,11 @@ impl<T: PoolScalar> PooledUninitOutput<T> {
             TypedTensor::from_vec_col_major_with_recycler(shape, data, recycler)
         } else {
             let tensor = TypedTensor::from_vec_col_major(shape, data)?;
+            // INVARIANT: a reused buffer handed out as a plain output stays
+            // counted in flight until the session settles the pool: normal exit
+            // clears the count, and an unwind replenishes one replacement so the
+            // retained budget stays warm (pinned by
+            // `pooled_uninit_guard_reused_success_handoff_reclaims_exact_capacity`).
             self.checkout = None;
             Ok(tensor)
         }

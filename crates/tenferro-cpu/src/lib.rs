@@ -191,7 +191,6 @@ mod structural;
 mod topology;
 
 use num_complex::{Complex32, Complex64};
-use std::ptr::NonNull;
 #[cfg(test)]
 use strided_kernel::col_major_strides as kernel_col_major_strides;
 #[cfg(test)]
@@ -207,28 +206,6 @@ pub(crate) fn cpu_contraction_unsupported_dtype_message(dtype: DType) -> String 
         "CPU contraction providers support F32/F64/C32/C64{}",
         remedy.unwrap_or_default()
     )
-}
-
-pub(crate) fn erased_raw_strided_mut<'a>(
-    dtype: strided_kernel::KernelDType,
-    data: &'a mut [u8],
-    dims: &'a [usize],
-    strides: &'a [isize],
-    offset: isize,
-) -> strided_kernel::Result<strided_kernel::ErasedRawStridedMut<'a>> {
-    let data_ptr = NonNull::new(data.as_mut_ptr()).unwrap_or_else(NonNull::dangling);
-    // SAFETY: callers derive `data` from a uniquely borrowed initialized host
-    // destination and retain that borrow for the returned descriptor lifetime.
-    unsafe {
-        strided_kernel::ErasedRawStridedMut::from_raw_parts(
-            dtype,
-            data_ptr,
-            data.len(),
-            dims,
-            strides,
-            offset,
-        )
-    }
 }
 
 #[cfg(feature = "provider-src")]
