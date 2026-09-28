@@ -76,6 +76,14 @@ fn provider_exports_and_transfer_defaults_are_normalized() {
     assert!(transfer.contains("TensorRead<'_>"));
 
     let types = source("src/types.rs");
-    assert!(!types.contains("impl<T: Clone"));
+    // The runtime-union tensor must stay non-`Clone`: cloning it could silently
+    // deep-copy or regroup a backend owner. Only the statically host-owned
+    // representation implements `Clone` (D1/D4).
+    assert!(!types.contains("impl<T, R: TensorRank> Clone for TypedTensor<T, R> {"));
+    assert!(!types.contains("impl<T: TensorScalar, R: TensorRank> Clone for TypedTensor<T, R> {"));
+    assert!(
+        types.contains("impl<T: Clone, R: TensorRank> Clone for TypedTensor<T, R, Host> {"),
+        "the statically host-owned representation must offer an explicit host copy"
+    );
     assert!(!types.contains("pub struct ArcTensor"));
 }

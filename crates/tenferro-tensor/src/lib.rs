@@ -106,11 +106,12 @@ pub use error::{BoxError, Error, ReinterpretError, Result};
 pub use types::{
     col_major_strides, AllocationDomainId, AllocationId, BackendStorage, BackendStorageHandle,
     ColMajorView, ColMajorViewMut, CpuDomainId, DType, DeviceAccessError, DeviceAccessRequest,
-    DeviceId, DeviceKind, DynRank, GpuBackendKind, HostAccessError, HostReadGuard, HostWriteGuard,
-    MemoryKind, Placement, PreparedDeviceAccess, Rank, SharedTensorAllocationDomain, StorageBuffer,
-    StridedSliceSpec, Tensor, TensorLayout, TensorRank, TensorRead, TensorScalar, TensorStorageRef,
-    TensorStorageRefMut, TensorValue, TensorView, TensorViewMut, TensorWrite, TypedTensor,
-    TypedTensorView, TypedTensorViewMut, TypedTensorViewMutSplit, TypedTensorWrite,
+    DeviceId, DeviceKind, DynRank, Dynamic, Gpu, GpuBackendKind, Host, HostAccessError,
+    HostReadGuard, HostWriteGuard, MemoryKind, Placement, PreparedDeviceAccess, Rank,
+    Representation, SharedTensorAllocationDomain, StorageBuffer, StridedSliceSpec, Tensor,
+    TensorLayout, TensorRank, TensorRead, TensorScalar, TensorStorageRef, TensorStorageRefMut,
+    TensorValue, TensorView, TensorViewMut, TensorWrite, TypedTensor, TypedTensorView,
+    TypedTensorViewMut, TypedTensorViewMutSplit, TypedTensorWrite,
 };
 
 mod storage;
