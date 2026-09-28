@@ -1514,3 +1514,31 @@ fn dropped_values_do_not_accumulate_in_the_runtime_registries() {
     assert!(ctx.grad_slots.lock().unwrap().len() < 64);
     assert!(keep.tracks_grad());
 }
+
+#[test]
+fn untracked_results_are_retained_without_an_allocation_group() {
+    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
+    let x = EagerTensor::from_tensor_in(
+        Tensor::from_vec_col_major(vec![2], vec![1.0_f64, -2.0]).unwrap(),
+        Arc::clone(&ctx),
+    )
+    .unwrap();
+    let y = ctx.with_eager_session(|s| s.neg(&x)).unwrap().unwrap();
+
+    assert!(!y.tracks_grad());
+    assert!(matches!(
+        y._record.value.container.as_ref(),
+        super::RetentionContainer::Owned { .. }
+    ));
+    // The borrowed view, a duplicate and ownership extraction all still work.
+    assert_eq!(y.value().unwrap().as_slice::<f64>().unwrap(), &[-1.0, 2.0]);
+    assert_eq!(
+        y.duplicate_value().unwrap().as_slice::<f64>().unwrap(),
+        &[-1.0, 2.0]
+    );
+    let owned = match y.into_value() {
+        Ok(tensor) => tensor,
+        Err(_) => panic!("a unique untracked handle must hand its tensor back"),
+    };
+    assert_eq!(owned.as_slice::<f64>().unwrap(), &[-1.0, 2.0]);
+}

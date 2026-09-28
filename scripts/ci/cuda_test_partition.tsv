@@ -101,6 +101,7 @@ host	tenferro-ad	eager::tests::eager_backend_session_dispatches_broadcast_multip
 host	tenferro-ad	eager::tests::eager_backend_session_dispatches_elementwise_into_hook_to_cpu_variants
 host	tenferro-ad	eager::tests::eager_backend_session_identity_belongs_to_the_concrete_backend
 host	tenferro-ad	eager::tests::dropped_values_do_not_accumulate_in_the_runtime_registries
+host	tenferro-ad	eager::tests::untracked_results_are_retained_without_an_allocation_group
 host	tenferro-ad	eager::tests::leaf_session::borrowed_eager_no_grad_guard_is_scoped_inside_backend_callback
 host	tenferro-ad	eager::tests::leaf_session::borrowed_leaf_constructors_share_one_runtime_session
 host	tenferro-ad	eager::tests::leaf_session::gradient_slots_accumulate_on_borrowed_cpu_session

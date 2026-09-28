@@ -767,6 +767,12 @@ enum RetentionContainer {
         /// Boxed because a tensor value is much larger than the pooled variant.
         tensor: Box<Tensor>,
     },
+    /// An untracked result held directly.
+    ///
+    /// No AD group, residual or gradient will share it, so it needs no
+    /// allocation group: the tensor's own storage returns to its pool when the
+    /// record drops, and a unique handle hands the tensor back unchanged.
+    Owned { tensor: Tensor },
 }
 
 /// Read-only descriptor record used by eager handles and the AD registries.
@@ -814,6 +820,20 @@ impl AdValueRecord {
         Ok(Self::from_group(group, slot, dtype, shape))
     }
 
+    /// Retain an untracked result without building an allocation group.
+    fn from_untracked_tensor(tensor: Tensor, op: &'static str) -> Result<Arc<Self>> {
+        if matches!(tensor.dtype(), DType::External(_)) {
+            return Self::from_tensor(tensor, op);
+        }
+        let dtype = tensor.dtype();
+        let shape = tensor.shape().to_vec().into_boxed_slice();
+        Ok(Arc::new(Self {
+            container: Arc::new(RetentionContainer::Owned { tensor }),
+            dtype,
+            shape,
+        }))
+    }
+
     fn tensor_read(&self, op: &'static str) -> Result<TensorRead<'_>> {
         match self.container.as_ref() {
             RetentionContainer::Pooled { group, slot } => {
@@ -831,10 +851,17 @@ impl AdValueRecord {
                 })
             }
             RetentionContainer::CallerOwned { tensor } => Ok(TensorRead::from_tensor(tensor)),
+            RetentionContainer::Owned { tensor } => Ok(TensorRead::from_tensor(tensor)),
         }
     }
 
     fn value(&self, op: &'static str) -> Result<ValueGuard<'_>> {
+        if let RetentionContainer::Owned { tensor } = self.container.as_ref() {
+            // A preset-dtype owned tensor always has a typed borrowed view.
+            return Ok(ValueGuard {
+                view: TensorRead::from_tensor(tensor).tensor_view(),
+            });
+        }
         match self.tensor_read(op)? {
             TensorRead::View(view) => Ok(ValueGuard { view }),
             // A caller-owned payload has no typed descriptor view, so a path that
@@ -5145,7 +5172,8 @@ impl EagerTensor {
     }
 
     pub(crate) fn new_untracked_result(ctx: Arc<EagerRuntime>, tensor: Tensor) -> Result<Self> {
-        let value = AdValueRecord::from_tensor(tensor, "EagerTensor::new_untracked_result")?;
+        let value =
+            AdValueRecord::from_untracked_tensor(tensor, "EagerTensor::new_untracked_result")?;
         Ok(Self::new_untracked_value_record(ctx, value, None))
     }
 
@@ -5428,6 +5456,7 @@ impl EagerTensor {
         let (group, slot) = match container {
             // A caller-owned payload is handed back to its owner unchanged.
             RetentionContainer::CallerOwned { tensor } => return Ok(*tensor),
+            RetentionContainer::Owned { tensor } => return Ok(tensor),
             RetentionContainer::Pooled { group, slot } => (group, slot),
         };
         match group.into_tensor(slot) {
