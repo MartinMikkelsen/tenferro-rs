@@ -115,6 +115,20 @@ deleted merely because the compact default uses a tagged storage union. Runtime
 owning erasure keeps its required `Send + Sync + 'static` bounds; a local host
 container with non-Send elements need not be eligible for that erasure.
 
+**Implemented mapping (#1938 ownership phase).** `TypedTensor<T, R, D>` carries
+shape and placement once on the tensor, and `D::Storage<T, R>` is the owned
+payload: `Host` is the plain/pooled `Vec<T>`, `Gpu` is the group-backed root
+(provider authority, identity and retirement), and `Dynamic` is the runtime
+union. An owner's layout is derived from its shape; it is not stored twice.
+`Gpu` denotes the *group-backed* payload rather than a proven device ordinal, so
+a host-managed group root is group-backed and its host access stays fallible.
+Only the statically `Host` representation exposes infallible host access,
+`Clone`, `Index`/`IndexMut` and owning host mappings; representation narrowing
+(`into_host`/`into_gpu`) is checked and returns the unchanged owner on failure.
+Host-representation constructors are spelled `from_host_vec_col_major` /
+`from_host_vec_row_major` so that `TypedTensor::from_vec_col_major` stays
+unambiguous for the default `Dynamic` representation.
+
 ### D2. Allocation ownership, recycling, groups and extraction
 
 For a plain host tensor, adopt a `Vec<T>` directly; no group, `Arc` or extra
