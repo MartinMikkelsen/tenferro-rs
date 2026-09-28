@@ -703,13 +703,18 @@ of ordinary tensors. #1803 residual tuning remains separate from AD correctness.
 bindings and the seed in one backend session. Gradient duplication and storage
 share one session. Untracked eager results are retained without an allocation
 group, and the weak value/gradient registries sweep dead entries at their
-growth point. The owned and borrowed eager dispatch tables are one table. The
-expanded eager einsum still enters a session per instruction. Moving it into
-one borrowed session would change how a caller's thread-local
-`no_grad`/`capture_trace` applies when the managed executor runs the callback,
-and the existing session fast paths already differ from per-op execution in
-that respect. Resolving it needs an explicit mode-propagation decision; until
-then the per-op path keeps calling-thread semantics. A2 remains deferred.
+growth point. The owned and borrowed eager dispatch tables are one table.
+Revised mode contract (maintainer decision): `with_execution_session`,
+`with_eager_session` and the extension execution context carry the calling
+thread's `no_grad`/`capture_trace` depths into the callback for its duration,
+also when the managed executor runs it on a worker; a guard started inside the
+callback stays local to it, and the worker's counters are restored on return
+or unwind. Before this, an outer guard reached per-op execution but not a
+session callback, so binary einsum (a session fast path) and N-ary einsum
+disagreed under `no_grad`. With the contract in place the expanded eager
+einsum runs its whole program in one borrowed session
+(`EagerSession::apply_standard_op`, `EagerSession::backend_session`). A2
+remains deferred.
 
 ## 4. Focused implementation evidence
 

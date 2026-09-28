@@ -237,9 +237,9 @@ because its fallback re-enters `with_execution_session`. Semantic recording also
 materializes untracked operands when a tracked operation consumes them: that
 copy must use the active session for core, view, and extension ops, rather than
 re-entering the backend during trace construction. CPU callbacks may run on a
-worker thread; thread-local `no_grad` / `capture_trace` guards needed by a
-borrowed session must be started inside its callback, not assumed to transfer
-from the calling thread. This does not implement A2's deferred AD wiring.
+worker thread; the eager session entry therefore carries the calling thread's
+`no_grad` / `capture_trace` depths into the callback for its duration (#1938
+D12), while a guard started inside the callback stays local to it. This does not implement A2's deferred AD wiring.
 Host-only leaf import
 can remain session-free, but a leaf constructor, copy, or retained-value
 materialization that actually executes on a backend also receives the borrowed

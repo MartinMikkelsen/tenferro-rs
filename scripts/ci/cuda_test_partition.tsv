@@ -128,6 +128,9 @@ host	tenferro-ad	eager::tests::leaf_session::runtime_bound_triangles_preserve_va
 host	tenferro-ad	eager::tests::leaf_session::runtime_bound_unary_family_preserves_values_and_ad
 host	tenferro-ad	eager::tests::leaf_session::tracked_eager_operation_uses_the_borrowed_session_once
 host	tenferro-ad	eager::tests::leaf_session::backward_enters_a_bounded_number_of_backend_sessions
+host	tenferro-ad	eager::tests::leaf_session::calling_thread_no_grad_governs_a_session_callback_on_a_worker
+host	tenferro-ad	eager::tests::leaf_session::a_guard_started_inside_the_callback_stays_local_to_it
+host	tenferro-ad	eager::tests::leaf_session::calling_thread_capture_trace_governs_a_session_callback
 host	tenferro-ad	eager_exec::tests::generated_outputs_use_the_callers_borrowed_session
 host	tenferro-ad	extension::tests::eager_extension_borrowed_recording_materializes_untracked_inputs_in_session
 host	tenferro-ad	extension::tests::eager_extension_native_context_fallback_requires_a_separate_region

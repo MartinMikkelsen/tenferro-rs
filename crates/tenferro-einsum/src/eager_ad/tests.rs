@@ -331,11 +331,15 @@ fn eager_outer_product_can_use_untracked_backend_broadcast_multiply() {
     .unwrap();
     let rhs = EagerTensor::from_tensor_in(
         Tensor::from_vec_col_major(vec![3], vec![5.0_f64, 7.0, 11.0]).unwrap(),
-        ctx,
+        ctx.clone(),
     )
     .unwrap();
 
-    let out = backend_broadcast_multiply_untracked(&lhs, &[2, 3], &[0], &rhs, &[2, 3], &[1])
+    let out = ctx
+        .with_eager_session(|session| {
+            backend_broadcast_multiply_untracked(session, &lhs, &[2, 3], &[0], &rhs, &[2, 3], &[1])
+        })
+        .unwrap()
         .unwrap()
         .expect("untracked CPU eager tensors should use backend broadcast multiply");
 

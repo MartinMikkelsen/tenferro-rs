@@ -960,3 +960,65 @@ fn backward_enters_a_bounded_number_of_backend_sessions() -> Result<(), Error> {
     assert!(grads.grad(&w.key).is_some());
     Ok(())
 }
+
+#[test]
+fn calling_thread_no_grad_governs_a_session_callback_on_a_worker() -> Result<(), Error> {
+    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
+    let x = ctx.variable_from(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?)?;
+    let caller = std::thread::current().id();
+
+    let (inside, y) = {
+        let _guard = ctx.no_grad();
+        ctx.with_eager_session(|s| Ok::<_, Error>((std::thread::current().id(), s.neg(&x)?)))??
+    };
+    // The premise: the managed CPU executor ran the callback on a worker.
+    assert_ne!(inside, caller);
+    assert!(!y.tracks_grad(), "the outer no_grad must reach the worker");
+
+    // The worker's counters are restored: without the guard, recording resumes
+    // for a callback that may land on the same worker.
+    let z = ctx.with_eager_session(|s| s.neg(&x))??;
+    assert!(z.tracks_grad());
+    Ok(())
+}
+
+#[test]
+fn a_guard_started_inside_the_callback_stays_local_to_it() -> Result<(), Error> {
+    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
+    let x = ctx.variable_from(Tensor::from_vec_col_major(vec![1], vec![3.0_f64])?)?;
+    let (untracked, tracked) = ctx.with_eager_session(|s| {
+        let untracked = {
+            let _guard = ctx.no_grad();
+            s.neg(&x)?
+        };
+        Ok::<_, Error>((untracked, s.neg(&x)?))
+    })??;
+    assert!(!untracked.tracks_grad());
+    assert!(tracked.tracks_grad());
+    // Nothing leaked back to the calling thread.
+    let after = ctx.with_eager_session(|s| s.neg(&x))??;
+    assert!(after.tracks_grad());
+    Ok(())
+}
+
+#[test]
+fn calling_thread_capture_trace_governs_a_session_callback() -> Result<(), Error> {
+    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
+    let x = EagerTensor::from_tensor_in(
+        Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?,
+        ctx.clone(),
+    )?;
+    let y = {
+        let _capture = ctx.capture_trace();
+        ctx.with_eager_session(|s| s.mul(&x, &x))??
+    };
+    let seed = EagerTensor::from_tensor_in(
+        Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 1.0])?,
+        ctx.clone(),
+    )?;
+    // Differentiating with respect to the untracked leaf needs the semantic
+    // trace that only the outer capture guard makes the callback record.
+    let dx = ctx.vjp(&y, &x, &seed)?;
+    assert_eq!(dx.value()?.as_slice::<f64>()?, &[2.0, 4.0]);
+    Ok(())
+}

@@ -118,6 +118,67 @@ pub(crate) fn eager_capture_active() -> bool {
     EAGER_CAPTURE_DEPTH.with(|depth| depth.get() > 0)
 }
 
+/// The calling thread's `no_grad`/`capture_trace` depths, carried into a
+/// backend-session callback.
+///
+/// A CPU session may run its callback on an executor worker, where the calling
+/// thread's thread-local guards are invisible. The callback thread adds these
+/// depths for the callback's duration, so a guard held around a session entry
+/// governs the operations inside it; guards started inside the callback stay
+/// local to it. On the calling thread itself nothing changes.
+#[derive(Clone, Copy)]
+struct InheritedEagerModes {
+    thread: std::thread::ThreadId,
+    no_grad: usize,
+    capture: usize,
+}
+
+impl InheritedEagerModes {
+    fn capture() -> Self {
+        Self {
+            thread: std::thread::current().id(),
+            no_grad: EAGER_NO_GRAD_DEPTH.with(Cell::get),
+            capture: EAGER_CAPTURE_DEPTH.with(Cell::get),
+        }
+    }
+
+    /// Apply the captured depths on the current thread until the returned
+    /// scope drops, including on unwind.
+    fn enter(self) -> InheritedEagerModesScope {
+        let inherited = if std::thread::current().id() == self.thread {
+            Self {
+                no_grad: 0,
+                capture: 0,
+                ..self
+            }
+        } else {
+            self
+        };
+        EAGER_NO_GRAD_DEPTH.with(|depth| depth.set(depth.get() + inherited.no_grad));
+        EAGER_CAPTURE_DEPTH.with(|depth| depth.set(depth.get() + inherited.capture));
+        InheritedEagerModesScope {
+            inherited,
+            _not_send: PhantomData,
+        }
+    }
+}
+
+struct InheritedEagerModesScope {
+    inherited: InheritedEagerModes,
+    // Restores this thread's counters, so it must drop where it was created.
+    _not_send: PhantomData<Rc<()>>,
+}
+
+impl Drop for InheritedEagerModesScope {
+    fn drop(&mut self) {
+        let InheritedEagerModes {
+            no_grad, capture, ..
+        } = self.inherited;
+        EAGER_NO_GRAD_DEPTH.with(|depth| depth.set(depth.get().saturating_sub(no_grad)));
+        EAGER_CAPTURE_DEPTH.with(|depth| depth.set(depth.get().saturating_sub(capture)));
+    }
+}
+
 fn eager_semantic_vjp_enabled() -> bool {
     #[cfg(test)]
     if let Some(value) = EAGER_SEMANTIC_VJP_ENABLED_OVERRIDE.with(|state| *state.borrow()) {
@@ -2642,6 +2703,83 @@ impl EagerSession<'_> {
         EagerTensor::nary_op_in_session(&[&first, &second, &third], op, self.backend)
     }
 
+    /// Apply one standard tensor op in this borrowed session and record it
+    /// for AD when needed.
+    ///
+    /// This is the session-borrowing form of
+    /// [`crate::extension::apply_standard_op`]: an extension that expands into
+    /// several ordinary `StdTensorOp` nodes runs them all in one backend
+    /// session instead of entering one per node.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_ad::{EagerRuntime, Tensor};
+    /// use tenferro_cpu::CpuBackend;
+    /// use tenferro_ops::std_tensor_op::StdTensorOp;
+    ///
+    /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
+    /// let y = ctx.with_eager_session(|s| {
+    ///     let x = s.variable_from(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?)?;
+    ///     let negated = s.apply_standard_op(StdTensorOp::Neg, &[&x])?;
+    ///     s.apply_standard_op(StdTensorOp::Mul, &[&negated, &x])
+    /// })??;
+    /// assert_eq!(y.value()?.as_slice::<f64>()?, &[-1.0, -4.0]);
+    /// assert!(y.tracks_grad());
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::TensorRuntime`] containing
+    /// [`tenferro_tensor::ValidationError::InvalidArgument`] for an extension
+    /// op, [`Error::ContextMismatch`] for a tensor from another runtime, a
+    /// typed input-count error, or the backend's typed execution error.
+    pub fn apply_standard_op(
+        &mut self,
+        op: StdTensorOp,
+        inputs: &[&EagerTensor],
+    ) -> Result<EagerTensor> {
+        if matches!(op, StdTensorOp::Extension(_)) {
+            return Err(Error::invalid_argument(
+                "EagerSession::apply_standard_op",
+                ErrorPhase::Execution,
+                "op",
+                "Extension ops must be passed to apply_eager",
+            ));
+        }
+        for input in inputs {
+            self.ensure_runtime(input)?;
+        }
+        EagerTensor::nary_op_in_session(inputs, op, self.backend)
+    }
+
+    /// Borrow the backend session this eager session runs on.
+    ///
+    /// Extension crates use it to run their backend kernels on untracked
+    /// values inside the same execution region instead of entering a second
+    /// session, which would be rejected as reentry. It grants the same access
+    /// as [`EagerRuntime::with_execution_session`].
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_ad::{EagerRuntime, Tensor};
+    /// use tenferro_cpu::CpuBackend;
+    /// use tenferro_tensor::TensorRead;
+    ///
+    /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
+    /// let x = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, -2.0])?;
+    /// let copy = ctx.with_eager_session(|s| {
+    ///     s.backend_session().to_contiguous_read(TensorRead::from_tensor(&x))
+    /// })??;
+    /// assert_eq!(copy.as_slice::<f64>()?, &[1.0, -2.0]);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn backend_session(&mut self) -> &mut dyn BackendSession {
+        &mut *self.backend
+    }
+
     fn run_unary(&mut self, input: &EagerTensor, op: StdTensorOp) -> Result<EagerTensor> {
         self.ensure_runtime(input)?;
         EagerTensor::nary_op_in_session(&[input], op, self.backend)
@@ -3509,17 +3647,22 @@ impl EagerRuntime {
         // Lock order: the eager backend owner lock is taken before admission,
         // and admission never waits on this lock while holding a permit.
         let mut backend = self.lock_backend()?;
-        Ok(backend.with_backend_session(f)?)
+        let modes = InheritedEagerModes::capture();
+        Ok(backend.with_backend_session(move |session| {
+            let _modes = modes.enter();
+            f(session)
+        })?)
     }
 
     /// Enter a runtime-bound eager session for one or more eager operations.
     ///
     /// Only tensors owned by this runtime may execute on the borrowed session;
     /// the backend lock and the CPU execution permit remain live for the callback.
-    /// The CPU backend may run the callback on a worker thread. Start thread-local
-    /// [`Self::no_grad`] and [`Self::capture_trace`] guards *inside* the callback
-    /// when their scope must include its operations; a guard on the calling thread
-    /// is not transferred to that worker.
+    /// The CPU backend may run the callback on a worker thread; the calling
+    /// thread's [`Self::no_grad`] and [`Self::capture_trace`] guards still govern
+    /// it, because the callback inherits their state for its duration. Guards
+    /// started inside the callback end with their own scope and never reach the
+    /// calling thread.
     ///
     /// # Examples
     ///
@@ -3616,7 +3759,9 @@ impl EagerRuntime {
         let mut backend = self.lock_backend()?;
         let mut extension_cache_guard = self.lock_extension_caches()?;
         let extension_caches: &mut ExtensionCacheStore = &mut extension_cache_guard;
+        let modes = InheritedEagerModes::capture();
         Ok(backend.with_backend_session(move |session| {
+            let _modes = modes.enter();
             let mut extension_ctx =
                 tenferro_runtime::ExtensionExecutionContext::new(session, extension_caches);
             f(&mut extension_ctx)
