@@ -711,3 +711,79 @@ fn descriptor_plan_allocation_count_separates_contiguous_and_strided() {
         "a strided descriptor owns exactly one boxed plan"
     );
 }
+
+/// Extraction must not change values: a view-shaped descriptor is refused and
+/// the group keeps reading the view (#1938 PR review).
+#[test]
+fn view_descriptors_are_refused_by_extraction_and_keep_their_values() {
+    let base = || crate::Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]);
+    let cases: Vec<(&str, crate::TensorValue, Vec<f64>)> = vec![
+        (
+            "transpose",
+            crate::TensorValue::from_tensor(base().unwrap())
+                .transpose_view([1, 0])
+                .unwrap(),
+            vec![1.0, 3.0, 2.0, 4.0],
+        ),
+        (
+            "offset slice",
+            crate::TensorValue::from_tensor(
+                crate::Tensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap(),
+            )
+            .slice_view(&crate::SliceConfig {
+                starts: vec![1],
+                limits: vec![3],
+                strides: vec![1],
+            })
+            .unwrap(),
+            vec![2.0, 3.0],
+        ),
+        (
+            "broadcast",
+            crate::TensorValue::from_tensor(
+                crate::Tensor::from_vec_col_major(vec![2], vec![5.0_f64, 6.0]).unwrap(),
+            )
+            .broadcast_in_dim_view([2, 2], [0])
+            .unwrap(),
+            vec![5.0, 6.0, 5.0, 6.0],
+        ),
+    ];
+    for (name, value, expected) in cases {
+        let Ok((group, slot, _, _)) = value.try_into_group_parts() else {
+            panic!("{name}: a pooled value enters a group");
+        };
+        let (group, error) = match group.into_tensor(slot) {
+            Ok(tensor) => panic!("{name}: extracted {:?}", tensor.as_slice::<f64>()),
+            Err(failure) => failure,
+        };
+        assert_eq!(
+            error,
+            GroupError::NonCompactDescriptor { slot: slot.index() },
+            "{name}"
+        );
+        // The unchanged group still reads the logical view values.
+        let read = group.read_view(slot).unwrap();
+        let mut values = Vec::new();
+        let crate::TensorView::F64(view) = read.tensor_view() else {
+            panic!("{name}: an f64 descriptor");
+        };
+        let shape = view.shape().to_vec();
+        let mut index = vec![0usize; shape.len()];
+        for _ in 0..shape.iter().product::<usize>() {
+            values.push(*view.get(&index).unwrap());
+            for (axis, extent) in shape.iter().enumerate() {
+                index[axis] += 1;
+                if index[axis] < *extent {
+                    break;
+                }
+                index[axis] = 0;
+            }
+        }
+        assert_eq!(values, expected, "{name}");
+    }
+
+    // A compact whole-allocation descriptor still extracts.
+    let (group, slots) = AllocationGroup::from_tensors(vec![base().unwrap()]).unwrap();
+    let tensor = group.into_tensor(slots[0]).unwrap();
+    assert_eq!(tensor.as_slice::<f64>().unwrap(), &[1.0, 2.0, 3.0, 4.0]);
+}

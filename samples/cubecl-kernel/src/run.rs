@@ -60,7 +60,7 @@ pub fn run_scale_check() -> tenferro_tensor::Result<()> {
             with_cuda_exec_session(session, |exec| {
                 run_in_cuda_session(OP, exec, host_input, host_output, n)
             })
-        })
+        })?
         .ok_or_else(|| tenferro_tensor::Error::runtime_state(OP, "CUDA session rejected backend"))?
 }
 
@@ -117,7 +117,9 @@ fn run_in_cuda_session(
     exec.synchronize()?;
     let downloaded = download_tensor(&runtime, &output)?;
     let host = downloaded.into_typed::<f32>().expect("f32 download");
-    let (shape, values): (Vec<usize>, Vec<f32>) = host.into_vec_col_major()?;
+    let (shape, values): (Vec<usize>, Vec<f32>) = host
+        .into_vec_col_major()
+        .map_err(|failure| failure.into_parts().1)?;
     assert_eq!(shape, vec![n]);
     for (i, value) in values.iter().enumerate() {
         let expected = (i as f32) * 2.0;

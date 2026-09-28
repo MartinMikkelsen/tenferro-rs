@@ -99,6 +99,8 @@ thread_local! {
         RefCell::new(HashMap::new());
     static EAGER_NO_GRAD_DEPTH: Cell<usize> = const { Cell::new(0) };
     static EAGER_CAPTURE_DEPTH: Cell<usize> = const { Cell::new(0) };
+    /// Runtimes whose session callback is running on this thread.
+    static EAGER_ENTERED_RUNTIMES: RefCell<Vec<ContextId>> = const { RefCell::new(Vec::new()) };
     #[cfg(test)]
     static EAGER_OP_PROFILE_ENABLED_OVERRIDE: RefCell<Option<bool>> = const { RefCell::new(None) };
     #[cfg(test)]
@@ -160,6 +162,40 @@ impl InheritedEagerModes {
             inherited,
             _not_send: PhantomData,
         }
+    }
+}
+
+/// Marks one runtime's session callback as running on the current thread, so a
+/// nested entry into the same runtime from that callback is rejected before it
+/// waits on the runtime's own owner lock.
+struct EnteredRuntimeScope {
+    id: ContextId,
+    // Pops this thread's entry, so it must drop where it was created.
+    _not_send: PhantomData<Rc<()>>,
+}
+
+impl EnteredRuntimeScope {
+    fn enter(id: ContextId) -> Self {
+        EAGER_ENTERED_RUNTIMES.with(|entered| entered.borrow_mut().push(id));
+        Self {
+            id,
+            _not_send: PhantomData,
+        }
+    }
+
+    fn is_entered(id: ContextId) -> bool {
+        EAGER_ENTERED_RUNTIMES.with(|entered| entered.borrow().contains(&id))
+    }
+}
+
+impl Drop for EnteredRuntimeScope {
+    fn drop(&mut self) {
+        EAGER_ENTERED_RUNTIMES.with(|entered| {
+            let mut entered = entered.borrow_mut();
+            if let Some(position) = entered.iter().rposition(|id| *id == self.id) {
+                entered.remove(position);
+            }
+        });
     }
 }
 
@@ -2892,6 +2928,15 @@ impl fmt::Debug for EagerRuntime {
 
 impl EagerRuntime {
     pub(crate) fn lock_backend(&self) -> Result<MutexGuard<'_, EagerBackend>> {
+        // A callback of this runtime's session holds the owner lock, so waiting
+        // on it here would never return: report the reentry instead. Other
+        // threads still wait for the lock and are served in turn.
+        if EnteredRuntimeScope::is_entered(self.id) {
+            return Err(tenferro_tensor::SessionEntryError::Reentered {
+                backend: "EagerRuntime",
+            }
+            .into());
+        }
         self.backend.lock().map_err(|_| {
             Error::runtime_state("eager_backend", ErrorPhase::Execution, "lock poisoned")
         })
@@ -3648,8 +3693,10 @@ impl EagerRuntime {
         // and admission never waits on this lock while holding a permit.
         let mut backend = self.lock_backend()?;
         let modes = InheritedEagerModes::capture();
+        let id = self.id;
         Ok(backend.with_backend_session(move |session| {
             let _modes = modes.enter();
+            let _entered = EnteredRuntimeScope::enter(id);
             f(session)
         })?)
     }
@@ -3762,8 +3809,10 @@ impl EagerRuntime {
         let mut extension_cache_guard = self.lock_extension_caches()?;
         let extension_caches: &mut ExtensionCacheStore = &mut extension_cache_guard;
         let modes = InheritedEagerModes::capture();
+        let id = self.id;
         Ok(backend.with_backend_session(move |session| {
             let _modes = modes.enter();
+            let _entered = EnteredRuntimeScope::enter(id);
             let mut extension_ctx =
                 tenferro_runtime::ExtensionExecutionContext::new(session, extension_caches);
             f(&mut extension_ctx)
@@ -6059,18 +6108,17 @@ impl EagerTensor {
                     Err(IntoValueError::NotUnique(handle)) => {
                         handle.duplicate_value_in_session(session)?
                     }
-                    Err(IntoValueError::Extract { error, .. }) => {
-                        return Err(Error::runtime_state_source(
-                            "EagerTensor::backward",
-                            ErrorPhase::Execution,
-                            error,
-                        ));
+                    // A gradient whose retained layout is a view (for example a
+                    // transpose) cannot be extracted as an owned tensor; copy
+                    // it to a compact tensor instead.
+                    Err(IntoValueError::Extract { value, .. }) => {
+                        value.duplicate_value_in_session(session)?
                     }
                 };
                 cotangents.insert(key, tensor);
             }
             self.ctx.store_grads(&cotangents, session)?;
-            Ok(cotangents)
+            Ok::<_, Error>(cotangents)
         })??;
         Gradients::from_tensors(cotangents)
     }

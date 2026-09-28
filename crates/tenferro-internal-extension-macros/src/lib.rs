@@ -134,8 +134,10 @@ pub fn derive_extension_family_id(input: TokenStream) -> TokenStream {
 ///
 /// * `execute_reads` runs the operation inside the runtime-formed context and
 ///   has this signature:
-///   `fn<B: BackendBound + 'static>(&OpType, &[TensorRead<'_>], &mut ExtensionExecutionContext<'_, B>)`.
-///   It is for extensions that genuinely need the owner.
+///   `fn<B: BackendSession + ?Sized>(&OpType, &[TensorRead<'_>], &mut ExtensionExecutionContext<'_, B>)`.
+///   The generated owner entry opens the backend session and the context
+///   borrows it (`B` is `dyn BackendSession`), so the callback never runs on
+///   the owner. Prefer the session route below for new extensions.
 /// * the session route (`execute_in_session` + `session_supported`) is the
 ///   preferred one: `session_supported` has signature
 ///   `fn<B: BackendBound + 'static>(&OpType) -> bool` and `execute_in_session`
@@ -240,11 +242,17 @@ fn expand_extension_runtime(args: RuntimeArgs) -> syn::Result<proc_macro2::Token
                         tenferro_runtime::ErrorPhase::Execution,
                         source,
                     ))?;
-                let mut ctx = tenferro_runtime::ExtensionExecutionContext::new(
-                    backend,
-                    extension_caches,
-                );
-                Ok(#execute_reads(&self.op, inputs, &mut ctx)?)
+                // As in the session route, the owner entry forms the session and
+                // the callback's context borrows that session, never the owner.
+                backend.with_backend_session(
+                    |session| -> tenferro_runtime::Result<Vec<tenferro_tensor::Tensor>> {
+                        let mut ctx = tenferro_runtime::ExtensionExecutionContext::new(
+                            session,
+                            extension_caches,
+                        );
+                        Ok(#execute_reads(&self.op, inputs, &mut ctx)?)
+                    },
+                )?
             }
         },
         (Some(execute_reads), Some(_)) => {

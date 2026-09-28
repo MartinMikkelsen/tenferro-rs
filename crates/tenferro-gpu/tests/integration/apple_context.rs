@@ -1,7 +1,7 @@
 #![cfg(all(feature = "webgpu", target_os = "macos"))]
 
 use tenferro_gpu::{apple::AppleContext, apple::AppleTransferStats};
-use tenferro_tensor::{HostAccessError, Tensor, TensorDot, TypedTensor};
+use tenferro_tensor::{BackendSessionHost, HostAccessError, Tensor, TensorRead, TypedTensor};
 
 fn apple_context() -> Option<AppleContext> {
     match AppleContext::new() {
@@ -114,16 +114,19 @@ fn metal_output_stays_in_the_context_domain_without_host_transfers() {
     let before = context.transfer_stats();
     let mut metal = context.metal_backend().clone();
     let output = metal
-        .dot_general(
-            &lhs,
-            &rhs,
-            &tenferro_tensor::DotGeneralConfig {
-                lhs_contracting_dims: [1].as_slice().into(),
-                rhs_contracting_dims: [0].as_slice().into(),
-                lhs_batch_dims: [].as_slice().into(),
-                rhs_batch_dims: [].as_slice().into(),
-            },
-        )
+        .with_backend_session(|session| {
+            session.dot_general_read(
+                TensorRead::from_tensor(&lhs),
+                TensorRead::from_tensor(&rhs),
+                &tenferro_tensor::DotGeneralConfig {
+                    lhs_contracting_dims: [1].as_slice().into(),
+                    rhs_contracting_dims: [0].as_slice().into(),
+                    lhs_batch_dims: [].as_slice().into(),
+                    rhs_batch_dims: [].as_slice().into(),
+                },
+            )
+        })
+        .unwrap()
         .unwrap();
     metal.synchronize().unwrap();
     assert_eq!(

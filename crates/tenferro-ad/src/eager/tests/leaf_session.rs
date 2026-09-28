@@ -1067,3 +1067,47 @@ fn inherited_modes_apply_on_another_thread_and_are_restored() {
         assert!(eager_grad_recording_enabled());
     }
 }
+
+#[test]
+fn into_value_refuses_a_view_layout_instead_of_changing_values() -> Result<(), Error> {
+    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::with_threads(1).unwrap())?;
+    let x = ctx.constant_from(Tensor::from_vec_col_major(
+        vec![2, 2],
+        vec![1.0_f64, 2.0, 3.0, 4.0],
+    )?)?;
+    let y = ctx.with_eager_session(|s| s.transpose(&x, &[1, 0]))??;
+    let handle = match y.into_value() {
+        Ok(tensor) => panic!("extracted {:?}", tensor.as_slice::<f64>()),
+        Err(crate::IntoValueError::Extract { value, .. }) => value,
+        Err(crate::IntoValueError::NotUnique(_)) => panic!("the handle is unique"),
+    };
+    // The handle comes back unchanged and still reads the transposed values;
+    // an explicit duplicate is the compact copy.
+    let copy = ctx.with_eager_session(|s| s.duplicate_value(&handle))??;
+    assert_eq!(copy.as_slice::<f64>()?, &[1.0, 3.0, 2.0, 4.0]);
+    Ok(())
+}
+
+#[test]
+fn nested_entry_into_the_same_runtime_is_rejected_without_deadlock() -> Result<(), Error> {
+    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::with_threads(1).unwrap())?;
+    let x = ctx.variable_from(Tensor::from_vec_col_major(vec![1], vec![2.0_f64])?)?;
+    let (eager, execution) = ctx.with_eager_session(|_| {
+        (
+            ctx.with_eager_session(|s| s.neg(&x)),
+            ctx.with_execution_session(|_| ()),
+        )
+    })?;
+    for nested in [eager.map(|_| ()), execution] {
+        assert!(matches!(
+            nested,
+            Err(Error::SessionEntry(
+                tenferro_tensor::SessionEntryError::Reentered { .. }
+            ))
+        ));
+    }
+    // The runtime is usable again once the outer session ends.
+    let y = ctx.with_eager_session(|s| s.neg(&x))??;
+    assert_eq!(y.value()?.as_slice::<f64>()?, &[-2.0]);
+    Ok(())
+}

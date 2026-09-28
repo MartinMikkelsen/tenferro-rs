@@ -8,7 +8,7 @@ pub mod support;
 
 use tenferro_cpu::{CpuBackend, CpuBackendKind};
 use tenferro_linalg::LinalgBackend;
-use tenferro_tensor::{DotGeneralConfig, Tensor, TensorDot};
+use tenferro_tensor::{BackendSessionHost, DotGeneralConfig, Tensor, TensorRead};
 
 #[test]
 fn accelerate_gemm_and_cholesky_without_metal() {
@@ -20,16 +20,19 @@ fn accelerate_gemm_and_cholesky_without_metal() {
     );
     let input = Tensor::from_vec_col_major([2, 2], vec![4.0_f64, 2.0, 2.0, 3.0]).unwrap();
     let product = cpu
-        .dot_general(
-            &input,
-            &input,
-            &DotGeneralConfig {
-                lhs_contracting_dims: [1].as_slice().into(),
-                rhs_contracting_dims: [0].as_slice().into(),
-                lhs_batch_dims: [].as_slice().into(),
-                rhs_batch_dims: [].as_slice().into(),
-            },
-        )
+        .with_backend_session(|session| {
+            session.dot_general_read(
+                TensorRead::from_tensor(&input),
+                TensorRead::from_tensor(&input),
+                &DotGeneralConfig {
+                    lhs_contracting_dims: [1].as_slice().into(),
+                    rhs_contracting_dims: [0].as_slice().into(),
+                    lhs_batch_dims: [].as_slice().into(),
+                    rhs_batch_dims: [].as_slice().into(),
+                },
+            )
+        })
+        .unwrap()
         .unwrap();
     assert_eq!(
         product.as_slice::<f64>().unwrap(),

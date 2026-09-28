@@ -132,6 +132,8 @@ host	tenferro-ad	eager::tests::leaf_session::calling_thread_no_grad_governs_a_se
 host	tenferro-ad	eager::tests::leaf_session::a_guard_started_inside_the_callback_stays_local_to_it
 host	tenferro-ad	eager::tests::leaf_session::calling_thread_capture_trace_governs_a_session_callback
 host	tenferro-ad	eager::tests::leaf_session::inherited_modes_apply_on_another_thread_and_are_restored
+host	tenferro-ad	eager::tests::leaf_session::into_value_refuses_a_view_layout_instead_of_changing_values
+host	tenferro-ad	eager::tests::leaf_session::nested_entry_into_the_same_runtime_is_rejected_without_deadlock
 host	tenferro-ad	eager_exec::tests::generated_outputs_use_the_callers_borrowed_session
 host	tenferro-ad	extension::tests::eager_extension_borrowed_recording_materializes_untracked_inputs_in_session
 host	tenferro-ad	extension::tests::eager_extension_native_context_fallback_requires_a_separate_region
