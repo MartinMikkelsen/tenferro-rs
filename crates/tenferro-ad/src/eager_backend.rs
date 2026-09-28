@@ -291,6 +291,24 @@ macro_rules! delegate_recording_backend_methods {
 }
 
 #[cfg(test)]
+macro_rules! delegate_owned_read_methods {
+    ($(fn $method:ident($label:literal; $($read:ident),+ $(; $($extra:ident: $extra_ty:ty),*)?);)*) => {
+        $(
+            fn $method(
+                &mut self,
+                $($read: TensorRead<'_>,)+
+                $($($extra: $extra_ty),*)?
+            ) -> TensorResult<Tensor> {
+                $(let $read = tenferro_tensor::backend::read_owned_tensor($label, $read)?;)+
+                self.inner.with_backend_session(|__s| {
+                    __s.$method($(TensorRead::from_tensor($read)),+ $(, $($extra),*)?)
+                })?
+            }
+        )*
+    };
+}
+
+#[cfg(test)]
 impl BackendSession for RecordingBackend {}
 
 #[cfg(test)]
@@ -325,133 +343,18 @@ impl TensorElementwise for RecordingBackend {
 
     // Reproduce the previous read-half default: delegate an owned tensor and
     // reject a borrowed view.
-    fn sub_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> TensorResult<Tensor> {
-        let lhs = tenferro_tensor::backend::read_owned_tensor("sub", lhs)?;
-        let rhs = tenferro_tensor::backend::read_owned_tensor("sub", rhs)?;
-        self.inner.with_backend_session(|__s| {
-            __s.sub_read(TensorRead::from_tensor(lhs), TensorRead::from_tensor(rhs))
-        })?
-    }
-
-    // Reproduce the previous read-half default: delegate an owned tensor and
-    // reject a borrowed view.
-    fn neg_read(&mut self, input: TensorRead<'_>) -> TensorResult<Tensor> {
-        let input = tenferro_tensor::backend::read_owned_tensor("neg", input)?;
-        self.inner
-            .with_backend_session(|__s| __s.neg_read(TensorRead::from_tensor(input)))?
-    }
-
-    // Reproduce the previous read-half default: delegate an owned tensor and
-    // reject a borrowed view.
-    fn conj_read(&mut self, input: TensorRead<'_>) -> TensorResult<Tensor> {
-        let input = tenferro_tensor::backend::read_owned_tensor("conj", input)?;
-        self.inner
-            .with_backend_session(|__s| __s.conj_read(TensorRead::from_tensor(input)))?
-    }
-
-    // Reproduce the previous read-half default: delegate an owned tensor and
-    // reject a borrowed view.
-    fn div_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> TensorResult<Tensor> {
-        let lhs = tenferro_tensor::backend::read_owned_tensor("div", lhs)?;
-        let rhs = tenferro_tensor::backend::read_owned_tensor("div", rhs)?;
-        self.inner.with_backend_session(|__s| {
-            __s.div_read(TensorRead::from_tensor(lhs), TensorRead::from_tensor(rhs))
-        })?
-    }
-
-    // Reproduce the previous read-half default: delegate an owned tensor and
-    // reject a borrowed view.
-    fn abs_read(&mut self, input: TensorRead<'_>) -> TensorResult<Tensor> {
-        let input = tenferro_tensor::backend::read_owned_tensor("abs", input)?;
-        self.inner
-            .with_backend_session(|__s| __s.abs_read(TensorRead::from_tensor(input)))?
-    }
-
-    // Reproduce the previous read-half default: delegate an owned tensor and
-    // reject a borrowed view.
-    fn sign_read(&mut self, input: TensorRead<'_>) -> TensorResult<Tensor> {
-        let input = tenferro_tensor::backend::read_owned_tensor("sign", input)?;
-        self.inner
-            .with_backend_session(|__s| __s.sign_read(TensorRead::from_tensor(input)))?
-    }
-
-    // Reproduce the previous read-half default: delegate an owned tensor and
-    // reject a borrowed view.
-    fn maximum_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> TensorResult<Tensor> {
-        let lhs = tenferro_tensor::backend::read_owned_tensor("maximum", lhs)?;
-        let rhs = tenferro_tensor::backend::read_owned_tensor("maximum", rhs)?;
-        self.inner.with_backend_session(|__s| {
-            __s.maximum_read(TensorRead::from_tensor(lhs), TensorRead::from_tensor(rhs))
-        })?
-    }
-
-    // Reproduce the previous read-half default: delegate an owned tensor and
-    // reject a borrowed view.
-    fn minimum_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> TensorResult<Tensor> {
-        let lhs = tenferro_tensor::backend::read_owned_tensor("minimum", lhs)?;
-        let rhs = tenferro_tensor::backend::read_owned_tensor("minimum", rhs)?;
-        self.inner.with_backend_session(|__s| {
-            __s.minimum_read(TensorRead::from_tensor(lhs), TensorRead::from_tensor(rhs))
-        })?
-    }
-
-    // Reproduce the previous read-half default: delegate an owned tensor and
-    // reject a borrowed view.
-    fn compare_read(
-        &mut self,
-        lhs: TensorRead<'_>,
-        rhs: TensorRead<'_>,
-        dir: &CompareDir,
-    ) -> TensorResult<Tensor> {
-        let lhs = tenferro_tensor::backend::read_owned_tensor("compare", lhs)?;
-        let rhs = tenferro_tensor::backend::read_owned_tensor("compare", rhs)?;
-        self.inner.with_backend_session(|__s| {
-            __s.compare_read(
-                TensorRead::from_tensor(lhs),
-                TensorRead::from_tensor(rhs),
-                dir,
-            )
-        })?
-    }
-
-    // Reproduce the previous read-half default: delegate an owned tensor and
-    // reject a borrowed view.
-    fn select_read(
-        &mut self,
-        pred: TensorRead<'_>,
-        on_true: TensorRead<'_>,
-        on_false: TensorRead<'_>,
-    ) -> TensorResult<Tensor> {
-        let pred = tenferro_tensor::backend::read_owned_tensor("select", pred)?;
-        let on_true = tenferro_tensor::backend::read_owned_tensor("select", on_true)?;
-        let on_false = tenferro_tensor::backend::read_owned_tensor("select", on_false)?;
-        self.inner.with_backend_session(|__s| {
-            __s.select_read(
-                TensorRead::from_tensor(pred),
-                TensorRead::from_tensor(on_true),
-                TensorRead::from_tensor(on_false),
-            )
-        })?
-    }
-
-    // Reproduce the previous read-half default: delegate an owned tensor and
-    // reject a borrowed view.
-    fn clamp_read(
-        &mut self,
-        input: TensorRead<'_>,
-        lower: TensorRead<'_>,
-        upper: TensorRead<'_>,
-    ) -> TensorResult<Tensor> {
-        let input = tenferro_tensor::backend::read_owned_tensor("clamp", input)?;
-        let lower = tenferro_tensor::backend::read_owned_tensor("clamp", lower)?;
-        let upper = tenferro_tensor::backend::read_owned_tensor("clamp", upper)?;
-        self.inner.with_backend_session(|__s| {
-            __s.clamp_read(
-                TensorRead::from_tensor(input),
-                TensorRead::from_tensor(lower),
-                TensorRead::from_tensor(upper),
-            )
-        })?
+    delegate_owned_read_methods! {
+        fn sub_read("sub"; lhs, rhs);
+        fn neg_read("neg"; input);
+        fn conj_read("conj"; input);
+        fn div_read("div"; lhs, rhs);
+        fn abs_read("abs"; input);
+        fn sign_read("sign"; input);
+        fn maximum_read("maximum"; lhs, rhs);
+        fn minimum_read("minimum"; lhs, rhs);
+        fn compare_read("compare"; lhs, rhs; dir: &CompareDir);
+        fn select_read("select"; pred, on_true, on_false);
+        fn clamp_read("clamp"; input, lower, upper);
     }
 }
 
@@ -459,88 +362,17 @@ impl TensorElementwise for RecordingBackend {
 impl TensorAnalytic for RecordingBackend {
     // Reproduce the previous read-half default: delegate an owned tensor and
     // reject a borrowed view.
-    fn exp_read(&mut self, input: tenferro_tensor::TensorRead<'_>) -> TensorResult<Tensor> {
-        let input = tenferro_tensor::backend::read_owned_tensor("exp", input)?;
-        self.inner
-            .with_backend_session(|__s| __s.exp_read(TensorRead::from_tensor(input)))?
-    }
-
-    // Reproduce the previous read-half default: delegate an owned tensor and
-    // reject a borrowed view.
-    fn log_read(&mut self, input: tenferro_tensor::TensorRead<'_>) -> TensorResult<Tensor> {
-        let input = tenferro_tensor::backend::read_owned_tensor("log", input)?;
-        self.inner
-            .with_backend_session(|__s| __s.log_read(TensorRead::from_tensor(input)))?
-    }
-
-    // Reproduce the previous read-half default: delegate an owned tensor and
-    // reject a borrowed view.
-    fn sin_read(&mut self, input: tenferro_tensor::TensorRead<'_>) -> TensorResult<Tensor> {
-        let input = tenferro_tensor::backend::read_owned_tensor("sin", input)?;
-        self.inner
-            .with_backend_session(|__s| __s.sin_read(TensorRead::from_tensor(input)))?
-    }
-
-    // Reproduce the previous read-half default: delegate an owned tensor and
-    // reject a borrowed view.
-    fn cos_read(&mut self, input: tenferro_tensor::TensorRead<'_>) -> TensorResult<Tensor> {
-        let input = tenferro_tensor::backend::read_owned_tensor("cos", input)?;
-        self.inner
-            .with_backend_session(|__s| __s.cos_read(TensorRead::from_tensor(input)))?
-    }
-
-    // Reproduce the previous read-half default: delegate an owned tensor and
-    // reject a borrowed view.
-    fn tanh_read(&mut self, input: tenferro_tensor::TensorRead<'_>) -> TensorResult<Tensor> {
-        let input = tenferro_tensor::backend::read_owned_tensor("tanh", input)?;
-        self.inner
-            .with_backend_session(|__s| __s.tanh_read(TensorRead::from_tensor(input)))?
-    }
-
-    // Reproduce the previous read-half default: delegate an owned tensor and
-    // reject a borrowed view.
-    fn sqrt_read(&mut self, input: tenferro_tensor::TensorRead<'_>) -> TensorResult<Tensor> {
-        let input = tenferro_tensor::backend::read_owned_tensor("sqrt", input)?;
-        self.inner
-            .with_backend_session(|__s| __s.sqrt_read(TensorRead::from_tensor(input)))?
-    }
-
-    // Reproduce the previous read-half default: delegate an owned tensor and
-    // reject a borrowed view.
-    fn rsqrt_read(&mut self, input: tenferro_tensor::TensorRead<'_>) -> TensorResult<Tensor> {
-        let input = tenferro_tensor::backend::read_owned_tensor("rsqrt", input)?;
-        self.inner
-            .with_backend_session(|__s| __s.rsqrt_read(TensorRead::from_tensor(input)))?
-    }
-
-    // Reproduce the previous read-half default: delegate an owned tensor and
-    // reject a borrowed view.
-    fn pow_read(
-        &mut self,
-        lhs: tenferro_tensor::TensorRead<'_>,
-        rhs: tenferro_tensor::TensorRead<'_>,
-    ) -> TensorResult<Tensor> {
-        let lhs = tenferro_tensor::backend::read_owned_tensor("pow", lhs)?;
-        let rhs = tenferro_tensor::backend::read_owned_tensor("pow", rhs)?;
-        self.inner.with_backend_session(|__s| {
-            __s.pow_read(TensorRead::from_tensor(lhs), TensorRead::from_tensor(rhs))
-        })?
-    }
-
-    // Reproduce the previous read-half default: delegate an owned tensor and
-    // reject a borrowed view.
-    fn expm1_read(&mut self, input: tenferro_tensor::TensorRead<'_>) -> TensorResult<Tensor> {
-        let input = tenferro_tensor::backend::read_owned_tensor("expm1", input)?;
-        self.inner
-            .with_backend_session(|__s| __s.expm1_read(TensorRead::from_tensor(input)))?
-    }
-
-    // Reproduce the previous read-half default: delegate an owned tensor and
-    // reject a borrowed view.
-    fn log1p_read(&mut self, input: tenferro_tensor::TensorRead<'_>) -> TensorResult<Tensor> {
-        let input = tenferro_tensor::backend::read_owned_tensor("log1p", input)?;
-        self.inner
-            .with_backend_session(|__s| __s.log1p_read(TensorRead::from_tensor(input)))?
+    delegate_owned_read_methods! {
+        fn exp_read("exp"; input);
+        fn log_read("log"; input);
+        fn sin_read("sin"; input);
+        fn cos_read("cos"; input);
+        fn tanh_read("tanh"; input);
+        fn sqrt_read("sqrt"; input);
+        fn rsqrt_read("rsqrt"; input);
+        fn pow_read("pow"; lhs, rhs);
+        fn expm1_read("expm1"; input);
+        fn log1p_read("log1p"; input);
     }
 }
 
@@ -577,25 +409,19 @@ impl TensorStructural for RecordingBackend {
     // The previous read-half default delegated owned tensors to the one-shot
     // method and rejected borrowed views. Reproduce it explicitly rather than
     // forwarding a view, which would widen the accepted input surface.
-    fn reshape_read(&mut self, input: TensorRead<'_>, shape: &[usize]) -> TensorResult<Tensor> {
-        let input = tenferro_tensor::backend::read_owned_tensor("reshape", input)?;
-        self.inner
-            .with_backend_session(|__s| __s.reshape_read(TensorRead::from_tensor(input), shape))?
+    // Reproduce the previous read-half default: delegate an owned tensor and
+    // reject a borrowed view.
+    delegate_owned_read_methods! {
+        fn reshape_read("reshape"; input; shape: &[usize]);
     }
 
     // The previous read-half default delegated owned tensors to the one-shot
     // method and rejected borrowed views. Reproduce it explicitly rather than
     // forwarding a view, which would widen the accepted input surface.
-    fn broadcast_in_dim_read(
-        &mut self,
-        input: TensorRead<'_>,
-        shape: &[usize],
-        dims: &[usize],
-    ) -> TensorResult<Tensor> {
-        let input = tenferro_tensor::backend::read_owned_tensor("broadcast_in_dim", input)?;
-        self.inner.with_backend_session(|__s| {
-            __s.broadcast_in_dim_read(TensorRead::from_tensor(input), shape, dims)
-        })?
+    // Reproduce the previous read-half default: delegate an owned tensor and
+    // reject a borrowed view.
+    delegate_owned_read_methods! {
+        fn broadcast_in_dim_read("broadcast_in_dim"; input; shape: &[usize], dims: &[usize]);
     }
 }
 
@@ -608,29 +434,13 @@ impl TensorReduction for RecordingBackend {
     // The previous read-half default delegated owned tensors to the one-shot
     // method and rejected views, which is not the same as forwarding a view to
     // the inner backend. Reproduce the old default explicitly.
-    fn reduce_sum_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> TensorResult<Tensor> {
-        let input = tenferro_tensor::backend::read_owned_tensor("reduce_sum", input)?;
-        self.inner
-            .with_backend_session(|__s| __s.reduce_sum_read(TensorRead::from_tensor(input), axes))?
-    }
-
-    fn reduce_prod_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> TensorResult<Tensor> {
-        let input = tenferro_tensor::backend::read_owned_tensor("reduce_prod", input)?;
-        self.inner.with_backend_session(|__s| {
-            __s.reduce_prod_read(TensorRead::from_tensor(input), axes)
-        })?
-    }
-
-    fn reduce_max_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> TensorResult<Tensor> {
-        let input = tenferro_tensor::backend::read_owned_tensor("reduce_max", input)?;
-        self.inner
-            .with_backend_session(|__s| __s.reduce_max_read(TensorRead::from_tensor(input), axes))?
-    }
-
-    fn reduce_min_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> TensorResult<Tensor> {
-        let input = tenferro_tensor::backend::read_owned_tensor("reduce_min", input)?;
-        self.inner
-            .with_backend_session(|__s| __s.reduce_min_read(TensorRead::from_tensor(input), axes))?
+    // Reproduce the previous read-half default: delegate an owned tensor and
+    // reject a borrowed view.
+    delegate_owned_read_methods! {
+        fn reduce_sum_read("reduce_sum"; input; axes: &[usize]);
+        fn reduce_prod_read("reduce_prod"; input; axes: &[usize]);
+        fn reduce_max_read("reduce_max"; input; axes: &[usize]);
+        fn reduce_min_read("reduce_min"; input; axes: &[usize]);
     }
 }
 
