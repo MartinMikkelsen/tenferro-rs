@@ -137,3 +137,7 @@ impl SessionEntryError {
         ErrorKind::RuntimeState
     }
 }
+
+#[cfg(test)]
+#[path = "session_entry/tests.rs"]
+mod tests;
