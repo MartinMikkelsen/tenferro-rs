@@ -5166,7 +5166,15 @@ fn cubecl_reshape_metadata<T: crate::TensorScalar + Clone>(
             format!("failed to detach the reshaped tensor owner: {error}"),
         )
     })?;
-    <T as crate::TensorScalar>::into_typed(tensor)
+    match <T as crate::TensorScalar>::into_typed(tensor) {
+        Ok(typed) => Ok(typed),
+        // INVARIANT: the owner just published above was produced by this same
+        // typed path, so its dtype tag always matches `T`.
+        Err(failure) => Err(crate::Error::runtime_state(
+            op,
+            format!("reshaped owner lost its dtype guard: {}", failure.error()),
+        )),
+    }
 }
 
 fn validate_slice(input_shape: &[usize], config: &SliceConfig) -> crate::Result<Vec<usize>> {

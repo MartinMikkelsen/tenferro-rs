@@ -4767,17 +4767,22 @@ pub trait TensorScalar: Copy + Clone + Send + Sync + 'static + private::Sealed {
     /// use tenferro_tensor::{Tensor, TensorScalar};
     ///
     /// let tensor = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?;
-    /// let typed = <f64 as TensorScalar>::into_typed(tensor)?;
+    /// let Ok(typed) = <f64 as TensorScalar>::into_typed(tensor) else {
+    ///     panic!("the dtype matches by construction")
+    /// };
     ///
     /// assert_eq!(typed.as_slice()?, &[1.0, 2.0]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
     /// # Errors
     ///
-    /// Returns [`crate::Error::Validation`] with
-    /// [`tenferro_tensor_core::ValidationError::DTypeMismatch`] when `tensor`
-    /// is not the scalar type represented by this implementation.
-    fn into_typed(tensor: Tensor) -> crate::Result<TypedTensor<Self>>;
+    /// Returns [`ReinterpretError`] carrying the unchanged tensor when it is
+    /// not the scalar type represented by this implementation, with
+    /// [`crate::Error::Validation`] and
+    /// [`tenferro_tensor_core::ValidationError::DTypeMismatch`] as the cause.
+    fn into_typed(
+        tensor: Tensor,
+    ) -> std::result::Result<TypedTensor<Self>, ReinterpretError<Tensor>>;
 }
 
 mod private {
@@ -4859,16 +4864,21 @@ macro_rules! impl_tensor_scalar {
                 typed.host_data_mut()
             }
 
-            fn into_typed(tensor: Tensor) -> crate::Result<TypedTensor<Self>> {
+            fn into_typed(
+                tensor: Tensor,
+            ) -> std::result::Result<TypedTensor<Self>, ReinterpretError<Tensor>> {
                 let actual = tensor.dtype();
                 match tensor.payload {
                     TensorPayload::Native(PresetTensor::$variant(typed)) => Ok(typed),
-                    _ => Err(crate::Error::validation(
-                        "TensorScalar::into_typed",
-                        ValidationError::DTypeMismatch {
-                            expected: Self::dtype(),
-                            actual,
-                        },
+                    payload => Err(ReinterpretError::new(
+                        Tensor { payload },
+                        crate::Error::validation(
+                            "TensorScalar::into_typed",
+                            ValidationError::DTypeMismatch {
+                                expected: Self::dtype(),
+                                actual,
+                            },
+                        ),
                     )),
                 }
             }
@@ -5007,7 +5017,7 @@ impl Tensor {
     /// use tenferro_tensor::Tensor;
     ///
     /// let tensor = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?;
-    /// let typed = tensor.into_typed::<f64>()?;
+    /// let typed = tensor.into_typed::<f64>().unwrap();
     /// let rebuilt = Tensor::from_typed(typed);
     /// assert_eq!(rebuilt.as_typed::<f64>().unwrap().shape(), &[2]);
     /// # Ok::<(), tenferro_tensor::Error>(())
@@ -8238,37 +8248,48 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
     ///
     /// # Examples
     ///
-    /// ```rust
+    /// ```
     /// use tenferro_tensor::{Rank, TypedTensor};
     ///
     /// let tensor = TypedTensor::<f64>::from_vec_col_major(vec![2, 3], vec![1.0; 6]).unwrap();
-    /// let ranked: TypedTensor<f64, Rank<2>> = tensor.try_into_rank::<2>()?;
+    /// let Ok(ranked) = tensor.try_into_rank::<2>() else {
+    ///     panic!("a rank-2 tensor converts to two axes")
+    /// };
     /// assert_eq!(ranked.shape(), &[2, 3]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
     /// # Errors
     ///
-    /// Returns [`crate::Error::Validation`] with
-    /// [`tenferro_tensor_core::ValidationError::RankMismatch`] when the typed
-    /// rank does not match the existing shape,
-    /// [`tenferro_tensor_core::ValidationError::IntegerOverflow`] when compact
-    /// strides cannot be computed, or
-    /// [`tenferro_tensor_core::ValidationError::ViewOutOfBounds`] when the
-    /// preserved buffer cannot hold the rank-converted layout.
-    pub fn try_into_rank<const N: usize>(self) -> crate::Result<TypedTensor<T, Rank<N>>> {
+    /// Returns [`ReinterpretError`] carrying the unchanged tensor when the
+    /// typed rank does not match the existing shape, with
+    /// [`crate::Error::Validation`] and
+    /// [`tenferro_tensor_core::ValidationError::RankMismatch`] as the cause,
+    /// or when the compact rank layout overflows.
+    pub fn try_into_rank<const N: usize>(
+        self,
+    ) -> std::result::Result<TypedTensor<T, Rank<N>>, ReinterpretError<Self>> {
         let op = "TypedTensor::try_into_rank";
         let actual = self.shape().len();
-        let shape: [usize; N] = self.shape().try_into().map_err(|_| {
-            tensor_layout_error(
-                op,
-                ValidationError::RankMismatch {
-                    expected: N,
-                    actual,
-                },
-            )
-        })?;
-        let _layout =
-            TensorLayout::<Rank<N>>::compact(shape).map_err(|err| tensor_layout_error(op, err))?;
+        let shape: [usize; N] = match self.shape().try_into() {
+            Ok(shape) => shape,
+            Err(_) => {
+                return Err(ReinterpretError::new(
+                    self,
+                    tensor_layout_error(
+                        op,
+                        ValidationError::RankMismatch {
+                            expected: N,
+                            actual,
+                        },
+                    ),
+                ))
+            }
+        };
+        if let Err(error) =
+            TensorLayout::<Rank<N>>::compact(shape).map_err(|err| tensor_layout_error(op, err))
+        {
+            return Err(ReinterpretError::new(self, error));
+        }
         let TypedTensor {
             placement, storage, ..
         } = self;
@@ -9798,11 +9819,14 @@ impl Tensor {
     /// ```
     /// # Errors
     ///
-    /// Returns [`crate::Error::Validation`] with
-    /// [`tenferro_tensor_core::ValidationError::DTypeMismatch`] when `T` is not this tensor's dtype.
-    /// A matching tensor is handed over as it is, including one whose storage lives in a backend
-    /// buffer.
-    pub fn into_typed<T: TensorScalar>(self) -> crate::Result<TypedTensor<T>> {
+    /// Returns [`ReinterpretError`] carrying the unchanged tensor when `T` is
+    /// not this tensor's dtype, with [`crate::Error::Validation`] and
+    /// [`tenferro_tensor_core::ValidationError::DTypeMismatch`] as the cause.
+    /// A matching tensor is handed over as it is, including one whose storage
+    /// lives in a backend buffer.
+    pub fn into_typed<T: TensorScalar>(
+        self,
+    ) -> std::result::Result<TypedTensor<T>, ReinterpretError<Self>> {
         T::into_typed(self)
     }
 
@@ -9824,7 +9848,21 @@ impl Tensor {
     /// not match the tensor dtype, or [`crate::Error::RuntimeState`] when the
     /// matching tensor uses backend storage that has not been downloaded.
     pub fn into_vec_col_major<T: TensorScalar>(self) -> crate::Result<(Vec<usize>, Vec<T>)> {
-        let typed = T::into_typed(self)?;
+        // INVARIANT: this pre-check makes `into_typed`'s refusal arm
+        // unreachable, because a preset dtype tag identifies its variant.
+        let actual = self.dtype();
+        if actual != T::dtype() {
+            return Err(crate::Error::validation(
+                "Tensor::into_vec_col_major",
+                ValidationError::DTypeMismatch {
+                    expected: T::dtype(),
+                    actual,
+                },
+            ));
+        }
+        let typed = T::into_typed(self).unwrap_or_else(|failure| {
+            unreachable!("the dtype guard selects this arm: {}", failure.error())
+        });
         typed.into_vec_col_major()
     }
 }

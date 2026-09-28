@@ -474,14 +474,14 @@ impl TensorStructural for DefaultReadBackend {
             };
         }
         match src.dtype() {
-            crate::DType::F32 => copy_typed!(src.into_typed::<f32>()?, dst, F32, f32),
-            crate::DType::F64 => copy_typed!(src.into_typed::<f64>()?, dst, F64, f64),
-            crate::DType::I32 => copy_typed!(src.into_typed::<i32>()?, dst, I32, i32),
-            crate::DType::I64 => copy_typed!(src.into_typed::<i64>()?, dst, I64, i64),
-            crate::DType::Bool => copy_typed!(src.into_typed::<bool>()?, dst, Bool, bool),
+            crate::DType::F32 => copy_typed!(src.into_typed::<f32>().unwrap(), dst, F32, f32),
+            crate::DType::F64 => copy_typed!(src.into_typed::<f64>().unwrap(), dst, F64, f64),
+            crate::DType::I32 => copy_typed!(src.into_typed::<i32>().unwrap(), dst, I32, i32),
+            crate::DType::I64 => copy_typed!(src.into_typed::<i64>().unwrap(), dst, I64, i64),
+            crate::DType::Bool => copy_typed!(src.into_typed::<bool>().unwrap(), dst, Bool, bool),
             crate::DType::C32 => {
                 copy_typed!(
-                    src.into_typed::<num_complex::Complex32>()?,
+                    src.into_typed::<num_complex::Complex32>().unwrap(),
                     dst,
                     C32,
                     num_complex::Complex32
@@ -489,7 +489,7 @@ impl TensorStructural for DefaultReadBackend {
             }
             crate::DType::C64 => {
                 copy_typed!(
-                    src.into_typed::<num_complex::Complex64>()?,
+                    src.into_typed::<num_complex::Complex64>().unwrap(),
                     dst,
                     C64,
                     num_complex::Complex64

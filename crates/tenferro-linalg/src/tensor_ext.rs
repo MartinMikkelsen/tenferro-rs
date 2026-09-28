@@ -2458,7 +2458,15 @@ fn typed_output<T: TensorScalar>(tensor: Tensor) -> tenferro_tensor::Result<Type
             tensor.dtype()
         )));
     }
-    T::into_typed(tensor)
+    match T::into_typed(tensor) {
+        Ok(typed) => Ok(typed),
+        // INVARIANT: the dtype guard above already accepted this tensor, so the
+        // refusal arm is unreachable for a matching preset scalar.
+        Err(failure) => Err(tenferro_tensor::Error::Internal(format!(
+            "typed linalg backend contract lost its dtype guard: {}",
+            failure.error()
+        ))),
+    }
 }
 
 fn arity(name: &'static str, expected: usize, actual: usize) -> tenferro_tensor::Error {

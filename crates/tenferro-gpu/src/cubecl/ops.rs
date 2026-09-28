@@ -1212,34 +1212,62 @@ pub(super) fn reshape_read(
         _ => ops::to_contiguous_read(backend, TensorRead::from_tensor(input))?,
     };
     match contiguous.dtype() {
-        DType::F32 => {
-            cubecl_reshape_metadata(contiguous.into_typed::<f32>()?, shape.to_vec(), "reshape")
-                .map(Tensor::from_typed::<f32>)
-        }
-        DType::F64 => {
-            cubecl_reshape_metadata(contiguous.into_typed::<f64>()?, shape.to_vec(), "reshape")
-                .map(Tensor::from_typed::<f64>)
-        }
-        DType::I32 => {
-            cubecl_reshape_metadata(contiguous.into_typed::<i32>()?, shape.to_vec(), "reshape")
-                .map(Tensor::from_typed::<i32>)
-        }
-        DType::I64 => {
-            cubecl_reshape_metadata(contiguous.into_typed::<i64>()?, shape.to_vec(), "reshape")
-                .map(Tensor::from_typed::<i64>)
-        }
-        DType::Bool => {
-            cubecl_reshape_metadata(contiguous.into_typed::<bool>()?, shape.to_vec(), "reshape")
-                .map(Tensor::from_typed::<bool>)
-        }
+        DType::F32 => cubecl_reshape_metadata(
+            contiguous.into_typed::<f32>().unwrap_or_else(|failure| {
+                unreachable!("the dtype guard selects this arm: {}", failure.error())
+            }),
+            shape.to_vec(),
+            "reshape",
+        )
+        .map(Tensor::from_typed::<f32>),
+        DType::F64 => cubecl_reshape_metadata(
+            contiguous.into_typed::<f64>().unwrap_or_else(|failure| {
+                unreachable!("the dtype guard selects this arm: {}", failure.error())
+            }),
+            shape.to_vec(),
+            "reshape",
+        )
+        .map(Tensor::from_typed::<f64>),
+        DType::I32 => cubecl_reshape_metadata(
+            contiguous.into_typed::<i32>().unwrap_or_else(|failure| {
+                unreachable!("the dtype guard selects this arm: {}", failure.error())
+            }),
+            shape.to_vec(),
+            "reshape",
+        )
+        .map(Tensor::from_typed::<i32>),
+        DType::I64 => cubecl_reshape_metadata(
+            contiguous.into_typed::<i64>().unwrap_or_else(|failure| {
+                unreachable!("the dtype guard selects this arm: {}", failure.error())
+            }),
+            shape.to_vec(),
+            "reshape",
+        )
+        .map(Tensor::from_typed::<i64>),
+        DType::Bool => cubecl_reshape_metadata(
+            contiguous.into_typed::<bool>().unwrap_or_else(|failure| {
+                unreachable!("the dtype guard selects this arm: {}", failure.error())
+            }),
+            shape.to_vec(),
+            "reshape",
+        )
+        .map(Tensor::from_typed::<bool>),
         DType::C32 => cubecl_reshape_metadata(
-            contiguous.into_typed::<Complex32>()?,
+            contiguous
+                .into_typed::<Complex32>()
+                .unwrap_or_else(|failure| {
+                    unreachable!("the dtype guard selects this arm: {}", failure.error())
+                }),
             shape.to_vec(),
             "reshape",
         )
         .map(Tensor::from_typed::<num_complex::Complex32>),
         DType::C64 => cubecl_reshape_metadata(
-            contiguous.into_typed::<Complex64>()?,
+            contiguous
+                .into_typed::<Complex64>()
+                .unwrap_or_else(|failure| {
+                    unreachable!("the dtype guard selects this arm: {}", failure.error())
+                }),
             shape.to_vec(),
             "reshape",
         )

@@ -538,7 +538,7 @@ fn typed_tensor_try_into_rank_validates_rank() {
     let err = tensor.try_into_rank::<3>().unwrap_err();
 
     assert!(matches!(
-        err,
+        err.error(),
         Error::Validation {
             source: ValidationError::RankMismatch {
                 expected: 3,

@@ -2,7 +2,8 @@
 //! group promotion, and checked representation narrowing.
 
 use tenferro_tensor::{
-    BackendStorageHandle, DynRank, Dynamic, Gpu, Host, Placement, Rank, StorageBuffer, TypedTensor,
+    BackendStorageHandle, DType, DynRank, Dynamic, Gpu, Host, Placement, Rank, StorageBuffer,
+    Tensor, TypedTensor,
 };
 
 #[test]
@@ -150,4 +151,72 @@ fn union_write_mapping_publishes_through_the_owning_guard() {
     )
     .unwrap();
     assert!(device.map_read().is_err());
+}
+
+#[test]
+fn rank_conversion_failure_retains_the_owner() {
+    let tensor =
+        TypedTensor::<f64>::from_vec_col_major(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0])
+            .unwrap();
+    let Err(failure) = tensor.try_into_rank::<3>() else {
+        panic!("a rank-2 tensor is not rank 3");
+    };
+    assert!(!failure.error().to_string().is_empty());
+    let retained = failure.into_owner();
+    assert_eq!(retained.shape(), &[2, 3]);
+    assert_eq!(
+        retained.host_data().unwrap(),
+        &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
+    );
+    // The retained owner still converts when the rank does match.
+    assert_eq!(retained.try_into_rank::<2>().unwrap().shape(), &[2, 3]);
+}
+
+#[test]
+fn dtype_recovery_failure_retains_the_erased_tensor() {
+    let tensor = Tensor::from_vec_col_major(vec![2], vec![1.0_f32, 2.0]).unwrap();
+    let Err(failure) = tensor.into_typed::<f64>() else {
+        panic!("an f32 tensor is not f64");
+    };
+    assert!(!failure.error().to_string().is_empty());
+    let retained = failure.into_owner();
+    assert_eq!(retained.dtype(), DType::F32);
+    assert_eq!(retained.shape(), &[2]);
+    assert_eq!(retained.as_slice::<f32>().unwrap(), &[1.0, 2.0]);
+}
+
+#[test]
+fn promotion_keeps_the_pooled_return_target() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Weak};
+
+    #[derive(Debug)]
+    struct Count(AtomicUsize);
+    impl tenferro_tensor::HostBufferRecycler<f64> for Count {
+        fn recycle(&self, _data: Vec<f64>) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    let counter = Arc::new(Count(AtomicUsize::new(0)));
+    let recycler: Arc<dyn tenferro_tensor::HostBufferRecycler<f64>> = counter.clone();
+    let weak: Weak<dyn tenferro_tensor::HostBufferRecycler<f64>> = Arc::downgrade(&recycler);
+    let pooled =
+        TypedTensor::<f64>::from_vec_col_major_with_recycler(vec![2], vec![1.0, 2.0], weak)
+            .unwrap();
+
+    let host = pooled.into_host().unwrap();
+    let gpu = host.promote().unwrap();
+    assert_eq!(gpu.host_data().unwrap(), &[1.0, 2.0]);
+    assert_eq!(
+        counter.0.load(Ordering::SeqCst),
+        0,
+        "nothing recycles while owned"
+    );
+    drop(gpu);
+    assert_eq!(
+        counter.0.load(Ordering::SeqCst),
+        1,
+        "promotion must keep the pooled return target on the group root"
+    );
 }
