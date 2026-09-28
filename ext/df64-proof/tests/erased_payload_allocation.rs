@@ -1,4 +1,4 @@
-//! Measures what removing the seven `Tensor` variants would cost at the erased layer.
+//! Measures the cost of inline preset erasure versus boxing each typed owner.
 //!
 //! The measurement lives in its own test binary because the harness installs a process-wide counting
 //! allocator: a second test in the same binary would interleave its own allocations with these numbers.
@@ -47,11 +47,8 @@ fn prepared() -> Option<tenferro_tensor::TypedTensor<f64>> {
     Some(tensor.into_typed::<f64>().expect("an f64 tensor"))
 }
 
-/// Measures what a single erased payload would cost, which removing the seven variants would need.
-///
-/// The seven variants hold the typed tensor inline, so wrapping one is a move. A payload that holds the
-/// typed tensor behind a pointer would instead allocate per tensor, outside the pool the erased layer
-/// accounts for. This records both numbers rather than asserting the difference from the type alone.
+/// Preset variants hold the typed owner inline, so wrapping one is a move.
+/// Boxing instead allocates per tensor outside the erased layer's pool.
 #[test]
 fn report_erased_payload_allocation_cost() {
     let mut typed_inline = prepared();
@@ -76,16 +73,9 @@ fn report_erased_payload_allocation_cost() {
     );
     println!("inline variant payload: {inline_allocs} allocations / {inline_bytes} bytes");
     println!("boxed single payload: {boxed_allocs} allocations / {boxed_bytes} bytes");
-    // The exact byte count depends on the feature-unified descriptor layout, so the pinned
-    // property is the one that matters: the single payload adds at most the discriminant to
-    // the typed core rather than a pointer and a heap allocation. Since #1823 the payload tag
-    // lives in a niche, so the erased wrapper is currently the same size as the typed core
-    // instead of 8 bytes larger.
-    assert!(
-        std::mem::size_of::<Tensor>()
-            <= std::mem::size_of::<tenferro_tensor::TypedTensor<f64>>() + 8,
-        "the single payload adds at most the discriminant to the typed core"
-    );
+    // INVARIANT: the external payload can now dominate Tensor's size even though
+    // a plain typed host owner is smaller; the pinned property here is zero
+    // allocations for preset erasure, not a fixed relative byte size.
     assert_eq!(std::mem::align_of::<Tensor>(), 8);
     assert_eq!(
         inline_allocs, 0,

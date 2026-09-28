@@ -1618,8 +1618,9 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorView<'a, T, R> {
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
     /// # Errors
-    /// Returns `Error::Validation` if the rank-erased layout cannot be
-    /// represented or is outside the borrowed allocation.
+    /// Returns [`crate::Error::Validation`] with
+    /// [`ValidationError::IntegerOverflow`] for unrepresentable metadata or
+    /// [`ValidationError::ViewOutOfBounds`] if the layout leaves its allocation.
     pub fn into_tensor_read(self) -> crate::Result<TensorRead<'a>>
     where
         T: TensorScalar,
@@ -2113,12 +2114,60 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorView<'a, T, R> {
     /// the static-rank shape cannot be reconstructed.
     pub fn duplicate(&self) -> crate::Result<TypedTensor<T, R>>
     where
-        T: TensorScalar,
+        T: Clone,
     {
         let data = self.as_slice()?.to_vec();
         let shape = R::shape_from_vec(shape_vec(self.shape()))
             .map_err(|err| tensor_layout_error("TypedTensorView::duplicate", err))?;
         let mut tensor = TypedTensor::from_vec_col_major(shape, data)?;
+        tensor.set_placement(self.placement.clone());
+        Ok(tensor)
+    }
+
+    /// Explicitly copy a host view, including strided/offset views, to a compact owner.
+    ///
+    /// # Examples
+    /// ```
+    /// use tenferro_tensor::{Rank, TypedTensorView};
+    /// let storage = [1, 4, 2, 5, 3, 6];
+    /// let view = TypedTensorView::<_, Rank<2>>::from_slice_ranked(
+    ///     [2, 3], [1, 2], 0, &storage,
+    /// )?;
+    /// let transposed = view.transpose_view([1, 0])?;
+    /// assert_eq!(transposed.to_col_major()?.as_slice()?, &[1, 2, 3, 4, 5, 6]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    /// # Errors
+    /// Backend-only storage returns [`crate::Error::RuntimeState`]; invalid
+    /// layout or rank conversion returns [`crate::Error::Validation`].
+    pub fn to_col_major(&self) -> crate::Result<TypedTensor<T, R>>
+    where
+        T: Clone,
+    {
+        let data = self.host_storage()?;
+        let mut coordinates = ShapeVec::from_elem(0, self.shape().len());
+        let element_count = self.n_elements();
+        let mut copied = Vec::with_capacity(element_count);
+        for _ in 0..element_count {
+            let offset = self.layout_linear_offset(&coordinates)?;
+            let value = data.get(offset).ok_or_else(|| {
+                crate::Error::validation(
+                    "TypedTensorView::to_col_major",
+                    ValidationError::ViewOutOfBounds,
+                )
+            })?;
+            copied.push(value.clone());
+            for axis in 0..coordinates.len() {
+                coordinates[axis] += 1;
+                if coordinates[axis] < self.shape()[axis] {
+                    break;
+                }
+                coordinates[axis] = 0;
+            }
+        }
+        let shape = R::shape_from_vec(shape_vec(self.shape()))
+            .map_err(|err| tensor_layout_error("TypedTensorView::to_col_major", err))?;
+        let mut tensor = TypedTensor::from_vec_col_major(shape, copied)?;
         tensor.set_placement(self.placement.clone());
         Ok(tensor)
     }
@@ -2998,9 +3047,29 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorViewMut<'a, T, R> {
     /// ```
     pub fn duplicate(&self) -> crate::Result<TypedTensor<T, R>>
     where
-        T: TensorScalar,
+        T: Clone,
     {
         self.as_read_only().duplicate()
+    }
+
+    /// Explicitly copy this host view to a compact column-major owner.
+    ///
+    /// # Examples
+    /// ```
+    /// use tenferro_tensor::TypedTensorViewMut;
+    /// let mut values = ["a".to_owned(), "b".to_owned()];
+    /// let view = TypedTensorViewMut::from_slice([2], [1], 0, &mut values)?;
+    /// assert_eq!(view.to_col_major()?.as_slice()?, &["a", "b"]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    /// # Errors
+    /// Backend-only storage returns [`crate::Error::RuntimeState`]; invalid
+    /// layout or rank conversion returns [`crate::Error::Validation`].
+    pub fn to_col_major(&self) -> crate::Result<TypedTensor<T, R>>
+    where
+        T: Clone,
+    {
+        self.as_read_only().to_col_major()
     }
 
     pub fn as_read_only(&self) -> TypedTensorView<'_, T, R> {
@@ -6951,8 +7020,19 @@ impl<T: TensorScalar + One + Zero, R: TensorRank> TypedTensor<T, R> {
 impl<T, R: TensorRank> TypedTensor<T, R> {
     /// Adopt a column-major host `Vec<T>` with no scalar, copy or thread-safety bound.
     ///
+    /// # Examples
+    /// ```
+    /// use tenferro_tensor::{Rank, TypedTensor};
+    /// struct Custom(String);
+    /// let tensor = TypedTensor::<Custom, Rank<2>>::from_vec_col_major(
+    ///     [1, 2], vec![Custom("a".into()), Custom("b".into())],
+    /// )?;
+    /// assert_eq!(tensor.get(&[0, 1])?.0.as_str(), "b");
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
     /// # Errors
-    /// Returns a validation error for a mismatched shape, rank or element count.
+    /// Returns [`crate::Error::Validation`] for a rank mismatch, shape/data
+    /// length mismatch or shape/stride arithmetic overflow.
     pub fn from_vec_col_major(
         shape: impl tenferro_tensor_core::IntoRankShape<R>,
         data: Vec<T>,
@@ -6960,10 +7040,68 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
         typed_tensor_from_vec_col_major(shape, data, "from_vec_col_major")
     }
 
+    /// Explicitly import row-major host values into column-major storage.
+    ///
+    /// Clones each input element once; no backend or scalar registration is used.
+    ///
+    /// # Examples
+    /// ```
+    /// use tenferro_tensor::{Rank, TypedTensor};
+    /// let tensor = TypedTensor::<i32, Rank<2>>::from_vec_row_major(
+    ///     [2, 3], vec![1, 2, 3, 4, 5, 6],
+    /// )?;
+    /// assert_eq!(tensor.get(&[1, 0])?, &4);
+    /// assert_eq!(tensor.get(&[0, 2])?, &3);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    /// # Errors
+    /// Returns [`crate::Error::Validation`] for a rank, shape-length or stride overflow,
+    /// or when the shape product disagrees with the input length.
+    pub fn from_vec_row_major(
+        shape: impl tenferro_tensor_core::IntoRankShape<R>,
+        data: Vec<T>,
+    ) -> crate::Result<Self>
+    where
+        T: Clone,
+    {
+        let op = "from_vec_row_major";
+        let shape = shape
+            .into_rank_shape()
+            .map_err(|err| tensor_layout_error(op, err))?;
+        tenferro_tensor_core::col_major_strides(shape.as_ref())
+            .map_err(|err| tensor_layout_error(op, err))?;
+        try_checked_shape_len(shape.as_ref(), data.len(), op)?;
+        let mut row_strides = ShapeVec::from_elem(0, shape.as_ref().len());
+        let mut stride = 1usize;
+        for axis in (0..row_strides.len()).rev() {
+            row_strides[axis] = stride;
+            stride = stride
+                .checked_mul(shape.as_ref()[axis])
+                .ok_or_else(|| crate::Error::validation(op, ValidationError::IntegerOverflow))?;
+        }
+        let mut coordinates = ShapeVec::from_elem(0, row_strides.len());
+        let mut source_offset = 0usize;
+        let mut reordered = Vec::with_capacity(data.len());
+        for _ in 0..data.len() {
+            reordered.push(data[source_offset].clone());
+            for axis in 0..coordinates.len() {
+                coordinates[axis] += 1;
+                if coordinates[axis] < shape.as_ref()[axis] {
+                    source_offset += row_strides[axis];
+                    break;
+                }
+                coordinates[axis] = 0;
+                source_offset -= row_strides[axis] * (shape.as_ref()[axis] - 1);
+            }
+        }
+        typed_tensor_from_vec_col_major(shape, reordered, op)
+    }
+
     /// Consume this compact tensor and return the original host `Vec<T>`.
     ///
     /// # Errors
-    /// Device-only storage cannot be exported as a host vector.
+    /// Returns [`crate::Error::RuntimeState`] for device-only storage or
+    /// an incompatible managed host allocation.
     pub fn into_host_vec(self) -> crate::Result<Vec<T>>
     where
         T: 'static,
@@ -6985,7 +7123,8 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
     /// Consume the original host vector along with its column-major shape.
     ///
     /// # Errors
-    /// Device-only storage cannot be exported as a host vector.
+    /// Returns [`crate::Error::RuntimeState`] for device-only storage or
+    /// an incompatible managed host allocation.
     pub fn into_vec_col_major(self) -> crate::Result<(Vec<usize>, Vec<T>)>
     where
         T: 'static,
@@ -7005,7 +7144,7 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
     /// Borrow the plain host values (or an existing managed host root).
     ///
     /// # Errors
-    /// Returns a runtime-state error for device-only storage.
+    /// Returns [`crate::Error::RuntimeState`] for device-only storage.
     pub fn host_data(&self) -> crate::Result<&[T]> {
         match &self.core {
             TypedTensorCore::Host { data, .. } => Ok(data.as_slice()),
@@ -7013,15 +7152,110 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
         }
     }
 
+    /// Borrow compact host storage as a flat column-major slice without copying.
+    ///
+    /// # Examples
+    /// ```
+    /// use tenferro_tensor::TypedTensor;
+    /// let tensor = TypedTensor::<String>::from_vec_col_major([2], vec!["a".into(), "b".into()])?;
+    /// assert_eq!(tensor.as_slice()?, &["a", "b"]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    /// # Errors
+    /// Device-only storage returns [`crate::Error::RuntimeState`].
+    pub fn as_slice(&self) -> crate::Result<&[T]> {
+        self.host_data()
+    }
+
     /// Mutably borrow the plain host values (or an existing managed host root).
     ///
     /// # Errors
-    /// Returns a runtime-state error for device-only storage.
+    /// Returns [`crate::Error::RuntimeState`] for device-only storage.
     pub fn host_data_mut(&mut self) -> crate::Result<&mut [T]> {
         match &mut self.core {
             TypedTensorCore::Host { data, .. } => Ok(data.as_mut_slice()),
             TypedTensorCore::Managed(core) => core.group.host_slice_mut::<T>(),
         }
+    }
+
+    /// Borrow an element by checked column-major multi-index.
+    ///
+    /// # Examples
+    /// ```
+    /// use tenferro_tensor::TypedTensor;
+    /// let tensor = TypedTensor::<String>::from_vec_col_major([2], vec!["a".into(), "b".into()])?;
+    /// assert_eq!(tensor.get(&[1])?, "b");
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    /// # Errors
+    /// Invalid rank, coordinates or offset return [`crate::Error::Validation`];
+    /// device-only storage returns [`crate::Error::RuntimeState`].
+    pub fn get(&self, indices: &[usize]) -> crate::Result<&T> {
+        let offset = self.linear_offset(indices)?;
+        self.host_data()?.get(offset).ok_or_else(|| {
+            crate::Error::validation("TypedTensor::get", ValidationError::ViewOutOfBounds)
+        })
+    }
+
+    /// Exclusively borrow an element by checked column-major multi-index.
+    ///
+    /// # Examples
+    /// ```
+    /// use tenferro_tensor::TypedTensor;
+    /// let mut tensor = TypedTensor::<String>::from_vec_col_major([1], vec!["a".into()])?;
+    /// *tensor.get_mut(&[0])? = "b".into();
+    /// assert_eq!(tensor.get(&[0])?, "b");
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    /// # Errors
+    /// Invalid rank, coordinates or offset return [`crate::Error::Validation`];
+    /// device-only storage returns [`crate::Error::RuntimeState`].
+    pub fn get_mut(&mut self, indices: &[usize]) -> crate::Result<&mut T> {
+        let offset = self.linear_offset(indices)?;
+        self.host_data_mut()?.get_mut(offset).ok_or_else(|| {
+            crate::Error::validation("TypedTensor::get_mut", ValidationError::ViewOutOfBounds)
+        })
+    }
+
+    /// Compute the checked compact column-major offset of an element.
+    ///
+    /// # Examples
+    /// ```
+    /// use tenferro_tensor::TypedTensor;
+    /// let tensor = TypedTensor::<String>::from_vec_col_major([2, 3], vec![String::new(); 6])?;
+    /// assert_eq!(tensor.linear_offset(&[1, 2])?, 5);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    /// # Errors
+    /// Wrong rank, out-of-range coordinates or arithmetic overflow return
+    /// [`crate::Error::Validation`].
+    pub fn linear_offset(&self, indices: &[usize]) -> crate::Result<usize> {
+        try_linear_offset_for_shape(self.shape(), indices, "TypedTensor::linear_offset")
+    }
+
+    /// Make an explicit independent host copy with the same shape and placement.
+    ///
+    /// # Examples
+    /// ```
+    /// use tenferro_tensor::TypedTensor;
+    /// let tensor = TypedTensor::<String>::from_vec_col_major([1], vec!["a".into()])?;
+    /// assert_eq!(tensor.duplicate()?.get(&[0])?, "a");
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    /// # Errors
+    /// Device-only storage returns [`crate::Error::RuntimeState`]; invalid
+    /// host metadata returns [`crate::Error::Validation`].
+    pub fn duplicate(&self) -> crate::Result<Self>
+    where
+        T: Clone,
+    {
+        let mut copy = Self::from_vec_col_major(
+            R::shape_from_vec(shape_vec(self.shape()))
+                .map_err(|err| tensor_layout_error("TypedTensor::duplicate", err))?,
+            self.host_data()?.to_vec(),
+        )?;
+        copy.set_placement(self.placement().clone());
+        Ok(copy)
     }
 
     /// Create a tensor from an existing buffer and compact column-major layout.
@@ -7838,21 +8072,6 @@ impl<T: TensorScalar, R: TensorRank> TypedTensor<T, R> {
         Ok(tensor)
     }
 
-    /// Make an explicit owning copy of this tensor.
-    ///
-    /// Host storage is copied into a fresh allocation. Backend-owned storage
-    /// must be duplicated by the active backend, so this generic tensor layer
-    /// reports that operation as unsupported.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`crate::Error::RuntimeState`] when host data cannot be
-    /// borrowed, or [`ValidationError::InvalidArgument`] when the new group
-    /// cannot be constructed.
-    pub fn duplicate(&self) -> crate::Result<Self> {
-        self.as_view().duplicate()
-    }
-
     /// Borrow compact host-visible storage through one synchronization guard.
     #[doc(hidden)]
     pub fn with_host_read<U>(&self, f: impl FnOnce(&[T]) -> U) -> crate::Result<U>
@@ -7891,28 +8110,6 @@ impl<T: TensorScalar, R: TensorRank> TypedTensor<T, R> {
         }
     }
 
-    /// View the tensor data as a flat slice.
-    ///
-    /// This is an alias for `host_data()` for API consistency with
-    /// `Tensor::as_slice`.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use tenferro_tensor::TypedTensor;
-    ///
-    /// let t = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 2.0]).unwrap();
-    /// assert_eq!(t.as_slice()?, &[1.0, 2.0]);
-    /// # Ok::<(), tenferro_tensor::Error>(())
-    /// ```
-    /// # Errors
-    ///
-    /// Returns [`crate::Error::RuntimeState`] when this tensor uses backend
-    /// storage; download it before borrowing it as a host slice.
-    pub fn as_slice(&self) -> crate::Result<&[T]> {
-        self.host_data()
-    }
-
     fn group_host_slice(&self) -> &[T] {
         let TypedTensorCore::Managed(core) = &self.core else {
             return &[];
@@ -7922,29 +8119,6 @@ impl<T: TensorScalar, R: TensorRank> TypedTensor<T, R> {
             .ok()
             .and_then(|view| view.host_slice().ok())
             .unwrap_or_default()
-    }
-
-    /// Compute the linear physical-buffer offset for a logical index.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use tenferro_tensor::TypedTensor;
-    ///
-    /// let t = TypedTensor::<f64>::zeros(vec![2, 3]).unwrap();
-    /// assert_eq!(t.linear_offset(&[1, 2])?, 5);
-    /// # Ok::<(), tenferro_tensor::Error>(())
-    /// ```
-    /// # Errors
-    ///
-    /// Returns [`crate::Error::Validation`] with
-    /// [`tenferro_tensor_core::ValidationError::RankMismatch`] when `indices`
-    /// has the wrong rank, [`tenferro_tensor_core::ValidationError::InvalidArgument`]
-    /// when an index is outside its axis extent, or
-    /// [`tenferro_tensor_core::ValidationError::IntegerOverflow`] when offset
-    /// arithmetic overflows.
-    pub fn linear_offset(&self, indices: &[usize]) -> crate::Result<usize> {
-        try_linear_offset_for_shape(self.shape(), indices, "TypedTensor::linear_offset")
     }
 
     /// Compute the physical element offset for a logical index.
@@ -8035,61 +8209,6 @@ impl<T: TensorScalar, R: TensorRank> TypedTensor<T, R> {
             layout.offset(),
             "TypedTensor::assert_col_major_contiguous",
         )
-    }
-
-    /// Borrow a single element by multi-index.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use tenferro_tensor::TypedTensor;
-    ///
-    /// let t = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 2.0]).unwrap();
-    /// assert_eq!(t.get(&[1])?, &2.0);
-    /// # Ok::<(), tenferro_tensor::Error>(())
-    /// ```
-    /// # Errors
-    ///
-    /// Returns [`crate::Error::Validation`] with
-    /// [`tenferro_tensor_core::ValidationError::RankMismatch`] when `indices`
-    /// has the wrong rank, [`tenferro_tensor_core::ValidationError::InvalidArgument`]
-    /// when an index is outside its axis extent, or
-    /// [`tenferro_tensor_core::ValidationError::ViewOutOfBounds`] when the
-    /// computed offset is outside the host buffer. It returns
-    /// [`crate::Error::RuntimeState`] when the tensor uses backend storage.
-    pub fn get(&self, indices: &[usize]) -> crate::Result<&T> {
-        let off = self.linear_offset(indices)?;
-        self.host_data()?.get(off).ok_or_else(|| {
-            crate::Error::validation("TypedTensor::get", ValidationError::ViewOutOfBounds)
-        })
-    }
-
-    /// Mutably borrow a single element by multi-index.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use tenferro_tensor::TypedTensor;
-    ///
-    /// let mut t = TypedTensor::<f64>::zeros(vec![1]).unwrap();
-    /// *t.get_mut(&[0])? = 7.0;
-    /// assert_eq!(t.host_data()?, &[7.0]);
-    /// # Ok::<(), tenferro_tensor::Error>(())
-    /// ```
-    /// # Errors
-    ///
-    /// Returns [`crate::Error::Validation`] with
-    /// [`tenferro_tensor_core::ValidationError::RankMismatch`] when `indices`
-    /// has the wrong rank, [`tenferro_tensor_core::ValidationError::InvalidArgument`]
-    /// when an index is outside its axis extent, or
-    /// [`tenferro_tensor_core::ValidationError::ViewOutOfBounds`] when the
-    /// computed offset is outside the host buffer. It returns
-    /// [`crate::Error::RuntimeState`] when the tensor uses backend storage.
-    pub fn get_mut(&mut self, indices: &[usize]) -> crate::Result<&mut T> {
-        let off = self.linear_offset(indices)?;
-        self.host_data_mut()?.get_mut(off).ok_or_else(|| {
-            crate::Error::validation("TypedTensor::get_mut", ValidationError::ViewOutOfBounds)
-        })
     }
 }
 

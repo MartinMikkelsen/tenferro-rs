@@ -47,9 +47,10 @@ assert_eq!(
 ## Importing External Data
 
 PyTorch, NumPy, JAX, and many C-style examples present flat buffers in
-row-major order. tenferro does not keep a row-major compatibility constructor:
-reorder those buffers explicitly at the boundary, then construct tensors from
-column-major data.
+row-major order. `TypedTensor::<T>::from_vec_row_major` explicitly imports
+host values into column-major storage (cloning each element); it does not
+create a row-major owner. The dtype-erased `Tensor::from_vec_col_major` below
+still expects an already reordered column-major buffer.
 
 <!-- snippet-source: docs/tutorial-code/src/bin/core_tensor_snippets.rs#memory_order_26 -->
 ```rust

@@ -109,14 +109,14 @@ fn tensor_views_do_not_expose_legacy_physical_slice_names() {
 }
 
 #[test]
-fn tensor_types_do_not_expose_row_major_compatibility_apis() {
+fn tensor_types_only_allow_explicit_row_major_host_import() {
     let crate_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
     let source = fs::read_to_string(crate_dir.join("src/types.rs"))
         .expect("tenferro-tensor types source must be readable");
 
     assert!(
-        !source.contains("from_vec_row_major") && !source.contains("into_vec_row_major"),
-        "tensor public API must stay column-major only; row-major conversion belongs outside tenferro"
+        source.contains("pub fn from_vec_row_major") && !source.contains("pub fn into_vec_row_major"),
+        "row-major input is an explicit import into column-major storage, not a second owning layout"
     );
 }
 
