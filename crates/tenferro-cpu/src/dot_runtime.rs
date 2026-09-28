@@ -950,15 +950,25 @@ impl DotGeneralRuntime {
             config,
             accumulation,
             |lhs, rhs, canonical_config, canonical_accumulation| {
-                let Some(plan) = crate::gemm::prepare_provider_gemm_canonical(
-                    cache,
-                    cache_slot,
+                // The canonical operands' grouping is known from the axis
+                // counts; only an unusual layout needs the general analysis.
+                let plan = match crate::gemm::canonical_provider_gemm_plan_into(
                     lhs,
                     rhs,
                     output,
                     canonical_config,
-                )?
-                else {
+                )? {
+                    Some(plan) => Some(plan),
+                    None => crate::gemm::prepare_provider_gemm_canonical(
+                        cache,
+                        cache_slot,
+                        lhs,
+                        rhs,
+                        output,
+                        canonical_config,
+                    )?,
+                };
+                let Some(plan) = plan else {
                     return Err(Error::unsupported(
                         OP,
                         "configured CPU layout-plus-GEMM path cannot represent the canonical contraction",
@@ -1076,15 +1086,23 @@ impl DotGeneralRuntime {
                     config,
                     accumulation,
                     |lhs, rhs, canonical_config, canonical_accumulation| {
-                        let Some(plan) = crate::gemm::prepare_provider_gemm_canonical_into_uninit(
-                            cache,
-                            cache_slot,
+                        let plan = match crate::gemm::canonical_provider_gemm_plan_uninit(
                             lhs,
                             rhs,
                             output_shape,
                             canonical_config,
-                        )?
-                        else {
+                        )? {
+                            Some(plan) => Some(plan),
+                            None => crate::gemm::prepare_provider_gemm_canonical_into_uninit(
+                                cache,
+                                cache_slot,
+                                lhs,
+                                rhs,
+                                output_shape,
+                                canonical_config,
+                            )?,
+                        };
+                        let Some(plan) = plan else {
                             return Ok(CpuProviderOutcome::Unsupported(
                                 CpuProviderUnsupported::Layout(crate::provider::CpuOperand::Output),
                             ));

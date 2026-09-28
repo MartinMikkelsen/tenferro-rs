@@ -1363,6 +1363,122 @@ pub(crate) fn prepare_provider_gemm_canonical_into_uninit(
     )
 }
 
+/// Plan a GEMM whose operands are already compact column-major in canonical
+/// order: `lhs` as `[free.., contracted.., batch..]` and `rhs` as
+/// `[contracted.., free.., batch..]`, which is what the canonical packing
+/// fallback produces or borrows. The grouping is then known from the axis
+/// counts, so the general layout analysis (and its cache) is skipped.
+///
+/// Returns `None` for an empty extent, a non-compact operand or an output the
+/// planner cannot express; the caller then uses the analysed path.
+pub(crate) fn canonical_provider_gemm_plan(
+    lhs: &TensorRead<'_>,
+    rhs: &TensorRead<'_>,
+    output_shape: &[usize],
+    output_strides: &[isize],
+    output_offset: isize,
+    config: &DotGeneralConfig,
+) -> Result<Option<ProviderGemmPlan>> {
+    if !lhs.is_col_major_contiguous()? || !rhs.is_col_major_contiguous()? {
+        return Ok(None);
+    }
+    let contracted_axes = config.lhs_contracting_dims.len();
+    let batch_axes = config.lhs_batch_dims.len();
+    let lhs_shape = lhs.shape();
+    let rhs_shape = rhs.shape();
+    let Some(lhs_free_axes) = lhs_shape.len().checked_sub(contracted_axes + batch_axes) else {
+        return Ok(None);
+    };
+    let Some(rhs_free_axes) = rhs_shape.len().checked_sub(contracted_axes + batch_axes) else {
+        return Ok(None);
+    };
+    let product = |dims: &[usize]| checked_product(dims);
+    let (Some(m), Some(k), Some(batch), Some(n)) = (
+        product(&lhs_shape[..lhs_free_axes]),
+        product(&lhs_shape[lhs_free_axes..lhs_free_axes + contracted_axes]),
+        product(&lhs_shape[lhs_free_axes + contracted_axes..]),
+        product(&rhs_shape[contracted_axes..contracted_axes + rhs_free_axes]),
+    ) else {
+        return Ok(None);
+    };
+    if m == 0 || n == 0 || k == 0 || batch == 0 {
+        return Ok(None);
+    }
+    let Some((output_row_stride, output_column_stride, output_batch_stride)) = output_gemm_strides(
+        output_shape,
+        output_strides,
+        lhs_shape.len(),
+        rhs_shape.len(),
+        config,
+    )?
+    else {
+        return Ok(None);
+    };
+    let as_stride = |value: usize| isize::try_from(value).ok();
+    let (Some(m_stride), Some(k_stride), Some(lhs_batch), Some(rhs_batch)) = (
+        as_stride(m),
+        as_stride(k),
+        m.checked_mul(k).and_then(as_stride),
+        k.checked_mul(n).and_then(as_stride),
+    ) else {
+        return Ok(None);
+    };
+    Ok(Some(ProviderGemmPlan {
+        rows: m,
+        columns: n,
+        contracted: k,
+        batch_count: batch,
+        lhs_layout: crate::provider::CpuBatchedMatrixLayout::new(
+            lhs.offset(),
+            normalize_singleton_stride(1, m, k),
+            normalize_singleton_stride(m_stride, k, m),
+            lhs_batch,
+        ),
+        rhs_layout: crate::provider::CpuBatchedMatrixLayout::new(
+            rhs.offset(),
+            normalize_singleton_stride(1, k, n),
+            normalize_singleton_stride(k_stride, n, k),
+            rhs_batch,
+        ),
+        output_layout: crate::provider::CpuBatchedMatrixLayout::new(
+            output_offset,
+            normalize_singleton_stride(output_row_stride, m, 1),
+            normalize_singleton_stride(output_column_stride, n, m),
+            output_batch_stride,
+        ),
+    }))
+}
+
+/// [`canonical_provider_gemm_plan`] for a fresh compact column-major output of
+/// `output_shape` at offset zero (an uninitialized pooled destination).
+pub(crate) fn canonical_provider_gemm_plan_uninit(
+    lhs: &TensorRead<'_>,
+    rhs: &TensorRead<'_>,
+    output_shape: &[usize],
+    config: &DotGeneralConfig,
+) -> Result<Option<ProviderGemmPlan>> {
+    let output_strides = compact_col_major_strides(output_shape)?;
+    canonical_provider_gemm_plan(lhs, rhs, output_shape, &output_strides, 0, config)
+}
+
+/// [`canonical_provider_gemm_plan`] for a destination tensor or view.
+pub(crate) fn canonical_provider_gemm_plan_into(
+    lhs: &TensorRead<'_>,
+    rhs: &TensorRead<'_>,
+    output: &TensorWrite<'_>,
+    config: &DotGeneralConfig,
+) -> Result<Option<ProviderGemmPlan>> {
+    let output_strides = provider_output_strides(output)?;
+    canonical_provider_gemm_plan(
+        lhs,
+        rhs,
+        output.shape(),
+        &output_strides,
+        output.offset(),
+        config,
+    )
+}
+
 pub(crate) fn prepare_provider_gemm(
     cache: &mut GemmAnalysisCache,
     cache_slot: Option<usize>,

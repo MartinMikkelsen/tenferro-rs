@@ -1501,3 +1501,68 @@ fn test_tier2_elementwise_ops_complex() {
         }) if message.contains("total order")
     ));
 }
+
+/// The canonical fallback plans packed and borrowed canonical operands
+/// directly: a borrowed operand at a nonzero offset and a strided destination
+/// view must still produce the reference contraction (#1897).
+#[test]
+fn canonical_fallback_honors_operand_offsets_and_output_strides() {
+    use tenferro_tensor::{
+        DotGeneralConfig, TensorView, TensorViewMut, TensorWrite, TypedTensorView,
+        TypedTensorViewMut,
+    };
+
+    // lhs [2, 3, 2] contracts its middle axis, so its free axes (0, 2) need
+    // packing; rhs is a compact [3, 2] block at element offset 5 of a larger
+    // buffer, already canonical and therefore borrowed.
+    let lhs_data: Vec<f64> = (1..=12).map(f64::from).collect();
+    let lhs = Tensor::from_vec_col_major(vec![2, 3, 2], lhs_data.clone()).unwrap();
+    let rhs_storage: Vec<f64> = (0..11).map(|i| f64::from(i) * 0.5 - 1.0).collect();
+    let rhs = TypedTensorView::from_slice([3, 2], [1, 3], 5, &rhs_storage).unwrap();
+    let rhs_data = &rhs_storage[5..11];
+    // The [2, 2, 2] output keeps its fused row group (i, l) compact but pads
+    // each GEMM column to a leading dimension of 6 in a 12-element buffer; BLAS
+    // also requires a unit row stride.
+    let mut out_storage = vec![-7.0_f64; 12];
+    let config = DotGeneralConfig {
+        lhs_contracting_dims: [1].as_slice().into(),
+        rhs_contracting_dims: [0].as_slice().into(),
+        lhs_batch_dims: [].as_slice().into(),
+        rhs_batch_dims: [].as_slice().into(),
+    };
+
+    let mut backend = CpuBackend::with_threads(1).unwrap();
+    {
+        let out =
+            TypedTensorViewMut::from_slice([2, 2, 2], [1, 2, 6], 0, &mut out_storage).unwrap();
+        backend
+            .with_backend_session(|session| {
+                session.dot_general_read_into(
+                    TensorRead::from_tensor(&lhs),
+                    TensorRead::from_view(TensorView::F64(rhs)),
+                    &config,
+                    TensorWrite::from_view(TensorViewMut::F64(out)),
+                )
+            })
+            .unwrap()
+            .unwrap();
+    }
+
+    // out[i, l, n] = sum_j lhs[i, j, l] * rhs[j, n] at storage i + 2l + 6n.
+    for n in 0..2 {
+        for l in 0..2 {
+            for i in 0..2 {
+                let expected: f64 = (0..3)
+                    .map(|j| lhs_data[i + 2 * j + 6 * l] * rhs_data[j + 3 * n])
+                    .sum();
+                assert_eq!(out_storage[i + 2 * l + 6 * n], expected, "({i}, {l}, {n})");
+            }
+        }
+    }
+    // The padding slots of each column are untouched.
+    assert!(out_storage
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| index % 6 >= 4)
+        .all(|(_, &value)| value == -7.0));
+}
