@@ -1396,10 +1396,9 @@ fn materialize_canonical_operand(
 ) -> Result<Tensor> {
     let input_view = transposed_read_view(input, permutation)?;
     let dtype = input_view.dtype();
-    let shape = input_view.shape().to_vec();
     let input = TensorRead::from_view(input_view);
     if let Some(witness) = provider.uninit_provider() {
-        let mut output = UninitTensor::acquire(buffers, dtype, shape.clone())?;
+        let mut output = UninitTensor::acquire(buffers, dtype, input.shape().to_vec())?;
         let outcome = {
             let output_bytes = output.as_uninit_bytes_mut();
             // SAFETY: `witness` is structural proof the provider asserted the
@@ -1429,6 +1428,7 @@ fn materialize_canonical_operand(
             Err(error) => return Err(error),
         }
     }
+    let shape = input.shape().to_vec();
     materialize_canonical_operand_zeroed(provider, context, buffers, &input, shape, conjugate)
 }
 
@@ -2172,14 +2172,16 @@ macro_rules! validate_owned_layout {
         if tensor.backend_buffer().is_some() {
             return Err(crate::cpu_backend_buffer_error(OP));
         }
+        // INVARIANT: an owned tensor's layout is compact column-major at offset
+        // zero by construction, so the only reachable-range fact to check is
+        // that its storage holds every logical element.
         let storage_len = tensor.host_data()?.len();
-        validate_layout_metadata(
-            $role,
-            tensor.shape(),
-            tensor.layout().strides(),
-            tensor.layout().offset(),
-            storage_len,
-        )
+        let element_count =
+            tenferro_tensor::validate::checked_shape_product(OP, $role, tensor.shape())?;
+        if element_count > storage_len {
+            return Err(Error::validation(OP, ValidationError::ViewOutOfBounds));
+        }
+        Ok(element_count)
     }};
 }
 

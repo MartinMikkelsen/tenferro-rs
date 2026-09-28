@@ -342,6 +342,24 @@ fn validate_permutation(rank: usize, axes: &[usize]) -> Result<()> {
             actual: axes.len(),
         });
     }
+    // Common ranks track seen axes in a bitmask; only very high ranks allocate.
+    if rank <= u128::BITS as usize {
+        let mut seen = 0u128;
+        for &axis in axes {
+            if axis >= rank {
+                return Err(ValidationError::AxisOutOfBounds { axis, rank });
+            }
+            let bit = 1u128 << axis;
+            if seen & bit != 0 {
+                return Err(ValidationError::DuplicateAxis {
+                    axis,
+                    role: "permutation",
+                });
+            }
+            seen |= bit;
+        }
+        return Ok(());
+    }
     let mut seen = vec![false; rank];
     for &axis in axes {
         if axis >= rank {

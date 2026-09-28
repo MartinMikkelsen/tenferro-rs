@@ -7,8 +7,9 @@ use tenferro_tensor::{validate::checked_shape_product, TensorRank, TensorScalar,
 use crate::buffer_pool::{BufferPool, PoolScalar, UninitCheckoutToken};
 use crate::{Error, Result};
 
-fn checked_compact_strides(shape: &[usize]) -> Result<Vec<isize>> {
-    let mut strides = Vec::with_capacity(shape.len());
+fn checked_compact_strides(shape: &[usize]) -> Result<tenferro_tensor::StrideVec> {
+    // Inline for common ranks: the output lease is taken on every allocated op.
+    let mut strides = tenferro_tensor::StrideVec::with_capacity(shape.len());
     let mut stride = 1isize;
     for &dim in shape {
         strides.push(stride);
@@ -48,7 +49,7 @@ fn checked_compact_strides(shape: &[usize]) -> Result<Vec<isize>> {
 pub struct PooledUninitOutput<T: PoolScalar> {
     pool: BufferPool,
     shape: Vec<usize>,
-    strides: Vec<isize>,
+    strides: tenferro_tensor::StrideVec,
     data: Vec<std::mem::MaybeUninit<T>>,
     checkout: Option<UninitCheckoutToken>,
     byte_len: usize,

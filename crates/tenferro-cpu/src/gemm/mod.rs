@@ -46,12 +46,12 @@ use crate::provider::{
 };
 use crate::{Error, Result};
 use tenferro_tensor::backend::GroupedGemmConfig;
-use tenferro_tensor::{
-    col_major_strides, TensorRead, TensorScalar, TensorView, TensorViewMut, TensorWrite,
-    TypedTensor, TypedTensorView, TypedTensorViewMut, ValidationError,
-};
 use tenferro_tensor::{CacheStats, RuntimeCacheControl};
 use tenferro_tensor::{ContractionScalar, DotGeneralAccumulation, DotGeneralConfig};
+use tenferro_tensor::{
+    TensorRead, TensorScalar, TensorView, TensorViewMut, TensorWrite, TypedTensor, TypedTensorView,
+    TypedTensorViewMut, ValidationError,
+};
 
 #[cfg(feature = "cpu-blas")]
 mod blas_gemm;
@@ -159,7 +159,7 @@ impl<T: TensorScalar> TypedTensorRead<T> for TypedTensor<T> {
     }
 
     fn strides(&self) -> crate::Result<SmallVec<[isize; 8]>> {
-        Ok(col_major_strides(self.shape())?.into_iter().collect())
+        compact_col_major_strides(self.shape())
     }
 
     fn offset(&self) -> isize {
@@ -1083,9 +1083,26 @@ impl ProviderGemmPlan {
     }
 }
 
+/// Column-major strides for a compact shape, inline for common ranks so GEMM
+/// analysis does not allocate per call.
+fn compact_col_major_strides(shape: &[usize]) -> Result<SmallVec<[isize; 8]>> {
+    let mut strides = SmallVec::with_capacity(shape.len());
+    let mut stride = 1isize;
+    for &extent in shape {
+        strides.push(stride);
+        let extent = isize::try_from(extent).map_err(|_| {
+            crate::Error::validation("col_major_strides", ValidationError::IntegerOverflow)
+        })?;
+        stride = stride.checked_mul(extent).ok_or_else(|| {
+            crate::Error::validation("col_major_strides", ValidationError::IntegerOverflow)
+        })?;
+    }
+    Ok(strides)
+}
+
 fn provider_output_strides(output: &TensorWrite<'_>) -> Result<SmallVec<[isize; 8]>> {
     Ok(match output {
-        TensorWrite::Tensor(output) => col_major_strides(output.shape())?.into_iter().collect(),
+        TensorWrite::Tensor(output) => compact_col_major_strides(output.shape())?,
         TensorWrite::View(output) => output.strides().iter().copied().collect(),
     })
 }
@@ -1308,7 +1325,7 @@ pub(crate) fn prepare_provider_gemm_into_uninit(
     output_shape: &[usize],
     config: &DotGeneralConfig,
 ) -> Result<Option<ProviderGemmPlan>> {
-    let output_strides = col_major_strides(output_shape)?;
+    let output_strides = compact_col_major_strides(output_shape)?;
     prepare_provider_gemm_kind_with_output(
         cache,
         cache_slot,
@@ -1332,7 +1349,7 @@ pub(crate) fn prepare_provider_gemm_canonical_into_uninit(
     output_shape: &[usize],
     config: &DotGeneralConfig,
 ) -> Result<Option<ProviderGemmPlan>> {
-    let output_strides = col_major_strides(output_shape)?;
+    let output_strides = compact_col_major_strides(output_shape)?;
     prepare_provider_gemm_kind_with_output(
         cache,
         cache_slot,
