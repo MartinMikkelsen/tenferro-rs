@@ -42,7 +42,7 @@ fn recycled_output_returns_only_after_final_group_owner_drops() {
 fn recycled_drop_during_another_checkout_does_not_reenter_the_execution_lock() {
     let mut pool = BufferPool::new();
     let tensor = recycled(&mut pool);
-    let output = PooledUninitOutput::<f64>::new(&mut pool, vec![4]).unwrap();
+    let output = PooledUninitOutput::<f64>::new(&pool, vec![4]).unwrap();
     drop(tensor);
     drop(output);
     assert_eq!(pool.len(), 1);
@@ -119,7 +119,7 @@ fn partial_output_is_discarded_on_error_and_unwind() {
         drop(recycled(&mut pool));
         assert_eq!(pool.len(), 1);
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let mut output = PooledUninitOutput::<f64>::new(&mut pool, vec![4]).unwrap();
+            let mut output = PooledUninitOutput::<f64>::new(&pool, vec![4]).unwrap();
             output.as_uninit_slice_mut()[0].write(f64::NAN);
             if unwind {
                 panic!("kernel stopped after a partial write");
@@ -175,8 +175,8 @@ fn compact_stride_validation_reports_dimension_and_product_overflow() {
 
 #[test]
 fn pooled_uninit_output_public_contract_covers_zero_length_handoff() {
-    let mut pool = BufferPool::new();
-    let mut output = PooledUninitOutput::<i32>::new(&mut pool, vec![0]).unwrap();
+    let pool = BufferPool::new();
+    let mut output = PooledUninitOutput::<i32>::new(&pool, vec![0]).unwrap();
     assert!(output.as_uninit_slice_mut().is_empty());
     assert!(output.as_uninit_bytes_mut().is_empty());
     assert_eq!(output.as_uninit_view_mut().unwrap().dims(), &[0]);

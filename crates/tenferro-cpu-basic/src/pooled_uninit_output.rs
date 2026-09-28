@@ -47,7 +47,7 @@ impl<T: PoolScalar> PooledUninitOutput<T> {
     /// ```rust
     /// use tenferro_cpu_basic::{buffer_pool::BufferPool, PooledUninitOutput};
     /// let mut pool = BufferPool::new();
-    /// let output = PooledUninitOutput::<f32>::new(&mut pool, vec![2, 3]).unwrap();
+    /// let output = PooledUninitOutput::<f32>::new(&pool, vec![2, 3]).unwrap();
     /// drop(output);
     /// ```
     /// # Errors
@@ -93,7 +93,7 @@ impl<T: PoolScalar> PooledUninitOutput<T> {
     /// ```rust
     /// use tenferro_cpu_basic::{buffer_pool::BufferPool, PooledUninitOutput};
     /// let mut pool = BufferPool::new();
-    /// let mut output = PooledUninitOutput::<i32>::new(&mut pool, vec![1]).unwrap();
+    /// let mut output = PooledUninitOutput::<i32>::new(&pool, vec![1]).unwrap();
     /// output.as_uninit_slice_mut()[0].write(7);
     /// ```
     ///
@@ -108,7 +108,7 @@ impl<T: PoolScalar> PooledUninitOutput<T> {
     /// ```rust
     /// use tenferro_cpu_basic::{buffer_pool::BufferPool, PooledUninitOutput};
     /// let mut pool = BufferPool::new();
-    /// let mut output = PooledUninitOutput::<f32>::new(&mut pool, vec![2]).unwrap();
+    /// let mut output = PooledUninitOutput::<f32>::new(&pool, vec![2]).unwrap();
     /// let view = output.as_uninit_view_mut().unwrap();
     /// assert_eq!(view.dims(), &[2]);
     /// ```
@@ -144,7 +144,7 @@ impl<T: PoolScalar> PooledUninitOutput<T> {
     /// ```rust
     /// use tenferro_cpu_basic::{buffer_pool::BufferPool, PooledUninitOutput};
     /// let mut pool = BufferPool::new();
-    /// let mut output = PooledUninitOutput::<i32>::new(&mut pool, vec![1]).unwrap();
+    /// let mut output = PooledUninitOutput::<i32>::new(&pool, vec![1]).unwrap();
     /// assert_eq!(output.as_uninit_bytes_mut().len(), 4);
     /// ```
     pub fn as_uninit_bytes_mut(&mut self) -> &mut [std::mem::MaybeUninit<u8>] {
@@ -173,7 +173,7 @@ impl<T: PoolScalar> PooledUninitOutput<T> {
     /// ```rust
     /// use tenferro_cpu_basic::{buffer_pool::BufferPool, PooledUninitOutput};
     /// let mut pool = BufferPool::new();
-    /// let mut output = PooledUninitOutput::<i32>::new(&mut pool, vec![1]).unwrap();
+    /// let mut output = PooledUninitOutput::<i32>::new(&pool, vec![1]).unwrap();
     /// output.as_uninit_slice_mut()[0].write(7);
     /// // SAFETY: the preceding write initializes every logical destination element.
     /// // SAFETY: the example writes every logical destination element before completion.
@@ -210,7 +210,7 @@ impl<T: PoolScalar> PooledUninitOutput<T> {
     /// use tenferro_cpu_basic::{buffer_pool::BufferPool, PooledUninitOutput};
     /// use tenferro_tensor::Rank;
     /// let mut pool = BufferPool::new();
-    /// let mut output = PooledUninitOutput::<i32>::new(&mut pool, vec![1]).unwrap();
+    /// let mut output = PooledUninitOutput::<i32>::new(&pool, vec![1]).unwrap();
     /// output.as_uninit_slice_mut()[0].write(7);
     /// // SAFETY: the preceding write initializes every logical destination element.
     /// let tensor = unsafe { output.assume_init_as::<Rank<1>>() }.unwrap();
@@ -256,7 +256,7 @@ impl<T: PoolScalar> PooledUninitOutput<T> {
     /// ```
     /// use tenferro_cpu_basic::{buffer_pool::BufferPool, PooledUninitOutput};
     /// let mut pool = BufferPool::new();
-    /// let mut output = PooledUninitOutput::<f64>::new(&mut pool, vec![1])?;
+    /// let mut output = PooledUninitOutput::<f64>::new(&pool, vec![1])?;
     /// output.as_uninit_slice_mut()[0].write(2.0);
     /// // SAFETY: the only element has been initialized.
     /// let tensor = unsafe { output.assume_init_recycled() }?;

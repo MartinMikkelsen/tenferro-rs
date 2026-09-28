@@ -2044,10 +2044,11 @@ impl<T> HostData<T> {
 
 impl<T> Drop for HostData<T> {
     fn drop(&mut self) {
-        if let Some(recycler) = self.recycler.take().and_then(|weak| weak.upgrade()) {
-            if let StorageBuffer::Host(data) = &mut self.buffer {
-                recycler.recycle(std::mem::take(data));
-            }
+        let Some(recycler) = self.recycler.take().and_then(|weak| weak.upgrade()) else {
+            return;
+        };
+        if let StorageBuffer::Host(data) = &mut self.buffer {
+            recycler.recycle(std::mem::take(data));
         }
     }
 }
@@ -8864,17 +8865,15 @@ impl<T: TensorScalar, R: TensorRank> TypedTensor<T, R> {
     }
 }
 
+/// Layout builder used by an owning representation reinterpretation.
+type ReinterpretLayoutFn =
+    fn(&[usize], &[isize], isize, usize, &'static str) -> crate::Result<TensorLayout<DynRank>>;
+
 fn reinterpret_owned<S: TensorScalar, U: TensorScalar, R: TensorRank>(
     owner: TypedTensor<S, R>,
     from: DType,
     to: DType,
-    make_layout: fn(
-        &[usize],
-        &[isize],
-        isize,
-        usize,
-        &'static str,
-    ) -> crate::Result<TensorLayout<DynRank>>,
+    make_layout: ReinterpretLayoutFn,
     op: &'static str,
 ) -> Result<TypedTensor<U>, ReinterpretError<TypedTensor<S, R>>> {
     if let Err(error) = validate_representation_pair(op, from, to) {
