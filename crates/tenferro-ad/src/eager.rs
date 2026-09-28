@@ -4539,26 +4539,34 @@ fn semantic_eager_vjp_many(
     let cotangent_tensor = Arc::new(RetainedValue::from_tensor(cotangent.to_tensor()?));
     let input_count = execution_program.input_count();
     let mut owned_inputs: Vec<Option<Tensor>> = (0..input_count).map(|_| None).collect();
-    for (value, &index) in saved.iter().zip(&saved_input_indices) {
-        let read = value.value.tensor_read("eager residual")?;
-        let tensor = ctx.with_execution_session(|session| session.to_contiguous_read(read))??;
-        owned_inputs[index] = Some(tensor);
-    }
-    for (source_input_index, (_, tensor)) in source.bindings().iter().enumerate() {
-        let Some(slot) = owned_inputs.get_mut(source_input_index) else {
+    // Residuals, primal bindings and the seed are staged in one backend session
+    // rather than one entry per value.
+    ctx.with_execution_session(|session| -> Result<()> {
+        for (value, &index) in saved.iter().zip(&saved_input_indices) {
+            let read = value.value.tensor_read("eager residual")?;
+            let Some(slot) = owned_inputs.get_mut(index) else {
+                return Err(Error::Internal(format!(
+                    "semantic eager VJP residual index {index} is outside {input_count} inputs"
+                )));
+            };
+            *slot = Some(session.to_contiguous_read(read)?);
+        }
+        for (source_input_index, (_, tensor)) in source.bindings().iter().enumerate() {
+            let Some(slot) = owned_inputs.get_mut(source_input_index) else {
+                return Err(Error::Internal(format!(
+                    "semantic eager VJP derivative program has no primal input slot {source_input_index}"
+                )));
+            };
+            *slot = Some(copy_value_in_session(session, tensor)?);
+        }
+        let Some(slot) = owned_inputs.get_mut(seed_input_index) else {
             return Err(Error::Internal(format!(
-                "semantic eager VJP derivative program has no primal input slot {source_input_index}"
+                "semantic eager VJP seed input index {seed_input_index} is outside {input_count} inputs"
             )));
         };
-        *slot = Some(copy_value_for_runtime(ctx, tensor)?);
-    }
-    let Some(slot) = owned_inputs.get_mut(seed_input_index) else {
-        return Err(Error::Internal(format!(
-            "semantic eager VJP seed input index {seed_input_index} is outside {} inputs",
-            owned_inputs.len()
-        )));
-    };
-    *slot = Some(copy_value_for_runtime(ctx, cotangent_tensor.as_ref())?);
+        *slot = Some(copy_value_in_session(session, cotangent_tensor.as_ref())?);
+        Ok(())
+    })??;
     let input_refs = owned_inputs
         .iter()
         .enumerate()
@@ -4717,21 +4725,24 @@ fn semantic_eager_jvp_optional(
     let tangent_tensor = Arc::new(RetainedValue::from_tensor(tangent.to_tensor()?));
     let input_count = derivative_program.input_count();
     let mut owned_inputs: Vec<Option<Tensor>> = (0..input_count).map(|_| None).collect();
-    for (source_input_index, (_, tensor)) in source.bindings().iter().enumerate() {
-        let Some(slot) = owned_inputs.get_mut(source_input_index) else {
+    // Primal bindings and the seed are staged in one backend session.
+    ctx.with_execution_session(|session| -> Result<()> {
+        for (source_input_index, (_, tensor)) in source.bindings().iter().enumerate() {
+            let Some(slot) = owned_inputs.get_mut(source_input_index) else {
+                return Err(Error::Internal(format!(
+                    "semantic eager JVP derivative program has no primal input slot {source_input_index}"
+                )));
+            };
+            *slot = Some(copy_value_in_session(session, tensor)?);
+        }
+        let Some(slot) = owned_inputs.get_mut(seed_input_index) else {
             return Err(Error::Internal(format!(
-                "semantic eager JVP derivative program has no primal input slot {source_input_index}"
+                "semantic eager JVP seed input index {seed_input_index} is outside {input_count} inputs"
             )));
         };
-        *slot = Some(copy_value_for_runtime(ctx, tensor)?);
-    }
-    let Some(slot) = owned_inputs.get_mut(seed_input_index) else {
-        return Err(Error::Internal(format!(
-            "semantic eager JVP seed input index {seed_input_index} is outside {} inputs",
-            owned_inputs.len()
-        )));
-    };
-    *slot = Some(copy_value_for_runtime(ctx, tangent_tensor.as_ref())?);
+        *slot = Some(copy_value_in_session(session, tangent_tensor.as_ref())?);
+        Ok(())
+    })??;
     let input_refs = owned_inputs
         .iter()
         .enumerate()
@@ -4788,12 +4799,14 @@ fn validate_same_runtime(
     Ok(())
 }
 
-fn copy_value_for_runtime(ctx: &EagerRuntime, value: &RetainedValue) -> Result<Tensor> {
+fn copy_value_in_session(
+    session: &mut dyn BackendSession,
+    value: &RetainedValue,
+) -> Result<Tensor> {
     let read = value.tensor_read().map_err(|error| {
         Error::runtime_state_source("copy_value_for_runtime", ErrorPhase::Execution, error)
     })?;
-    ctx.with_execution_session(|session| session.to_contiguous_read(read))?
-        .map_err(Error::from)
+    session.to_contiguous_read(read).map_err(Error::from)
 }
 
 fn validate_seed_tensor(op: &'static str, primal: &EagerTensor, seed: &EagerTensor) -> Result<()> {
@@ -5852,26 +5865,31 @@ impl EagerTensor {
         }
         let wrts = targets.iter().map(|(_, wrt)| wrt).collect::<Vec<_>>();
         let gradients = semantic_eager_vjp_many(&self.ctx, self, &wrts, &cotangent)?;
-        let mut cotangents = HashMap::new();
-        for ((key, _), grad) in targets.into_iter().zip(gradients) {
-            let Some(grad) = grad else {
-                continue;
-            };
-            let tensor = match grad.into_value() {
-                Ok(tensor) => tensor,
-                Err(IntoValueError::NotUnique(handle)) => handle.duplicate_value()?,
-                Err(IntoValueError::Extract { error, .. }) => {
-                    return Err(Error::runtime_state_source(
-                        "EagerTensor::backward",
-                        ErrorPhase::Execution,
-                        error,
-                    ));
-                }
-            };
-            cotangents.insert(key, tensor);
-        }
-        self.ctx
-            .with_execution_session(|session| self.ctx.store_grads(&cotangents, session))??;
+        // Shared-handle duplication and gradient storage share one session.
+        let cotangents = self.ctx.with_execution_session(|session| {
+            let mut cotangents = HashMap::new();
+            for ((key, _), grad) in targets.into_iter().zip(gradients) {
+                let Some(grad) = grad else {
+                    continue;
+                };
+                let tensor = match grad.into_value() {
+                    Ok(tensor) => tensor,
+                    Err(IntoValueError::NotUnique(handle)) => {
+                        handle.duplicate_value_in_session(session)?
+                    }
+                    Err(IntoValueError::Extract { error, .. }) => {
+                        return Err(Error::runtime_state_source(
+                            "EagerTensor::backward",
+                            ErrorPhase::Execution,
+                            error,
+                        ));
+                    }
+                };
+                cotangents.insert(key, tensor);
+            }
+            self.ctx.store_grads(&cotangents, session)?;
+            Ok(cotangents)
+        })??;
         Gradients::from_tensors(cotangents)
     }
 }

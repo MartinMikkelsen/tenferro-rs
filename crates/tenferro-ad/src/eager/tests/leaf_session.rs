@@ -924,3 +924,39 @@ fn host_leaf_materialization_matches_the_cpu_backend_acceptance() -> Result<(), 
         .is_none());
     Ok(())
 }
+
+#[test]
+fn backward_enters_a_bounded_number_of_backend_sessions() -> Result<(), Error> {
+    let materializations = Arc::new(AtomicUsize::new(0));
+    let sessions = Arc::new(AtomicUsize::new(0));
+    let ctx = Arc::new(EagerRuntime::from_backend(
+        EagerBackend::recording_cpu_counting_sessions_with_engine(
+            materializations,
+            Arc::clone(&sessions),
+        ),
+    )?);
+    let x = ctx.variable_from(Tensor::from_vec_col_major(
+        vec![3],
+        vec![1.0_f64, 2.0, 3.0],
+    )?)?;
+    let w = ctx.variable_from(Tensor::from_vec_col_major(
+        vec![3],
+        vec![4.0_f64, 5.0, 6.0],
+    )?)?;
+    let loss = ctx.with_eager_session(|session| {
+        let xw = session.mul(&x, &w)?;
+        let e = session.exp(&xw)?;
+        let s = session.mul(&e, &x)?;
+        session.reduce_sum(&s, Some(&[0]))
+    })??;
+
+    let before = sessions.load(Ordering::Relaxed);
+    let grads = loss.backward()?;
+    let entered = sessions.load(Ordering::Relaxed) - before;
+    // Seed creation, derivative input staging and gradient storage: one entry
+    // each, independent of how many residuals, bindings or gradients exist.
+    assert!(entered <= 3, "backward entered {entered} backend sessions");
+    assert!(grads.grad(&x.key).is_some());
+    assert!(grads.grad(&w.key).is_some());
+    Ok(())
+}

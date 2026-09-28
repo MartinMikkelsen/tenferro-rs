@@ -102,6 +102,7 @@ impl EagerBackend {
             materializations,
             sessions: Arc::new(AtomicUsize::new(0)),
             inner: CpuBackend::new(),
+            install_engine: false,
         })
     }
 
@@ -114,6 +115,23 @@ impl EagerBackend {
             materializations,
             sessions,
             inner: CpuBackend::new(),
+            install_engine: false,
+        })
+    }
+
+    /// Like [`Self::recording_cpu_counting_sessions`], but the runtime also gets
+    /// the inner CPU engine so compiled derivative programs (semantic VJP) can
+    /// run; eager-backend session entries are still counted.
+    #[cfg(test)]
+    pub(crate) fn recording_cpu_counting_sessions_with_engine(
+        materializations: Arc<AtomicUsize>,
+        sessions: Arc<AtomicUsize>,
+    ) -> Self {
+        Self::Recording(RecordingBackend {
+            materializations,
+            sessions,
+            inner: CpuBackend::new(),
+            install_engine: true,
         })
     }
 
@@ -207,6 +225,12 @@ fn eager_engine_registration_for_backend(
             cpu_runtime_engine_registration(backend)?,
         ))),
         #[cfg(test)]
+        EagerBackend::Recording(backend) if backend.install_engine => {
+            Ok(EagerBackendRegistration::Install(Box::new(
+                cpu_runtime_engine_registration(&backend.inner)?,
+            )))
+        }
+        #[cfg(test)]
         EagerBackend::Recording(_) => Ok(EagerBackendRegistration::NoEngine),
         #[cfg(feature = "cuda")]
         EagerBackend::Cuda(backend) => Ok(EagerBackendRegistration::Install(Box::new(
@@ -249,6 +273,9 @@ pub struct RecordingBackend {
     /// session-free rather than inferring it from timing.
     sessions: Arc<AtomicUsize>,
     inner: CpuBackend,
+    /// Install `inner` as the runtime engine instead of leaving the runtime
+    /// without one.
+    install_engine: bool,
 }
 
 #[cfg(test)]
