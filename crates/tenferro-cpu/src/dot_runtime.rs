@@ -500,26 +500,45 @@ fn execute_all_batch_elementwise(
     } else {
         None
     };
-    let product = crate::elementwise::mul_read_with_pool(
-        buffers,
-        &exec,
+    let factors = [
         lhs_conj.as_ref().map_or(lhs_view, TensorRead::from_tensor),
         rhs_conj.as_ref().map_or(rhs_view, TensorRead::from_tensor),
-    )?;
-    let overwrite = DotGeneralAccumulation::overwrite(product.dtype())?;
-    let result = if accumulation.alpha == overwrite.alpha && accumulation.beta == overwrite.beta {
-        crate::copy_tensor_read_into(OP, TensorRead::from_tensor(&product), output)
-    } else {
-        crate::blas1::axpby_read_into_accum(
-            context,
-            buffers,
-            accumulation.alpha,
-            TensorRead::from_tensor(&product),
-            accumulation.beta,
-            output,
-        )
-    };
-    for temporary in [lhs_conj, rhs_conj, Some(product)].into_iter().flatten() {
+    ];
+    let overwrite = DotGeneralAccumulation::overwrite(lhs.dtype())?;
+    let (result, product) =
+        if accumulation.alpha == overwrite.alpha && accumulation.beta == overwrite.beta {
+            // Overwrite: the product is written straight into `output`.
+            let result = tenferro_internal_cpu_kernels::elementwise_read_into_with_context(
+                tenferro_tensor::ElementwiseReadOp::Multiply,
+                &factors,
+                output,
+                &exec,
+                |inputs, out| {
+                    crate::backend::elementwise_read_into_fallback_with_pool(
+                        buffers,
+                        &exec,
+                        tenferro_tensor::ElementwiseReadOp::Multiply,
+                        inputs,
+                        out,
+                    )
+                },
+            );
+            (result, None)
+        } else {
+            let [lhs_factor, rhs_factor] = factors;
+            let product =
+                crate::elementwise::mul_read_with_pool(buffers, &exec, lhs_factor, rhs_factor)?;
+            let result = crate::blas1::axpby_read_into_accum(
+                context,
+                buffers,
+                accumulation.alpha,
+                TensorRead::from_tensor(&product),
+                accumulation.beta,
+                output,
+            );
+            (result, Some(product))
+        };
+    for temporary in [lhs_conj, rhs_conj, product].into_iter().flatten() {
         crate::backend::reclaim_tensor(buffers, temporary);
     }
     result

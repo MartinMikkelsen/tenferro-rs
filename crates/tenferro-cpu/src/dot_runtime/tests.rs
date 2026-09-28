@@ -2948,3 +2948,39 @@ fn all_batch_complex_contraction_honors_conjugation() {
         ]
     );
 }
+
+#[test]
+fn all_batch_overwrite_writes_permuted_product_into_output() {
+    let gemm = Arc::new(GemmSpy::new(CpuProviderOutcome::Executed));
+    let bundle = provider_owned_bundle(gemm.clone());
+    let fixture = execution_context_fixture(1);
+    let lhs =
+        Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap();
+    let rhs = Tensor::from_vec_col_major(vec![3, 2], vec![10.0_f64, 20.0, 30.0, 40.0, 50.0, 60.0])
+        .unwrap();
+    // Stale contents must be overwritten, not accumulated.
+    let mut output = Tensor::from_vec_col_major(vec![3, 2], vec![-7.0_f64; 6]).unwrap();
+
+    bundle
+        .execute_dot_general_into(
+            &fixture.entry(),
+            &mut BufferPool::new(),
+            &mut GemmAnalysisCache::default(),
+            None,
+            TensorRead::from_tensor(&lhs),
+            TensorRead::from_tensor(&rhs),
+            &config(&[], &[], &[1, 0], &[0, 1]),
+            DotGeneralAccumulation::overwrite(DType::F64).unwrap(),
+            TensorWrite::from_tensor(&mut output),
+        )
+        .unwrap();
+
+    let expected: Vec<f64> = [1.0, 3.0, 5.0, 2.0, 4.0, 6.0]
+        .iter()
+        .zip([10.0, 20.0, 30.0, 40.0, 50.0, 60.0])
+        .map(|(lhs, rhs)| lhs * rhs)
+        .collect();
+    assert_eq!(output.as_slice::<f64>().unwrap(), expected.as_slice());
+    assert_eq!(*gemm.gemm_calls.lock().unwrap(), 0);
+    assert_eq!(*gemm.strided_calls.lock().unwrap(), 0);
+}
