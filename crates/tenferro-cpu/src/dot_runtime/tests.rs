@@ -520,6 +520,7 @@ struct GemmSpy {
     parallelism: Arc<Mutex<Vec<ParallelMode>>>,
     grouped_job_counts: Arc<Mutex<Vec<usize>>>,
     in_selected_pool: Arc<Mutex<Vec<bool>>>,
+    vendor_batches: Arc<Mutex<Vec<crate::provider::CpuVendorBatch>>>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -539,6 +540,7 @@ impl GemmSpy {
             parallelism: Arc::new(Mutex::new(Vec::new())),
             grouped_job_counts: Arc::new(Mutex::new(Vec::new())),
             in_selected_pool: Arc::new(Mutex::new(Vec::new())),
+            vendor_batches: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
@@ -585,9 +587,13 @@ impl CpuGemmProvider for GemmSpy {
     fn strided_batched_gemm(
         &self,
         context: &CpuExecutionContext<'_>,
-        _request: CpuGemmRequest<'_, '_, '_>,
+        request: CpuGemmRequest<'_, '_, '_>,
     ) -> tenferro_tensor::Result<CpuProviderOutcome> {
         *self.strided_calls.lock().unwrap() += 1;
+        self.vendor_batches
+            .lock()
+            .unwrap()
+            .push(request.vendor_batch());
         self.parallelism
             .lock()
             .unwrap()
@@ -601,6 +607,10 @@ impl CpuGemmProvider for GemmSpy {
         request: CpuGroupedGemmRequest<'_, '_, '_>,
     ) -> tenferro_tensor::Result<CpuProviderOutcome> {
         *self.grouped_calls.lock().unwrap() += 1;
+        self.vendor_batches
+            .lock()
+            .unwrap()
+            .push(request.vendor_batch());
         self.parallelism
             .lock()
             .unwrap()
@@ -2597,4 +2607,344 @@ fn engine_outer_bundle_with_a_non_concurrent_gemm_is_rejected_at_install() {
         "{error}"
     );
     assert_eq!(*gemm.grouped_calls.lock().unwrap(), 0);
+}
+
+// ---------------------------------------------------------------------------
+// Batch policy routes (#1938 D9)
+// ---------------------------------------------------------------------------
+
+fn provider_owned_bundle(gemm: Arc<dyn CpuGemmProvider>) -> CpuProviderBundle {
+    CpuProviderBundle::custom_builder()
+        .gemm_provider(gemm)
+        .layout_transform_provider(Arc::new(StridedLayoutTransformProvider))
+        .build()
+        .unwrap()
+}
+
+fn policy(strategy: crate::CpuBatchStrategy) -> crate::CpuBatchPolicy {
+    crate::CpuBatchPolicy::new(strategy)
+}
+
+fn run_unit_grouped(
+    bundle: &CpuProviderBundle,
+    entry: &crate::provider::CpuOperationEntry<'_>,
+    output: &mut Tensor,
+) -> tenferro_tensor::Result<()> {
+    let jobs = output.shape()[0];
+    let lhs = Tensor::from_vec_col_major(vec![jobs], vec![2.0_f64; jobs]).unwrap();
+    let rhs = Tensor::from_vec_col_major(vec![jobs], vec![4.0_f64; jobs]).unwrap();
+    let jobs = (0..jobs)
+        .map(|index| GroupedGemmJob::new(index, index, index, 1, 1, 1))
+        .collect::<Vec<_>>();
+    bundle.execute_grouped_gemm(
+        entry,
+        TensorRead::from_tensor(&lhs),
+        TensorRead::from_tensor(&rhs),
+        &GroupedGemmConfig::new(
+            &jobs,
+            DotGeneralAccumulation::overwrite(DType::F64).unwrap(),
+        ),
+        TensorWrite::from_tensor(output),
+    )
+}
+
+#[test]
+fn forced_sequential_grouped_overrides_engine_outer_fan_out() {
+    let gemm = Arc::new(GemmSpy::new(CpuProviderOutcome::Executed));
+    let bundle = route_bundle(gemm.clone(), None);
+    let (submits, _, fixture) = counting_execution_fixture(4);
+    let entry = fixture
+        .entry()
+        .with_batch_policy(policy(crate::CpuBatchStrategy::Sequential));
+    let mut output = Tensor::from_vec_col_major(vec![8], vec![0.0_f64; 8]).unwrap();
+
+    run_unit_grouped(&bundle, &entry, &mut output).unwrap();
+
+    // Auto would have fanned out over the engine; the forced strategy makes
+    // one provider call in sequential mode with vendor batching forbidden.
+    assert_eq!(submits.load(Ordering::Relaxed), 0);
+    assert_eq!(*gemm.grouped_calls.lock().unwrap(), 1);
+    assert_eq!(
+        gemm.parallelism.lock().unwrap().as_slice(),
+        &[ParallelMode::Sequential]
+    );
+    assert_eq!(
+        gemm.vendor_batches.lock().unwrap().as_slice(),
+        &[crate::provider::CpuVendorBatch::Forbidden]
+    );
+}
+
+#[test]
+fn grouped_vendor_batch_control_follows_the_strategy_and_thresholds() {
+    let cases = [
+        (
+            crate::CpuBatchPolicy::default().with_thresholds(
+                crate::CpuBatchThresholds::default().with_vendor_batch_max_item_dim(4),
+            ),
+            crate::provider::CpuVendorBatch::Allowed { max_item_dim: 4 },
+        ),
+        (
+            policy(crate::CpuBatchStrategy::WholeBatchVendor),
+            crate::provider::CpuVendorBatch::Required,
+        ),
+        (
+            policy(crate::CpuBatchStrategy::ProviderItems),
+            crate::provider::CpuVendorBatch::Forbidden,
+        ),
+    ];
+    for (batch_policy, expected) in cases {
+        let gemm = Arc::new(GemmSpy::new(CpuProviderOutcome::Executed));
+        let bundle = provider_owned_bundle(gemm.clone());
+        let fixture = execution_context_fixture(1);
+        let entry = fixture.entry().with_batch_policy(batch_policy);
+        let mut output = Tensor::from_vec_col_major(vec![3], vec![0.0_f64; 3]).unwrap();
+        run_unit_grouped(&bundle, &entry, &mut output).unwrap();
+        assert_eq!(
+            gemm.vendor_batches.lock().unwrap().as_slice(),
+            &[expected],
+            "{batch_policy:?}"
+        );
+    }
+}
+
+#[test]
+fn forced_outer_parallel_without_a_fan_out_route_is_typed_before_any_call() {
+    let gemm = Arc::new(GemmSpy::new(CpuProviderOutcome::Executed));
+    let bundle = route_bundle(gemm.clone(), None);
+    let fixture = execution_context_fixture(1);
+    let entry = fixture
+        .entry()
+        .with_batch_policy(policy(crate::CpuBatchStrategy::OuterParallel));
+    let mut output = Tensor::from_vec_col_major(vec![4], vec![-1.0_f64; 4]).unwrap();
+
+    let error = run_unit_grouped(&bundle, &entry, &mut output).unwrap_err();
+
+    assert_eq!(error.kind(), ErrorKind::Unsupported);
+    assert!(error.to_string().contains("OuterParallel"), "{error}");
+    assert_eq!(*gemm.grouped_calls.lock().unwrap(), 0);
+    assert_eq!(output.as_slice::<f64>().unwrap(), &[-1.0; 4]);
+}
+
+#[test]
+fn forced_outer_parallel_grouped_fans_out_over_entered_session_lanes() {
+    let gemm = Arc::new(GemmSpy::new(CpuProviderOutcome::Executed));
+    let bundle = route_bundle(gemm.clone(), None);
+    let fixture = execution_context_fixture(2);
+    let entry = fixture
+        .entry()
+        .with_batch_policy(policy(crate::CpuBatchStrategy::OuterParallel));
+    let mut output = Tensor::from_vec_col_major(vec![6], vec![0.0_f64; 6]).unwrap();
+    let lhs = Tensor::from_vec_col_major(vec![6], vec![2.0_f64; 6]).unwrap();
+    let rhs = Tensor::from_vec_col_major(vec![6], vec![4.0_f64; 6]).unwrap();
+    let jobs = (0..6)
+        .map(|index| GroupedGemmJob::new(index, index, index, 1, 1, 1))
+        .collect::<Vec<_>>();
+
+    // Inside an entered Inner session the engine executor is not submitted
+    // again; the fan-out uses the entered context's own lanes.
+    entry
+        .enter(ParallelMode::Inner, |entered| {
+            bundle.execute_grouped_gemm_scoped(
+                &entry,
+                Some(entered),
+                TensorRead::from_tensor(&lhs),
+                TensorRead::from_tensor(&rhs),
+                &GroupedGemmConfig::new(
+                    &jobs,
+                    DotGeneralAccumulation::overwrite(DType::F64).unwrap(),
+                ),
+                TensorWrite::from_tensor(&mut output),
+            )
+        })
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(*gemm.grouped_calls.lock().unwrap(), 6);
+    assert_eq!(gemm.grouped_job_counts.lock().unwrap().as_slice(), &[1; 6]);
+    assert_eq!(
+        gemm.parallelism.lock().unwrap().as_slice(),
+        &[ParallelMode::Sequential; 6]
+    );
+}
+
+fn batched_operands() -> (Tensor, Tensor, Tensor, DotGeneralConfig) {
+    (
+        Tensor::from_vec_col_major(vec![2, 2, 3], vec![1.0_f64; 12]).unwrap(),
+        Tensor::from_vec_col_major(vec![2, 2, 3], vec![1.0_f64; 12]).unwrap(),
+        Tensor::from_vec_col_major(vec![2, 2, 3], vec![-1.0_f64; 12]).unwrap(),
+        config(&[1], &[0], &[2], &[2]),
+    )
+}
+
+fn run_batched_dot(
+    bundle: &CpuProviderBundle,
+    entry: &crate::provider::CpuOperationEntry<'_>,
+    output: &mut Tensor,
+) -> tenferro_tensor::Result<()> {
+    let (lhs, rhs, _, config) = batched_operands();
+    bundle.execute_dot_general_into(
+        entry,
+        &mut BufferPool::new(),
+        &mut GemmAnalysisCache::default(),
+        None,
+        TensorRead::from_tensor(&lhs),
+        TensorRead::from_tensor(&rhs),
+        &config,
+        DotGeneralAccumulation::overwrite(DType::F64).unwrap(),
+        TensorWrite::from_tensor(output),
+    )
+}
+
+#[test]
+fn strided_batch_strategy_sets_mode_and_vendor_control_or_fails_before_writes() {
+    let cases = [
+        (
+            crate::CpuBatchStrategy::Auto,
+            Some((
+                ParallelMode::Sequential,
+                crate::provider::CpuVendorBatch::default(),
+            )),
+        ),
+        (
+            crate::CpuBatchStrategy::Sequential,
+            Some((
+                ParallelMode::Sequential,
+                crate::provider::CpuVendorBatch::Forbidden,
+            )),
+        ),
+        (
+            crate::CpuBatchStrategy::WholeBatchVendor,
+            Some((
+                ParallelMode::Sequential,
+                crate::provider::CpuVendorBatch::Required,
+            )),
+        ),
+        (crate::CpuBatchStrategy::OuterParallel, None),
+    ];
+    for (strategy, expected) in cases {
+        let gemm = Arc::new(GemmSpy::new(CpuProviderOutcome::Executed));
+        let bundle = provider_owned_bundle(gemm.clone());
+        let fixture = execution_context_fixture(1);
+        let entry = fixture.entry().with_batch_policy(policy(strategy));
+        let (_, _, mut output, _) = batched_operands();
+        let result = run_batched_dot(&bundle, &entry, &mut output);
+        match expected {
+            Some((mode, vendor)) => {
+                result.unwrap();
+                assert_eq!(*gemm.strided_calls.lock().unwrap(), 1, "{strategy:?}");
+                assert_eq!(gemm.parallelism.lock().unwrap().as_slice(), &[mode]);
+                assert_eq!(gemm.vendor_batches.lock().unwrap().as_slice(), &[vendor]);
+            }
+            None => {
+                let error = result.unwrap_err();
+                assert_eq!(error.kind(), ErrorKind::Unsupported, "{error}");
+                assert_eq!(*gemm.strided_calls.lock().unwrap(), 0);
+                assert_eq!(output.as_slice::<f64>().unwrap(), &[-1.0; 12]);
+            }
+        }
+    }
+}
+
+#[test]
+fn faer_rejects_a_forced_whole_batch_vendor_call_before_writes() {
+    let bundle = provider_owned_bundle(Arc::new(crate::provider::FaerGemmProvider));
+    let fixture = execution_context_fixture(1);
+    let entry = fixture
+        .entry()
+        .with_batch_policy(policy(crate::CpuBatchStrategy::WholeBatchVendor));
+    let (_, _, mut output, _) = batched_operands();
+
+    let error = run_batched_dot(&bundle, &entry, &mut output).unwrap_err();
+
+    assert_eq!(error.kind(), ErrorKind::Unsupported, "{error}");
+    assert_eq!(output.as_slice::<f64>().unwrap(), &[-1.0; 12]);
+    // The same batch runs under Auto.
+    let entry = fixture.entry();
+    run_batched_dot(&bundle, &entry, &mut output).unwrap();
+    assert_eq!(output.as_slice::<f64>().unwrap(), &[2.0; 12]);
+}
+
+#[test]
+fn all_batch_contractions_run_elementwise_without_gemm_lowering() {
+    let gemm = Arc::new(GemmSpy::new(CpuProviderOutcome::Executed));
+    let bundle = provider_owned_bundle(gemm.clone());
+    let fixture = execution_context_fixture(1);
+    // lhs is [2, 3] with batch axes (1, 0); rhs is [3, 2] with batch axes
+    // (0, 1): the output is [3, 2] with out[i, j] = lhs[j, i] * rhs[i, j].
+    let lhs =
+        Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap();
+    let rhs = Tensor::from_vec_col_major(vec![3, 2], vec![10.0_f64, 20.0, 30.0, 40.0, 50.0, 60.0])
+        .unwrap();
+    let mut output = Tensor::from_vec_col_major(vec![3, 2], vec![1.0_f64; 6]).unwrap();
+    let config = config(&[], &[], &[1, 0], &[0, 1]);
+
+    bundle
+        .execute_dot_general_into(
+            &fixture.entry(),
+            &mut BufferPool::new(),
+            &mut GemmAnalysisCache::default(),
+            None,
+            TensorRead::from_tensor(&lhs),
+            TensorRead::from_tensor(&rhs),
+            &config,
+            DotGeneralAccumulation::scaled(
+                ContractionScalar::F64(2.0),
+                ContractionScalar::F64(1.0),
+            )
+            .unwrap(),
+            TensorWrite::from_tensor(&mut output),
+        )
+        .unwrap();
+
+    // out = 2 * lhs^T * rhs + 1, column-major [3, 2].
+    let expected: Vec<f64> = [1.0, 3.0, 5.0, 2.0, 4.0, 6.0]
+        .iter()
+        .zip([10.0, 20.0, 30.0, 40.0, 50.0, 60.0])
+        .map(|(lhs, rhs)| 2.0 * lhs * rhs + 1.0)
+        .collect();
+    assert_eq!(output.as_slice::<f64>().unwrap(), expected.as_slice());
+    assert_eq!(*gemm.gemm_calls.lock().unwrap(), 0);
+    assert_eq!(*gemm.strided_calls.lock().unwrap(), 0);
+}
+
+#[test]
+fn all_batch_complex_contraction_honors_conjugation() {
+    let bundle = provider_owned_bundle(Arc::new(GemmSpy::new(CpuProviderOutcome::Executed)));
+    let fixture = execution_context_fixture(1);
+    let lhs = Tensor::from_vec_col_major(
+        vec![2],
+        vec![Complex64::new(1.0, 2.0), Complex64::new(0.0, -1.0)],
+    )
+    .unwrap();
+    let rhs = Tensor::from_vec_col_major(
+        vec![2],
+        vec![Complex64::new(3.0, 0.0), Complex64::new(2.0, 1.0)],
+    )
+    .unwrap();
+    let mut output =
+        Tensor::from_vec_col_major(vec![2], vec![Complex64::new(0.0, 0.0); 2]).unwrap();
+    let mut accumulation = DotGeneralAccumulation::overwrite(DType::C64).unwrap();
+    accumulation.lhs_conj = true;
+
+    bundle
+        .execute_dot_general_into(
+            &fixture.entry(),
+            &mut BufferPool::new(),
+            &mut GemmAnalysisCache::default(),
+            None,
+            TensorRead::from_tensor(&lhs),
+            TensorRead::from_tensor(&rhs),
+            &config(&[], &[], &[0], &[0]),
+            accumulation,
+            TensorWrite::from_tensor(&mut output),
+        )
+        .unwrap();
+
+    assert_eq!(
+        output.as_slice::<Complex64>().unwrap(),
+        &[
+            Complex64::new(1.0, -2.0) * Complex64::new(3.0, 0.0),
+            Complex64::new(0.0, 1.0) * Complex64::new(2.0, 1.0),
+        ]
+    );
 }

@@ -1560,6 +1560,7 @@ pub(crate) fn grouped_gemm_blas_cached(
     rhs: &TensorRead<'_>,
     config: &GroupedGemmConfig<'_>,
     out: &mut TensorWrite<'_>,
+    vendor: crate::provider::CpuVendorBatch,
 ) -> crate::Result<bool> {
     macro_rules! dispatch {
         ($owned:ident, $view:ident) => {
@@ -1579,7 +1580,7 @@ pub(crate) fn grouped_gemm_blas_cached(
                     let b = b.as_typed::<preset_scalar!($owned)>()
                         .unwrap_or_else(|| unreachable!("the dtype guard selects this arm"));
                         let mut c = c.as_view_mut();
-                        return grouped_gemm_blas_typed(a, b, config, alpha, beta, &mut c);
+                        return grouped_gemm_blas_typed(a, b, config, alpha, beta, &mut c, vendor);
                     }
                     (
                         TensorRead::Tensor(a),
@@ -1591,7 +1592,7 @@ pub(crate) fn grouped_gemm_blas_cached(
                     let a = a.as_typed::<preset_scalar!($owned)>()
                         .unwrap_or_else(|| unreachable!("the dtype guard selects this arm"));
                         let mut c = c.as_view_mut();
-                        return grouped_gemm_blas_typed(a, b, config, alpha, beta, &mut c);
+                        return grouped_gemm_blas_typed(a, b, config, alpha, beta, &mut c, vendor);
                     }
                     (
                         TensorRead::View(TensorView::$view(a)),
@@ -1603,7 +1604,7 @@ pub(crate) fn grouped_gemm_blas_cached(
                     let b = b.as_typed::<preset_scalar!($owned)>()
                         .unwrap_or_else(|| unreachable!("the dtype guard selects this arm"));
                         let mut c = c.as_view_mut();
-                        return grouped_gemm_blas_typed(a, b, config, alpha, beta, &mut c);
+                        return grouped_gemm_blas_typed(a, b, config, alpha, beta, &mut c, vendor);
                     }
                     (
                         TensorRead::View(TensorView::$view(a)),
@@ -1613,7 +1614,7 @@ pub(crate) fn grouped_gemm_blas_cached(
                         let c = c.as_typed_mut::<preset_scalar!($owned)>()
                             .unwrap_or_else(|| unreachable!("the dtype guard selects this arm"));
                         let mut c = c.as_view_mut();
-                        return grouped_gemm_blas_typed(a, b, config, alpha, beta, &mut c);
+                        return grouped_gemm_blas_typed(a, b, config, alpha, beta, &mut c, vendor);
                     }
                     (
                         TensorRead::Tensor(a),
@@ -1624,7 +1625,7 @@ pub(crate) fn grouped_gemm_blas_cached(
                             .unwrap_or_else(|| unreachable!("the dtype guard selects this arm"));
                         let b = b.as_typed::<preset_scalar!($owned)>()
                             .unwrap_or_else(|| unreachable!("the dtype guard selects this arm"));
-                        return grouped_gemm_blas_typed(a, b, config, alpha, beta, c);
+                        return grouped_gemm_blas_typed(a, b, config, alpha, beta, c, vendor);
                     }
                     (
                         TensorRead::Tensor(a),
@@ -1633,7 +1634,7 @@ pub(crate) fn grouped_gemm_blas_cached(
                     ) if a.dtype() == <preset_scalar!($owned) as tenferro_tensor::TensorScalar>::dtype() => {
                         let a = a.as_typed::<preset_scalar!($owned)>()
                             .unwrap_or_else(|| unreachable!("the dtype guard selects this arm"));
-                        return grouped_gemm_blas_typed(a, b, config, alpha, beta, c);
+                        return grouped_gemm_blas_typed(a, b, config, alpha, beta, c, vendor);
                     }
                     (
                         TensorRead::View(TensorView::$view(a)),
@@ -1642,13 +1643,13 @@ pub(crate) fn grouped_gemm_blas_cached(
                     ) if b.dtype() == <preset_scalar!($owned) as tenferro_tensor::TensorScalar>::dtype() => {
                         let b = b.as_typed::<preset_scalar!($owned)>()
                             .unwrap_or_else(|| unreachable!("the dtype guard selects this arm"));
-                        return grouped_gemm_blas_typed(a, b, config, alpha, beta, c);
+                        return grouped_gemm_blas_typed(a, b, config, alpha, beta, c, vendor);
                     }
                     (
                         TensorRead::View(TensorView::$view(a)),
                         TensorRead::View(TensorView::$view(b)),
                         TensorWrite::View(TensorViewMut::$view(c)),
-                    ) => return grouped_gemm_blas_typed(a, b, config, alpha, beta, c),
+                    ) => return grouped_gemm_blas_typed(a, b, config, alpha, beta, c, vendor),
                     _ => {}
                 }
             }
@@ -1670,6 +1671,7 @@ fn grouped_gemm_blas_typed<L, R, T>(
     alpha: T,
     beta: T,
     out: &mut TypedTensorViewMut<'_, T>,
+    vendor: crate::provider::CpuVendorBatch,
 ) -> crate::Result<bool>
 where
     L: TypedTensorRead<T>,
@@ -1729,8 +1731,9 @@ where
     // SAFETY: every descriptor uses validated dimensions and output regions are
     // pairwise-disjoint, so the BLAS provider may run jobs in batch order or as
     // a native grouped call.
+    let vendor_batch = blas_gemm::use_vendor_batch(vendor, &batches);
     unsafe {
-        T::grouped_gemm(alpha, beta, &batches)?;
+        T::grouped_gemm(alpha, beta, &batches, vendor_batch)?;
     }
     Ok(true)
 }
@@ -1784,6 +1787,9 @@ struct ProviderGemmDescriptor {
     rhs_layout: crate::provider::CpuBatchedMatrixLayout,
     output_layout: crate::provider::CpuBatchedMatrixLayout,
     accumulation: DotGeneralAccumulation,
+    // Read only by the BLAS provider; faer has no vendor batch routine.
+    #[cfg(feature = "cpu-blas")]
+    vendor_batch: crate::provider::CpuVendorBatch,
 }
 
 #[cfg(any(feature = "cpu-faer", feature = "cpu-blas"))]
@@ -1798,6 +1804,8 @@ impl ProviderGemmDescriptor {
             rhs_layout: parts.rhs_layout,
             output_layout: parts.output_layout,
             accumulation: parts.accumulation,
+            #[cfg(feature = "cpu-blas")]
+            vendor_batch: parts.vendor_batch,
         }
     }
 
@@ -1815,6 +1823,8 @@ impl ProviderGemmDescriptor {
             rhs_layout: parts.rhs_layout,
             output_layout: parts.output_layout,
             accumulation: parts.accumulation,
+            #[cfg(feature = "cpu-blas")]
+            vendor_batch: crate::provider::CpuVendorBatch::default(),
         }
     }
 }
@@ -2509,6 +2519,24 @@ where
             CpuProviderUnsupported::Conjugation,
         ));
     }
+    let conjugated = descriptor.accumulation.lhs_conj || descriptor.accumulation.rhs_conj;
+    let item_dims = [descriptor.rows, descriptor.columns, descriptor.contracted];
+    if descriptor.vendor_batch == crate::provider::CpuVendorBatch::Required
+        && (!blas_gemm::VENDOR_BATCH_AVAILABLE || conjugated)
+    {
+        // The vendor batch routine has no conjugation argument, and a forced
+        // whole-batch route must not silently become a per-item loop.
+        return Ok(CpuProviderOutcome::Unsupported(if conjugated {
+            CpuProviderUnsupported::Conjugation
+        } else {
+            CpuProviderUnsupported::RuntimeUnavailable
+        }));
+    }
+    let vendor_batch = blas_gemm::VENDOR_BATCH_AVAILABLE
+        && !conjugated
+        && descriptor
+            .vendor_batch
+            .permits(std::iter::repeat_n(item_dims, descriptor.batch_count));
     let Some(lhs_data) = lhs.host_data_opt()?.map(<[T]>::as_ptr) else {
         return Err(crate::cpu_backend_buffer_error(OP));
     };
@@ -2531,6 +2559,58 @@ where
             batch,
             descriptor.output_layout.batch_stride(),
         )?;
+    }
+    if vendor_batch {
+        // Hand the whole strided batch to one vendor batch call. Offsets were
+        // checked above; the per-item layouts are the descriptor's shared
+        // BLAS-compatible strides.
+        let mut batches = Vec::with_capacity(descriptor.batch_count);
+        for batch in 0..descriptor.batch_count {
+            let lhs_offset = checked_view_batch_offset(
+                descriptor.lhs_layout.offset(),
+                batch,
+                descriptor.lhs_layout.batch_stride(),
+            )?;
+            let rhs_offset = checked_view_batch_offset(
+                descriptor.rhs_layout.offset(),
+                batch,
+                descriptor.rhs_layout.batch_stride(),
+            )?;
+            let output_offset = checked_view_batch_offset(
+                descriptor.output_layout.offset(),
+                batch,
+                descriptor.output_layout.batch_stride(),
+            )?;
+            // SAFETY: the engine validated every reachable range and a uniquely
+            // writable output batch before constructing the provider request.
+            let (a_ptr, b_ptr, c_ptr) = unsafe {
+                (
+                    lhs_data.offset(lhs_offset),
+                    rhs_data.offset(rhs_offset),
+                    output_data.offset(output_offset),
+                )
+            };
+            batches.push(blas_gemm::BlasGemmBatch {
+                a_ptr,
+                b_ptr,
+                c_ptr,
+                m: descriptor.rows,
+                n: descriptor.columns,
+                k: descriptor.contracted,
+                a_rs: descriptor.lhs_layout.row_stride(),
+                a_cs: descriptor.lhs_layout.column_stride(),
+                b_rs: descriptor.rhs_layout.row_stride(),
+                b_cs: descriptor.rhs_layout.column_stride(),
+                c_rs: descriptor.output_layout.row_stride(),
+                c_cs: descriptor.output_layout.column_stride(),
+            });
+        }
+        // SAFETY: every descriptor uses validated dimensions and disjoint
+        // output batches, as for the per-item loop below.
+        unsafe {
+            T::grouped_gemm(alpha, beta, &batches, true)?;
+        }
+        return Ok(CpuProviderOutcome::Executed);
     }
     for batch in 0..descriptor.batch_count {
         let lhs_offset = checked_view_batch_offset(
@@ -2775,14 +2855,20 @@ pub(crate) fn execute_blas_grouped_request(
     _context: &CpuExecutionContext<'_>,
     request: CpuGroupedGemmRequest<'_, '_, '_>,
 ) -> Result<CpuProviderOutcome> {
+    let vendor = request.vendor_batch();
     let (lhs, rhs, output, jobs, accumulation) = request.into_parts();
     if accumulation.lhs_conj || accumulation.rhs_conj {
         return Ok(CpuProviderOutcome::Unsupported(
             CpuProviderUnsupported::Conjugation,
         ));
     }
+    if vendor == crate::provider::CpuVendorBatch::Required && !blas_gemm::VENDOR_BATCH_AVAILABLE {
+        return Ok(CpuProviderOutcome::Unsupported(
+            CpuProviderUnsupported::RuntimeUnavailable,
+        ));
+    }
     let config = GroupedGemmConfig::new(jobs, accumulation);
-    if grouped_gemm_blas_cached(lhs, rhs, &config, output)? {
+    if grouped_gemm_blas_cached(lhs, rhs, &config, output, vendor)? {
         Ok(CpuProviderOutcome::Executed)
     } else {
         Ok(CpuProviderOutcome::Unsupported(

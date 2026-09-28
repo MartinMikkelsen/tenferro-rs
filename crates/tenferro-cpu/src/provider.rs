@@ -172,6 +172,7 @@ pub struct CpuExecutionContext<'a> {
     // Set only for a child of tenferro's own outer fan-out (`submit_outer` or
     // `with_outer_lanes`), never inferred from running on a Rayon worker.
     outer_fan_out: bool,
+    batch_policy: crate::CpuBatchPolicy,
 }
 
 impl fmt::Debug for CpuExecutionContext<'_> {
@@ -188,21 +189,73 @@ impl fmt::Debug for CpuExecutionContext<'_> {
 }
 
 impl<'a> CpuExecutionContext<'a> {
-    fn entered(domain: &'a CpuResourceDomain, parallel_mode: ParallelMode) -> Self {
+    fn entered(
+        domain: &'a CpuResourceDomain,
+        parallel_mode: ParallelMode,
+        batch_policy: crate::CpuBatchPolicy,
+    ) -> Self {
         Self {
             domain,
             parallel_mode,
             outer_fan_out: false,
+            batch_policy,
         }
     }
 
     /// A child of tenferro's outer fan-out: sequential, with fan-out active.
-    fn outer_child(domain: &'a CpuResourceDomain) -> Self {
+    fn outer_child(domain: &'a CpuResourceDomain, batch_policy: crate::CpuBatchPolicy) -> Self {
         Self {
             domain,
             parallel_mode: ParallelMode::Sequential,
             outer_fan_out: true,
+            batch_policy,
         }
+    }
+
+    /// The effective batch policy for batched work in this context.
+    ///
+    /// It is the backend default unless a session scope overrides it; see
+    /// [`crate::with_batch_policy`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_cpu::{CpuBackend, CpuBatchStrategy};
+    ///
+    /// let mut backend = CpuBackend::with_threads(1)?;
+    /// let strategy =
+    ///     backend.with_linalg_pool(|context, _| Ok(context.batch_policy().strategy()))?;
+    /// assert_eq!(strategy, CpuBatchStrategy::Auto);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    #[must_use]
+    pub fn batch_policy(&self) -> crate::CpuBatchPolicy {
+        self.batch_policy
+    }
+
+    /// This context with a scoped batch-policy override.
+    pub(crate) fn with_batch_policy(mut self, batch_policy: crate::CpuBatchPolicy) -> Self {
+        self.batch_policy = batch_policy;
+        self
+    }
+
+    /// Whether [`Self::with_outer_lanes`] can fan out from this context.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_cpu::CpuBackend;
+    ///
+    /// let mut backend = CpuBackend::with_threads(1)?;
+    /// let fans_out = backend.with_linalg_pool(|context, _| Ok(context.can_fan_out_lanes()))?;
+    /// assert!(!fans_out);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    #[must_use]
+    pub fn can_fan_out_lanes(&self) -> bool {
+        self.parallel_mode == ParallelMode::Inner
+            && self.domain.executor_capabilities().inner_parallelism == CpuInnerParallelism::Rayon
+            && self.thread_budget().get() > 1
     }
 
     /// Whether this context is one lane of tenferro's own outer fan-out.
@@ -266,11 +319,8 @@ impl<'a> CpuExecutionContext<'a> {
         I::IntoIter: Send,
         I::Item: Send,
     {
-        let child = Self::outer_child(self.domain);
-        let can_fan_out = self.parallel_mode == ParallelMode::Inner
-            && self.domain.executor_capabilities().inner_parallelism == CpuInnerParallelism::Rayon
-            && self.thread_budget().get() > 1;
-        if !can_fan_out {
+        let child = Self::outer_child(self.domain, self.batch_policy);
+        if !self.can_fan_out_lanes() {
             for item in jobs {
                 job(item, &child);
             }
@@ -571,6 +621,47 @@ pub(crate) fn check_outer_fan_out_delegates<'c>(
     Ok(OuterFanOutChecked(()))
 }
 
+/// Where an outer fan-out runs: submitted to the domain executor from an
+/// unentered operation, or as lanes of an already-entered Inner context.
+#[derive(Clone, Copy)]
+pub(crate) enum CpuOuterFanOut<'a> {
+    Executor(CpuOperationEntry<'a>),
+    Lanes(CpuExecutionContext<'a>),
+}
+
+impl CpuOuterFanOut<'_> {
+    /// Run `len` indexed jobs, each with a lane context, and return the first
+    /// job error.
+    pub(crate) fn submit(
+        self,
+        checked: OuterFanOutChecked,
+        len: usize,
+        operation: impl Fn(usize, &CpuExecutionContext<'_>) -> Result<(), CpuDomainExecutorError> + Sync,
+    ) -> Result<(), CpuDomainExecutorError> {
+        match self {
+            Self::Executor(entry) => entry.submit_outer(checked, len, operation),
+            Self::Lanes(context) => {
+                let first_error = std::sync::Mutex::new(None);
+                context.with_outer_lanes(0..len, |index, lane| {
+                    if let Err(error) = operation(index, lane) {
+                        first_error
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner)
+                            .get_or_insert(error);
+                    }
+                });
+                match first_error
+                    .into_inner()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                {
+                    Some(error) => Err(error),
+                    None => Ok(()),
+                }
+            }
+        }
+    }
+}
+
 /// Crate-private unentered capability for one CPU operation.
 ///
 /// This is the only type that owns the resource permit and may cross the
@@ -580,11 +671,26 @@ pub(crate) fn check_outer_fan_out_delegates<'c>(
 pub(crate) struct CpuOperationEntry<'a> {
     domain: &'a CpuResourceDomain,
     permit: &'a ResourcePermit,
+    batch_policy: crate::CpuBatchPolicy,
 }
 
 impl<'a> CpuOperationEntry<'a> {
     pub(crate) fn new(domain: &'a CpuResourceDomain, permit: &'a ResourcePermit) -> Self {
-        Self { domain, permit }
+        Self {
+            domain,
+            permit,
+            batch_policy: crate::CpuBatchPolicy::default(),
+        }
+    }
+
+    /// This entry with a different effective batch policy.
+    pub(crate) fn with_batch_policy(mut self, batch_policy: crate::CpuBatchPolicy) -> Self {
+        self.batch_policy = batch_policy;
+        self
+    }
+
+    pub(crate) fn batch_policy(self) -> crate::CpuBatchPolicy {
+        self.batch_policy
     }
 
     pub(crate) fn domain_id(self) -> CpuDomainId {
@@ -605,14 +711,16 @@ impl<'a> CpuOperationEntry<'a> {
         let owner = self.permit.owner();
         if crate::backend::execution_scope::is_entered(self.domain, self.permit) {
             return Ok(with_execution_owner(owner, || {
-                let context = CpuExecutionContext::entered(self.domain, parallel_mode);
+                let context =
+                    CpuExecutionContext::entered(self.domain, parallel_mode, self.batch_policy);
                 operation(&context)
             }));
         }
         with_execution_owner(owner, || {
             install_scoped(self.domain.executor().as_ref(), || {
                 with_execution_owner(owner, || {
-                    let context = CpuExecutionContext::entered(self.domain, parallel_mode);
+                    let context =
+                        CpuExecutionContext::entered(self.domain, parallel_mode, self.batch_policy);
                     operation(&context)
                 })
             })
@@ -648,9 +756,9 @@ impl<'a> CpuOperationEntry<'a> {
         // its sequential policy into inner parallelism: that would nest a second
         // fan-out inside every sibling lane.
         let context = if entered.is_outer_fan_out_lane() {
-            CpuExecutionContext::outer_child(self.domain)
+            CpuExecutionContext::outer_child(self.domain, self.batch_policy)
         } else {
-            CpuExecutionContext::entered(self.domain, parallel_mode)
+            CpuExecutionContext::entered(self.domain, parallel_mode, self.batch_policy)
         };
         Ok(with_execution_owner(owner, || operation(&context)))
     }
@@ -672,7 +780,11 @@ impl<'a> CpuOperationEntry<'a> {
     ) -> Result<R, tenferro_tensor::SessionEntryError> {
         let mode = self.preferred_engine_mode();
         self.enter(mode, |_| {
-            operation(CpuExecutionContext::entered(self.domain, mode))
+            operation(CpuExecutionContext::entered(
+                self.domain,
+                mode,
+                self.batch_policy,
+            ))
         })
         .map_err(|error| tenferro_tensor::SessionEntryError::Executor {
             backend: crate::backend::CPU_BACKEND,
@@ -703,7 +815,7 @@ impl<'a> CpuOperationEntry<'a> {
             let mut index = lane;
             while index < len {
                 with_execution_owner(owner, || {
-                    let context = CpuExecutionContext::outer_child(self.domain);
+                    let context = CpuExecutionContext::outer_child(self.domain, self.batch_policy);
                     operation(index, &context)
                 })?;
                 let Some(next) = index.checked_add(lane_count) else {
@@ -846,6 +958,69 @@ impl CpuBatchedMatrixLayout {
     }
 }
 
+/// Whether a provider may, must, or must not execute a batch of GEMMs with
+/// one vendor batch call (`cblas_?gemm_batch`).
+///
+/// The engine resolves this from the effective [`crate::CpuBatchPolicy`]
+/// before any output write. A provider without a vendor batch routine treats
+/// [`Self::Allowed`] and [`Self::Forbidden`] alike and reports
+/// [`CpuProviderUnsupported::RuntimeUnavailable`] for [`Self::Required`].
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_cpu::provider::CpuVendorBatch;
+///
+/// let allowed = CpuVendorBatch::Allowed { max_item_dim: 16 };
+/// assert!(allowed.permits([[4, 4, 4], [8, 8, 8]]));
+/// assert!(!allowed.permits([[4, 4, 32], [8, 8, 8]]));
+/// assert!(!CpuVendorBatch::Forbidden.permits([[1, 1, 1], [1, 1, 1]]));
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum CpuVendorBatch {
+    /// Use a vendor batch call when there is more than one item and every
+    /// item's `m`, `n` and `k` are at most `max_item_dim`.
+    Allowed {
+        /// Largest per-item dimension for which a vendor batch call is used.
+        max_item_dim: usize,
+    },
+    /// Execute the whole batch with one vendor batch call.
+    Required,
+    /// Never use a vendor batch call.
+    Forbidden,
+}
+
+impl Default for CpuVendorBatch {
+    fn default() -> Self {
+        Self::Allowed {
+            max_item_dim: crate::CpuBatchThresholds::default().vendor_batch_max_item_dim(),
+        }
+    }
+}
+
+impl CpuVendorBatch {
+    /// Whether this control selects a vendor batch call for GEMMs of the given
+    /// `[m, n, k]` dimensions; [`Self::Required`] always does.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_cpu::provider::CpuVendorBatch;
+    /// assert!(CpuVendorBatch::Required.permits([[64, 64, 64]]));
+    /// ```
+    #[must_use]
+    pub fn permits(self, dims: impl IntoIterator<Item = [usize; 3]>) -> bool {
+        match self {
+            Self::Allowed { max_item_dim } => crate::CpuBatchThresholds::default()
+                .with_vendor_batch_max_item_dim(max_item_dim)
+                .auto_uses_vendor_batch(dims),
+            Self::Required => true,
+            Self::Forbidden => false,
+        }
+    }
+}
+
 /// Validated borrowed GEMM request.
 ///
 /// A batch count of one is a single GEMM. A larger batch count is a strided
@@ -872,6 +1047,7 @@ pub struct CpuGemmRequest<'request, 'input, 'output> {
     rhs_layout: CpuBatchedMatrixLayout,
     output_layout: CpuBatchedMatrixLayout,
     accumulation: DotGeneralAccumulation,
+    vendor_batch: CpuVendorBatch,
 }
 
 pub(crate) struct CpuGemmRequestParts<'request, 'input, 'output> {
@@ -886,6 +1062,9 @@ pub(crate) struct CpuGemmRequestParts<'request, 'input, 'output> {
     pub(crate) rhs_layout: CpuBatchedMatrixLayout,
     pub(crate) output_layout: CpuBatchedMatrixLayout,
     pub(crate) accumulation: DotGeneralAccumulation,
+    // Read only by the BLAS provider; faer checks the request accessor.
+    #[cfg(feature = "cpu-blas")]
+    pub(crate) vendor_batch: CpuVendorBatch,
 }
 
 impl<'request, 'input, 'output> CpuGemmRequest<'request, 'input, 'output> {
@@ -915,7 +1094,28 @@ impl<'request, 'input, 'output> CpuGemmRequest<'request, 'input, 'output> {
             rhs_layout,
             output_layout,
             accumulation,
+            vendor_batch: CpuVendorBatch::default(),
         }
+    }
+
+    /// This request with the engine-resolved vendor-batch control.
+    pub(crate) fn with_vendor_batch(mut self, vendor_batch: CpuVendorBatch) -> Self {
+        self.vendor_batch = vendor_batch;
+        self
+    }
+
+    /// Return whether a batch may, must or must not use a vendor batch call.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_cpu::provider::{CpuGemmRequest, CpuVendorBatch};
+    /// # fn inspect(request: &CpuGemmRequest<'_, '_, '_>) {
+    /// let _ = request.vendor_batch() == CpuVendorBatch::Forbidden;
+    /// # }
+    /// ```
+    pub fn vendor_batch(&self) -> CpuVendorBatch {
+        self.vendor_batch
     }
 
     /// Return the borrowed left input.
@@ -1011,6 +1211,8 @@ impl<'request, 'input, 'output> CpuGemmRequest<'request, 'input, 'output> {
 
     pub(crate) fn into_parts(self) -> CpuGemmRequestParts<'request, 'input, 'output> {
         CpuGemmRequestParts {
+            #[cfg(feature = "cpu-blas")]
+            vendor_batch: self.vendor_batch,
             lhs: self.lhs,
             rhs: self.rhs,
             output: self.output,
@@ -1290,9 +1492,30 @@ pub struct CpuGroupedGemmRequest<'request, 'input, 'output> {
     output: &'request mut TensorWrite<'output>,
     jobs: &'request [GroupedGemmJob],
     accumulation: DotGeneralAccumulation,
+    vendor_batch: CpuVendorBatch,
 }
 
 impl<'request, 'input, 'output> CpuGroupedGemmRequest<'request, 'input, 'output> {
+    /// This request with the engine-resolved vendor-batch control.
+    pub(crate) fn with_vendor_batch(mut self, vendor_batch: CpuVendorBatch) -> Self {
+        self.vendor_batch = vendor_batch;
+        self
+    }
+
+    /// Return whether the jobs may, must or must not use a vendor batch call.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_cpu::provider::{CpuGroupedGemmRequest, CpuVendorBatch};
+    /// # fn inspect(request: &CpuGroupedGemmRequest<'_, '_, '_>) {
+    /// let _ = request.vendor_batch() == CpuVendorBatch::Required;
+    /// # }
+    /// ```
+    pub fn vendor_batch(&self) -> CpuVendorBatch {
+        self.vendor_batch
+    }
+
     #[allow(dead_code)]
     pub(crate) fn new(
         lhs: &'request TensorRead<'input>,
@@ -1307,6 +1530,7 @@ impl<'request, 'input, 'output> CpuGroupedGemmRequest<'request, 'input, 'output>
             output,
             jobs,
             accumulation,
+            vendor_batch: CpuVendorBatch::default(),
         }
     }
 
@@ -1940,6 +2164,13 @@ impl CpuGemmProvider for FaerGemmProvider {
         context: &CpuExecutionContext<'_>,
         request: CpuGemmRequest<'_, '_, '_>,
     ) -> tenferro_tensor::Result<CpuProviderOutcome> {
+        // faer has no vendor batch routine; a forced whole-batch call is
+        // reported instead of silently becoming a per-item loop.
+        if request.vendor_batch() == CpuVendorBatch::Required {
+            return Ok(CpuProviderOutcome::Unsupported(
+                CpuProviderUnsupported::RuntimeUnavailable,
+            ));
+        }
         #[cfg(feature = "cpu-faer")]
         {
             crate::gemm::execute_faer_gemm_request(context, request)
@@ -1966,6 +2197,11 @@ impl CpuGemmProvider for FaerGemmProvider {
         context: &CpuExecutionContext<'_>,
         request: CpuGroupedGemmRequest<'_, '_, '_>,
     ) -> tenferro_tensor::Result<CpuProviderOutcome> {
+        if request.vendor_batch() == CpuVendorBatch::Required {
+            return Ok(CpuProviderOutcome::Unsupported(
+                CpuProviderUnsupported::RuntimeUnavailable,
+            ));
+        }
         #[cfg(feature = "cpu-faer")]
         {
             crate::gemm::execute_faer_grouped_request(context, request)

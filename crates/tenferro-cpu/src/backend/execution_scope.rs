@@ -143,7 +143,8 @@ impl CpuBackend {
             backend: CPU_BACKEND,
         })?;
         let permit = Arc::new(self.acquire_execution_permit(owner)?);
-        let entry = CpuOperationEntry::new(self.engine.domain(), &permit);
+        let entry = CpuOperationEntry::new(self.engine.domain(), &permit)
+            .with_batch_policy(self.batch_policy);
         entry
             .enter(entry.preferred_engine_mode(), |_| {
                 SCOPE.with(|slot| {

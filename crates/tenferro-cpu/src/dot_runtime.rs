@@ -10,6 +10,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use crate::backend::CpuBackendKind;
+use crate::batch_policy::strategy_unavailable;
 use crate::buffer_pool::{BufferPool, PoolScalar};
 use crate::provider::{
     builtin_gemm_provider, builtin_layout_provider, CpuContractionAxes, CpuDotGeneralRequest,
@@ -17,6 +18,7 @@ use crate::provider::{
     CpuLayoutTransformIntent, CpuLayoutTransformProvider, CpuLayoutTransformRequest,
     CpuOperationEntry, CpuProviderOutcome, CpuProviderUnsupported, CpuUninitGemmProvider,
 };
+use crate::CpuBatchStrategy;
 use crate::{
     gemm::GemmAnalysisCache, CpuDomainExecutorError, CpuDomainId, CpuProviderDomainError, Error,
     ParallelMode, PooledUninitOutput, Result,
@@ -464,6 +466,103 @@ impl CpuProviderBundle {
     }
 }
 
+/// `out = alpha * op(lhs) * op(rhs) + beta * out` for a contraction whose axes
+/// are all batch axes, through the strided elementwise kernels.
+fn execute_all_batch_elementwise(
+    context: &CpuExecutionContext<'_>,
+    buffers: &mut BufferPool,
+    lhs: &TensorRead<'_>,
+    rhs: &TensorRead<'_>,
+    config: &DotGeneralConfig,
+    accumulation: DotGeneralAccumulation,
+    output: TensorWrite<'_>,
+) -> Result<()> {
+    let exec = context.strided_exec_context();
+    // Output axes are the batch axes in configuration order; align each
+    // operand to that order with a metadata-only transpose.
+    let lhs_view = TensorRead::from_view(transposed_read_view(lhs, &config.lhs_batch_dims)?);
+    let rhs_view = TensorRead::from_view(transposed_read_view(rhs, &config.rhs_batch_dims)?);
+    let lhs_conj = if accumulation.lhs_conj {
+        Some(crate::elementwise::conj_read_with_pool(
+            buffers,
+            &exec,
+            lhs_view.clone(),
+        )?)
+    } else {
+        None
+    };
+    let rhs_conj = if accumulation.rhs_conj {
+        Some(crate::elementwise::conj_read_with_pool(
+            buffers,
+            &exec,
+            rhs_view.clone(),
+        )?)
+    } else {
+        None
+    };
+    let product = crate::elementwise::mul_read_with_pool(
+        buffers,
+        &exec,
+        lhs_conj.as_ref().map_or(lhs_view, TensorRead::from_tensor),
+        rhs_conj.as_ref().map_or(rhs_view, TensorRead::from_tensor),
+    )?;
+    let overwrite = DotGeneralAccumulation::overwrite(product.dtype())?;
+    let result = if accumulation.alpha == overwrite.alpha && accumulation.beta == overwrite.beta {
+        crate::copy_tensor_read_into(OP, TensorRead::from_tensor(&product), output)
+    } else {
+        crate::blas1::axpby_read_into_accum(
+            context,
+            buffers,
+            accumulation.alpha,
+            TensorRead::from_tensor(&product),
+            accumulation.beta,
+            output,
+        )
+    };
+    for temporary in [lhs_conj, rhs_conj, Some(product)].into_iter().flatten() {
+        crate::backend::reclaim_tensor(buffers, temporary);
+    }
+    result
+}
+
+/// Number of batch items of a contraction: the product of its batch extents.
+fn dot_batch_items(lhs: &TensorRead<'_>, config: &DotGeneralConfig) -> Result<usize> {
+    config
+        .lhs_batch_dims
+        .iter()
+        .try_fold(1usize, |items, &axis| {
+            lhs.shape()
+                .get(axis)
+                .and_then(|&extent| items.checked_mul(extent))
+        })
+        .ok_or_else(|| {
+            Error::invalid_argument(OP, "lhs", "batch axes are out of range or overflow usize")
+        })
+}
+
+/// The batch policy in force for an operation: the entered session context's
+/// (which carries any scoped override) or the operation entry's.
+fn effective_batch_policy(
+    entry: &CpuOperationEntry<'_>,
+    entered: Option<&CpuExecutionContext<'_>>,
+) -> crate::CpuBatchPolicy {
+    entered.map_or_else(|| entry.batch_policy(), CpuExecutionContext::batch_policy)
+}
+
+/// Translate a resolved strategy into the provider's vendor-batch control.
+fn vendor_batch_for(
+    policy: crate::CpuBatchPolicy,
+    strategy: CpuBatchStrategy,
+) -> crate::provider::CpuVendorBatch {
+    match strategy {
+        CpuBatchStrategy::WholeBatchVendor => crate::provider::CpuVendorBatch::Required,
+        CpuBatchStrategy::Auto => crate::provider::CpuVendorBatch::Allowed {
+            max_item_dim: policy.thresholds().vendor_batch_max_item_dim(),
+        },
+        _ => crate::provider::CpuVendorBatch::Forbidden,
+    }
+}
+
 fn unsupported_provider_error(capability: &'static str, reason: CpuProviderUnsupported) -> Error {
     Error::unsupported(
         OP,
@@ -524,6 +623,40 @@ impl DotGeneralRuntime {
         entry.preferred_provider_mode(|mode| self.accepts_dot_general_mode(mode))
     }
 
+    /// Apply a forced batch strategy to a strided-batched contraction's mode
+    /// before any output write.
+    fn batched_dot_mode(
+        &self,
+        entry: &CpuOperationEntry<'_>,
+        entered: Option<&CpuExecutionContext<'_>>,
+        mode: ParallelMode,
+        items: usize,
+    ) -> Result<ParallelMode> {
+        if items <= 1 {
+            return Ok(mode);
+        }
+        let strategy = effective_batch_policy(entry, entered).strategy();
+        match strategy {
+            CpuBatchStrategy::Sequential => {
+                if self.accepts_dot_general_mode(ParallelMode::Sequential) {
+                    Ok(ParallelMode::Sequential)
+                } else {
+                    Err(strategy_unavailable(
+                        OP,
+                        strategy,
+                        "a contraction provider does not accept sequential calls",
+                    ))
+                }
+            }
+            CpuBatchStrategy::OuterParallel => Err(strategy_unavailable(
+                OP,
+                strategy,
+                "strided-batched contractions have no outer-parallel route; use grouped GEMM",
+            )),
+            _ => Ok(mode),
+        }
+    }
+
     fn grouped_mode(
         &self,
         entry: &CpuOperationEntry<'_>,
@@ -559,6 +692,7 @@ impl DotGeneralRuntime {
         let mode = self
             .dot_general_mode(entry, entered)
             .map_err(|error| Error::backend_source(OP, error))?;
+        let mode = self.batched_dot_mode(entry, entered, mode, dot_batch_items(&lhs, config)?)?;
         cache.bind_provider_bundle(bundle_identity);
         entry
             .enter_or_reuse(entered, mode, |provider_context| {
@@ -608,6 +742,23 @@ impl DotGeneralRuntime {
                     }
                 }
             }
+        }
+
+        // A contraction in which every axis is a batch axis is an elementwise
+        // product; classify it before GEMM lowering instead of running one 1x1
+        // GEMM per element.
+        if lhs.shape().len() == config.lhs_batch_dims.len()
+            && rhs.shape().len() == config.rhs_batch_dims.len()
+        {
+            return execute_all_batch_elementwise(
+                provider_context,
+                buffers,
+                &lhs,
+                &rhs,
+                config,
+                accumulation,
+                output,
+            );
         }
 
         if let Some(plan) =
@@ -762,6 +913,18 @@ impl DotGeneralRuntime {
         let mode = self
             .dot_general_mode(entry, entered)
             .map_err(|error| Error::backend_source(OP, error))?;
+        let items = dot_batch_items(lhs, config)?;
+        let mode = self.batched_dot_mode(entry, entered, mode, items)?;
+        // The uninitialized-output request has no vendor-batch control; a forced
+        // whole-batch vendor call goes through the zeroed path, which has one.
+        if items > 1
+            && effective_batch_policy(entry, entered).strategy()
+                == CpuBatchStrategy::WholeBatchVendor
+        {
+            return Ok(CpuProviderOutcome::Unsupported(
+                CpuProviderUnsupported::StridedBatch,
+            ));
+        }
         cache.bind_provider_bundle(bundle_identity);
         entry
             .enter_or_reuse(entered, mode, |provider_context| {
@@ -811,11 +974,38 @@ impl DotGeneralRuntime {
             config,
             "grouped_gemm",
         )?;
-        if entered.is_none()
-            && self.grouped_scheduling == GroupedGemmScheduling::EngineOuter
-            && entry.supports_outer()
-            && config.jobs().len() > 1
-        {
+        let policy = effective_batch_policy(entry, entered);
+        let jobs = config.jobs().len();
+        // The policy governs batches; a single job is a plain GEMM.
+        let strategy = if jobs > 1 {
+            policy.strategy()
+        } else {
+            CpuBatchStrategy::Auto
+        };
+        let fan_out = match strategy {
+            CpuBatchStrategy::Auto => (entered.is_none()
+                && self.grouped_scheduling == GroupedGemmScheduling::EngineOuter
+                && entry.supports_outer()
+                && policy
+                    .thresholds()
+                    .fans_out(jobs, jobs.min(entry.thread_budget().get())))
+            .then_some(crate::provider::CpuOuterFanOut::Executor(*entry)),
+            CpuBatchStrategy::OuterParallel => Some(match entered {
+                None if entry.supports_outer() => crate::provider::CpuOuterFanOut::Executor(*entry),
+                Some(context) if context.can_fan_out_lanes() => {
+                    crate::provider::CpuOuterFanOut::Lanes(*context)
+                }
+                _ => {
+                    return Err(strategy_unavailable(
+                        "grouped_gemm",
+                        strategy,
+                        "the selected CPU domain cannot fan out (one thread, or no outer-capable executor)",
+                    ))
+                }
+            }),
+            _ => None,
+        };
+        if let Some(fan_out) = fan_out {
             // Reject an independent-runtime GEMM before any lane runs.
             let checked = crate::provider::check_outer_fan_out_delegates([&self.gemm_capabilities])
                 .map_err(|error| Error::backend_source("grouped_gemm", error))?;
@@ -827,7 +1017,7 @@ impl DotGeneralRuntime {
                     execute_grouped_outer_typed(
                         self.gemm.as_ref(),
                         checked,
-                        entry,
+                        fan_out,
                         &lhs,
                         &rhs,
                         config,
@@ -883,9 +1073,23 @@ impl DotGeneralRuntime {
                 )),
             };
         }
-        let mode = self
+        let mut mode = self
             .grouped_mode(entry, entered)
             .map_err(|error| Error::backend_source("grouped_gemm", error))?;
+        if strategy == CpuBatchStrategy::Sequential {
+            if !self
+                .gemm_capabilities
+                .accepts_mode(ParallelMode::Sequential)
+            {
+                return Err(strategy_unavailable(
+                    "grouped_gemm",
+                    strategy,
+                    "the GEMM provider does not accept sequential calls",
+                ));
+            }
+            mode = ParallelMode::Sequential;
+        }
+        let vendor_batch = vendor_batch_for(policy, strategy);
         entry
             .enter_or_reuse(entered, mode, |provider_context| {
                 let request = CpuGroupedGemmRequest::new(
@@ -894,7 +1098,8 @@ impl DotGeneralRuntime {
                     &mut output,
                     config.jobs(),
                     config.accumulation(),
-                );
+                )
+                .with_vendor_batch(vendor_batch);
                 match self.gemm.grouped_gemm(provider_context, request)? {
                     CpuProviderOutcome::Executed => Ok(()),
                     CpuProviderOutcome::Unsupported(reason) => {
@@ -916,7 +1121,15 @@ fn execute_gemm_plan(
     output: &mut TensorWrite<'_>,
 ) -> Result<CpuProviderOutcome> {
     let batch_count = plan.batch_count();
-    let request = plan.request(lhs, rhs, output, accumulation);
+    let policy = context.batch_policy();
+    let strategy = if batch_count > 1 {
+        policy.strategy()
+    } else {
+        CpuBatchStrategy::Auto
+    };
+    let request = plan
+        .request(lhs, rhs, output, accumulation)
+        .with_vendor_batch(vendor_batch_for(policy, strategy));
     let outcome = if batch_count == 1 {
         provider.gemm(context, request)?
     } else {
@@ -1198,7 +1411,7 @@ fn checked_grouped_output_range(
 fn execute_grouped_outer_typed<T>(
     provider: &dyn CpuGemmProvider,
     checked: crate::provider::OuterFanOutChecked,
-    entry: &CpuOperationEntry<'_>,
+    fan_out: crate::provider::CpuOuterFanOut<'_>,
     lhs: &TensorRead<'_>,
     rhs: &TensorRead<'_>,
     config: &tenferro_tensor::backend::GroupedGemmConfig<'_>,
@@ -1227,8 +1440,8 @@ where
     let operation_error = std::sync::Mutex::new(None);
     let job_states = PackedJobStates::new(config.jobs().len());
     let duplicate_index = AtomicUsize::new(NO_DUPLICATE);
-    entry
-        .submit_outer(checked, config.jobs().len(), |index, provider_context| {
+    fan_out
+        .submit(checked, config.jobs().len(), |index, provider_context| {
         if job_states.try_claim(index).is_err() {
             let _ = duplicate_index.compare_exchange(
                 NO_DUPLICATE,

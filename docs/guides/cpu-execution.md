@@ -195,6 +195,37 @@ Fallible backend constructors return `CpuBackendError`. Configuration failures
 appear as `CpuBackendError::Tensor`, while topology discovery and engine
 placement failures remain inspectable through `CpuBackendError::placement_error`.
 
+## Batched Operation Strategy
+
+Batched work (strided-batched and grouped GEMM, packed LU factor/solve) runs
+its independent items one of five ways, chosen by a `CpuBatchPolicy`:
+
+| `CpuBatchStrategy` | Items run as |
+|---|---|
+| `Auto` (default) | a route chosen from `CpuBatchThresholds` and the provider |
+| `Sequential` | one after another, with no parallelism |
+| `OuterParallel` | tenferro lanes on the backend's own Rayon pool, each sequential |
+| `ProviderItems` | one after another, each using the provider's own parallelism |
+| `WholeBatchVendor` | one vendor `cblas_?gemm_batch` call, with no tenferro fan-out |
+
+Set a default with `CpuBackend::with_batch_policy`, and override it for part
+of a session with `tenferro_cpu::with_batch_policy(session, policy, |s| ...)`;
+wrapping a single call is a per-operation choice. The innermost scope wins and
+the previous policy is restored on return, error or unwind. Nothing is
+process-global.
+
+`Auto` keeps the pre-existing behavior: a batch of small GEMMs (every
+dimension at most `vendor_batch_max_item_dim`, default 16) may use the vendor
+batch call when the build links one (`blas-openblas`, `blas-mkl`); outer lanes
+are used when the batch has at least `outer_min_items` items and
+`outer_min_items_per_lane` per lane. A forced strategy never overrides a safety
+rule or invents a missing route: `Sequential` with a provider that declares
+its own threading (the built-in BLAS), `OuterParallel` on a one-thread backend
+or for strided-batched contractions, and `WholeBatchVendor` with faer or
+without a linked vendor routine all return an `Unsupported` error before any
+output is written. A contraction whose axes are all batch axes is an
+elementwise product and never lowers to per-element GEMMs.
+
 ## CPU Affinity Is Not NUMA Memory Placement
 
 Pinned workers restrict where computation may run. They do not make tensor

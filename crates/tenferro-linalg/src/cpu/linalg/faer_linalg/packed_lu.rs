@@ -13,7 +13,7 @@ use faer::{Conj, MatMut, MatRef};
 use num_complex::{Complex32, Complex64};
 
 use tenferro_cpu::linalg_interop::PoolScalar;
-use tenferro_cpu::CpuExecutionContext;
+use tenferro_cpu::{CpuBatchStrategy, CpuExecutionContext};
 
 use super::{checked_product, invalid_config, singular_matrix};
 
@@ -89,27 +89,74 @@ impl_complex_packed_lu!(
     super::complex64_to_faer_slice_mut
 );
 
-/// How many independent lanes a faer batch may run on.
+/// How a faer batch runs: over how many independent lanes, and with what
+/// parallelism inside each sequentially processed item.
 ///
-/// Follows the context's existing faer policy, so a sequential or nested
-/// context (including an engine-owned `Outer` child) never fans out and a
-/// one-thread budget returns one lane. The batch axis is used only when it can
-/// occupy every lane, which keeps a small batch on faer's parallelism inside
-/// one factorization instead.
+/// The effective [`tenferro_cpu::CpuBatchPolicy`] decides. `Auto` follows the
+/// context's faer policy, so a sequential or nested context (including an
+/// engine-owned outer lane) never fans out and a one-thread budget returns one
+/// lane; the batch axis is used only when the thresholds allow it, by default
+/// when it can occupy every lane, which keeps a small batch on faer's
+/// parallelism inside one factorization instead.
 ///
 /// Measured for issue #1884 on an EPYC 7713P (f64, batch 1024, release): with
 /// four lanes the faer factor drops from 0.63/1.74/46.9 ms at one thread to
 /// 0.26/0.87/37.0 ms at n=8/16/64, and from 876 ms to 510 ms at n=256, where
 /// faer's own parallelism had made four threads *slower* than one (1294 ms).
-fn batch_lanes(ctx: &CpuExecutionContext<'_>, batch: usize) -> usize {
+struct BatchRoute {
+    lanes: usize,
+    item_par: faer::Par,
+}
+
+fn batch_route(
+    ctx: &CpuExecutionContext<'_>,
+    op: &'static str,
+    batch: usize,
+) -> tenferro_tensor::Result<BatchRoute> {
     let lanes = match ctx.faer_parallelism() {
         faer::Par::Rayon(lanes) => lanes.get(),
         faer::Par::Seq => 1,
     };
-    if lanes < 2 || batch < lanes {
-        return 1;
+    let policy = ctx.batch_policy();
+    let strategy = if batch > 1 {
+        policy.strategy()
+    } else {
+        CpuBatchStrategy::Auto
+    };
+    let unavailable = |reason: &str| {
+        tenferro_tensor::Error::unsupported(
+            op,
+            format!(
+                "batch strategy {strategy:?} is not available: {reason}; use CpuBatchStrategy::Auto or another strategy"
+            ),
+        )
+    };
+    match strategy {
+        CpuBatchStrategy::Auto => Ok(BatchRoute {
+            lanes: if policy.thresholds().fans_out(batch, lanes) {
+                lanes
+            } else {
+                1
+            },
+            item_par: ctx.faer_parallelism(),
+        }),
+        CpuBatchStrategy::OuterParallel if ctx.can_fan_out_lanes() => Ok(BatchRoute {
+            lanes: lanes.min(batch),
+            item_par: faer::Par::Seq,
+        }),
+        CpuBatchStrategy::OuterParallel => Err(unavailable(
+            "the context cannot fan out (one thread, or a sequential or nested context)",
+        )),
+        CpuBatchStrategy::Sequential => Ok(BatchRoute {
+            lanes: 1,
+            item_par: faer::Par::Seq,
+        }),
+        CpuBatchStrategy::ProviderItems => Ok(BatchRoute {
+            lanes: 1,
+            item_par: ctx.faer_parallelism(),
+        }),
+        _ => Err(unavailable("faer has no vendor batched factorization")),
     }
-    lanes
 }
 
 /// Reusable per-call state for factoring a batch of `m x n` matrices.
@@ -250,7 +297,7 @@ pub(crate) fn lu_factor_batched_in_place<T: FaerPackedLu>(
     if matrix_len == 0 || batch_total == 0 {
         return Ok(());
     }
-    let lanes = batch_lanes(ctx, batch_total);
+    let BatchRoute { lanes, item_par } = batch_route(ctx, op, batch_total)?;
     if lanes > 1 {
         // One lane owns a contiguous batch chunk and one scratch set, and
         // factorizes its matrices sequentially, so the pool's threads are spent
@@ -308,7 +355,7 @@ pub(crate) fn lu_factor_batched_in_place<T: FaerPackedLu>(
             None => Ok(()),
         };
     }
-    let mut scratch = PackedLuFactorScratch::new::<T::Entity>(m, n, ctx.faer_parallelism());
+    let mut scratch = PackedLuFactorScratch::new::<T::Entity>(m, n, item_par);
     // INVARIANT: lengths were checked above and `matrix_len > 0` implies
     // `k > 0`, so the three chunk iterators yield exactly `batch_total`
     // aligned items. faer owns any threading inside `lu_in_place`, so the
@@ -319,7 +366,7 @@ pub(crate) fn lu_factor_batched_in_place<T: FaerPackedLu>(
         .zip(parity_data.iter_mut())
     {
         let mat = MatMut::from_column_major_slice_mut(T::entity_slice_mut(matrix), m, n);
-        let odd = scratch.factor(ctx.faer_parallelism(), mat, ipiv, op)?;
+        let odd = scratch.factor(item_par, mat, ipiv, op)?;
         *parity = T::parity(odd);
     }
     Ok(())
@@ -443,7 +490,7 @@ pub(crate) fn lu_solve_prepared_batched_in_place<T: FaerPackedLu>(
         batch_total,
     )?;
     validate_pivots(op, n, pivots)?;
-    let lanes = batch_lanes(ctx, batch_total);
+    let BatchRoute { lanes, item_par } = batch_route(ctx, op, batch_total)?;
     if lanes > 1 {
         // The factors and pivots are read-only and each lane owns a contiguous
         // output range, so the lanes never alias. `solve_one` is infallible.
@@ -481,7 +528,7 @@ pub(crate) fn lu_solve_prepared_batched_in_place<T: FaerPackedLu>(
         .zip(output.chunks_exact_mut(rhs_len))
     {
         solve_one(
-            ctx.faer_parallelism(),
+            item_par,
             (n, nrhs),
             matrix,
             ipiv,
@@ -529,7 +576,7 @@ pub(crate) fn lu_factor_solve_batched_in_place<T: FaerPackedLu>(
         batch_total,
     )?;
     let zero = T::default();
-    let lanes = batch_lanes(ctx, batch_total);
+    let BatchRoute { lanes, item_par } = batch_route(ctx, op, batch_total)?;
     if lanes > 1 {
         // Each lane owns one contiguous packed-LU, pivot, and RHS range, so the
         // three mutable buffers stay disjoint. A singular matrix reports the
@@ -628,7 +675,7 @@ pub(crate) fn lu_factor_solve_batched_in_place<T: FaerPackedLu>(
             None => Ok(()),
         };
     }
-    let mut scratch = PackedLuFactorScratch::new::<T::Entity>(n, n, ctx.faer_parallelism());
+    let mut scratch = PackedLuFactorScratch::new::<T::Entity>(n, n, item_par);
     // INVARIANT: lengths were checked above; a zero-column RHS yields empty
     // RHS blocks, which `chunks_mut` below cannot express with a zero chunk
     // size, so the RHS block is sliced by offset instead. faer owns any
@@ -640,7 +687,7 @@ pub(crate) fn lu_factor_solve_batched_in_place<T: FaerPackedLu>(
     {
         {
             let mat = MatMut::from_column_major_slice_mut(T::entity_slice_mut(matrix), n, n);
-            scratch.factor(ctx.faer_parallelism(), mat, ipiv, op)?;
+            scratch.factor(item_par, mat, ipiv, op)?;
         }
         if rhs_len > 0 {
             if (0..n).any(|i| matrix[i + i * n] == zero) {
@@ -648,14 +695,7 @@ pub(crate) fn lu_factor_solve_batched_in_place<T: FaerPackedLu>(
             }
             let start = batch * rhs_len;
             let rhs = &mut output[start..start + rhs_len];
-            solve_one(
-                ctx.faer_parallelism(),
-                (n, nrhs),
-                matrix,
-                ipiv,
-                rhs,
-                (false, false),
-            );
+            solve_one(item_par, (n, nrhs), matrix, ipiv, rhs, (false, false));
         }
     }
     Ok(())

@@ -549,6 +549,30 @@ keep vendor-specific strided-batch binding work optional. All-batch elementwise
 contractions are classified before generic GEMM lowering, not lowered to a loop
 of 1x1 GEMMs.
 
+**Implemented mapping (#1938 session phase).** `CpuBatchPolicy` (a
+`CpuBatchStrategy` plus `CpuBatchThresholds`) lives in `tenferro-cpu`, by
+maintainer decision, rather than in the neutral config types; CUDA has no
+policy yet. The backend default is `CpuBackend::with_batch_policy`; the scoped
+override is `tenferro_cpu::with_batch_policy(session, policy, f)`, which sets
+the policy through the CPU visitor, runs `f` on the caller's own session (so a
+wrapping session keeps its overrides), and restores the previous policy on
+return, error and unwind. A per-operation choice is a scope around one call;
+nesting gives per-operation > scoped > default. The effective policy travels
+on `CpuOperationEntry` and `CpuExecutionContext` and is read per execution, so
+a policy or provider change needs no prepared-strategy invalidation. The three
+thresholds default to the constants they replace: `vendor_batch_max_item_dim`
+16 (the BLAS grouped cutoff, now carried to the provider as
+`CpuVendorBatch::Allowed`), `outer_min_items` 2 and `outer_min_items_per_lane`
+1. Routes: grouped GEMM supports all five strategies (a forced `OuterParallel`
+inside an entered session fans out over the context's own lanes); strided
+batched contractions support all but `OuterParallel`, which is a typed error;
+packed LU/solve supports all but `WholeBatchVendor`. The strided path now
+reaches the existing `cblas_?gemm_batch` binding (by default for small items).
+A contraction whose axes are all batch axes is executed as an elementwise
+product (with conjugation and alpha/beta) before GEMM lowering. Forced routes
+that conflict with a provider's declaration (for example `Sequential` with the
+built-in BLAS) are typed errors, not overrides.
+
 ### D10. Crate placement: one public tensor family, no reverse edge
 
 | Crate | Target responsibility |

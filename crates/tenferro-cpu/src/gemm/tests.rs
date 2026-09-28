@@ -4,7 +4,7 @@ use super::{
 };
 
 #[cfg(any(feature = "blas-openblas", feature = "blas-mkl"))]
-use super::blas_gemm::provider_should_use_gemm_batch;
+use super::blas_gemm::use_vendor_batch;
 #[cfg(feature = "cpu-blas")]
 use super::blas_gemm::BlasGemm;
 #[cfg(any(feature = "blas-openblas", feature = "blas-mkl"))]
@@ -611,15 +611,23 @@ fn provider_gemm_batch_heuristic_keeps_medium_jobs_on_sequential_path() {
         }
     }
 
-    assert!(provider_should_use_gemm_batch(&[
-        batch(8, 8, 8),
-        batch(8, 8, 8)
-    ]));
-    assert!(!provider_should_use_gemm_batch(&[batch(8, 8, 8)]));
-    assert!(!provider_should_use_gemm_batch(&[
-        batch(8, 8, 8),
-        batch(32, 32, 32)
-    ]));
+    // The default policy threshold is the measured small-job cutoff.
+    let auto = crate::provider::CpuVendorBatch::default();
+    assert!(use_vendor_batch(auto, &[batch(8, 8, 8), batch(8, 8, 8)]));
+    assert!(!use_vendor_batch(auto, &[batch(8, 8, 8)]));
+    assert!(!use_vendor_batch(
+        auto,
+        &[batch(8, 8, 8), batch(32, 32, 32)]
+    ));
+    // A forced strategy overrides the cutoff in both directions.
+    assert!(use_vendor_batch(
+        crate::provider::CpuVendorBatch::Required,
+        &[batch(32, 32, 32)]
+    ));
+    assert!(!use_vendor_batch(
+        crate::provider::CpuVendorBatch::Forbidden,
+        &[batch(8, 8, 8), batch(8, 8, 8)]
+    ));
 }
 
 #[cfg(feature = "cpu-faer")]

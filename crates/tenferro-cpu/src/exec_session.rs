@@ -175,6 +175,23 @@ impl CpuExecSession<'_> {
         self.allocation_domain.cloned()
     }
 
+    /// Replace this session's effective batch policy, returning the previous one.
+    pub(crate) fn replace_batch_policy(
+        &mut self,
+        policy: crate::CpuBatchPolicy,
+    ) -> crate::CpuBatchPolicy {
+        let previous = self.entry.batch_policy();
+        self.set_batch_policy(policy);
+        previous
+    }
+
+    fn set_batch_policy(&mut self, policy: crate::CpuBatchPolicy) {
+        self.entry = self.entry.with_batch_policy(policy);
+        self.entered = self
+            .entered
+            .map(|context| context.with_batch_policy(policy));
+    }
+
     /// Run a CPU-owned linalg kernel inside this already-entered session.
     #[doc(hidden)]
     pub fn with_linalg_pool<R: Send>(

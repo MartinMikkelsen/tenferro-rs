@@ -6,6 +6,7 @@ use super::*;
 use tenferro_tensor::TensorRead;
 use tenferro_tensor::{BackendSessionHost, SessionEntryError};
 
+mod batch_policy;
 mod execution_scope;
 mod external_managed;
 mod output_affinity;

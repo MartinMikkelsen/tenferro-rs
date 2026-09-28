@@ -1063,6 +1063,7 @@ pub struct CpuBackend {
     engine: Arc<CpuEngine>,
     provider_bundle: CpuProviderBundle,
     allocation_domain: Option<Arc<dyn SharedTensorAllocationDomain>>,
+    batch_policy: crate::CpuBatchPolicy,
 }
 
 /// Opaque identity for one CPU backend executable witness.
@@ -1248,6 +1249,7 @@ impl CpuBackend {
                 engine,
                 provider_bundle: CpuProviderBundle::standard(kind, kind == CpuBackendKind::Blas),
                 allocation_domain: None,
+                batch_policy: crate::CpuBatchPolicy::default(),
             })
         }
     }
@@ -1316,6 +1318,7 @@ impl CpuBackend {
             engine: base_engine,
             provider_bundle: CpuProviderBundle::standard(kind, kind == CpuBackendKind::Blas),
             allocation_domain: None,
+            batch_policy: crate::CpuBatchPolicy::default(),
         }
     }
 
@@ -1631,6 +1634,7 @@ impl CpuBackend {
             engine,
             provider_bundle,
             allocation_domain: None,
+            batch_policy: crate::CpuBatchPolicy::default(),
         };
         backend
             .validate_provider_bundle_for_domains(&backend.provider_bundle)
@@ -1900,6 +1904,7 @@ impl CpuBackend {
             engine,
             provider_bundle: self.provider_bundle.clone(),
             allocation_domain: self.allocation_domain.clone(),
+            batch_policy: self.batch_policy,
         })
     }
 
@@ -1919,6 +1924,7 @@ impl CpuBackend {
                 engine,
                 provider_bundle: self.provider_bundle.clone(),
                 allocation_domain: self.allocation_domain.clone(),
+                batch_policy: self.batch_policy,
             });
         }
         let resolved = resolve_placement_with_affinity(
@@ -1936,6 +1942,7 @@ impl CpuBackend {
                 engine: self.shared.managed_base_engine(requested)?,
                 provider_bundle: self.provider_bundle.clone(),
                 allocation_domain: self.allocation_domain.clone(),
+                batch_policy: self.batch_policy,
             });
         }
         let engine_placement = match &resolved {
@@ -1970,6 +1977,7 @@ impl CpuBackend {
             engine,
             provider_bundle: self.provider_bundle.clone(),
             allocation_domain: self.allocation_domain.clone(),
+            batch_policy: self.batch_policy,
         })
     }
 
@@ -2612,7 +2620,8 @@ impl CpuBackend {
     pub fn install<R: Send>(&self, op: impl FnOnce() -> R + Send) -> crate::Result<R> {
         let admission = self.execution_admission()?;
         let permit = admission.permit();
-        let entry = CpuOperationEntry::new(self.engine.domain(), permit);
+        let entry = CpuOperationEntry::new(self.engine.domain(), permit)
+            .with_batch_policy(self.batch_policy);
         entry
             .enter(ParallelMode::Sequential, |_| op())
             .map_err(|error| crate::Error::backend_source("CpuBackend::install", error))
@@ -2624,7 +2633,8 @@ impl CpuBackend {
     ) -> crate::Result<R> {
         let admission = self.execution_admission()?;
         let permit = admission.permit();
-        let entry = CpuOperationEntry::new(self.engine.domain(), permit);
+        let entry = CpuOperationEntry::new(self.engine.domain(), permit)
+            .with_batch_policy(self.batch_policy);
         let mode = entry.preferred_engine_mode();
         entry
             .enter(mode, |context| context.with_native_parallelism(op))
@@ -2637,7 +2647,8 @@ impl CpuBackend {
     ) -> crate::Result<R> {
         let admission = self.execution_admission()?;
         let permit = admission.permit();
-        let entry = CpuOperationEntry::new(self.engine.domain(), permit);
+        let entry = CpuOperationEntry::new(self.engine.domain(), permit)
+            .with_batch_policy(self.batch_policy);
         let mode = entry.preferred_engine_mode();
         entry
             .enter(mode, |context| {
@@ -2657,7 +2668,8 @@ impl CpuBackend {
     ) -> crate::Result<R> {
         let admission = self.execution_admission()?;
         let permit = admission.permit();
-        let entry = CpuOperationEntry::new(self.engine.domain(), permit);
+        let entry = CpuOperationEntry::new(self.engine.domain(), permit)
+            .with_batch_policy(self.batch_policy);
         let mode = entry.preferred_engine_mode();
         entry
             .enter(mode, |context| {
@@ -2722,7 +2734,8 @@ impl CpuBackend {
     ) -> crate::Result<R> {
         let admission = self.execution_admission()?;
         let permit = admission.permit();
-        let entry = CpuOperationEntry::new(self.engine.domain(), permit);
+        let entry = CpuOperationEntry::new(self.engine.domain(), permit)
+            .with_batch_policy(self.batch_policy);
         let mode = entry.preferred_linalg_mode(self.kind());
         entry
             .enter(mode, |context| {
@@ -2832,6 +2845,45 @@ impl BackendRuntimeCache for CpuBackend {
 }
 
 impl CpuBackend {
+    /// Set this backend's default batch policy.
+    ///
+    /// The default applies to every batched operation run through this backend
+    /// value and its clones, unless a session scope overrides it with
+    /// [`crate::with_batch_policy`]. A per-operation choice is a
+    /// scope around that single call. The default is `Auto`
+    /// ( with the pre-existing thresholds, see
+    /// [`crate::CpuBatchPolicy::default`]).
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_cpu::{CpuBackend, CpuBatchPolicy, CpuBatchStrategy};
+    ///
+    /// let backend = CpuBackend::with_threads(1)?
+    ///     .with_batch_policy(CpuBatchPolicy::new(CpuBatchStrategy::ProviderItems));
+    /// assert_eq!(backend.batch_policy().strategy(), CpuBatchStrategy::ProviderItems);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    #[must_use]
+    pub fn with_batch_policy(mut self, policy: crate::CpuBatchPolicy) -> Self {
+        self.batch_policy = policy;
+        self
+    }
+
+    /// Return this backend's default batch policy.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_cpu::{CpuBackend, CpuBatchPolicy};
+    ///
+    /// assert_eq!(CpuBackend::new().batch_policy(), CpuBatchPolicy::default());
+    /// ```
+    #[must_use]
+    pub fn batch_policy(&self) -> crate::CpuBatchPolicy {
+        self.batch_policy
+    }
+
     /// Bind this backend handle to a shared-allocation domain.
     ///
     /// Host-only CPU behavior is unchanged. Operation crates can use the domain
@@ -2897,7 +2949,8 @@ impl CpuBackend {
         let admission = self.execution_admission()?;
         let permit = admission.permit();
         let owner = permit.owner();
-        let entry = CpuOperationEntry::new(self.engine.domain(), permit);
+        let entry = CpuOperationEntry::new(self.engine.domain(), permit)
+            .with_batch_policy(self.batch_policy);
         // Provider-owned BLAS threading does not change session entry: the
         // permit, including provider exclusion, spans this entire callback.
         let enter_managed_session = entry.enters_executor_per_session();
