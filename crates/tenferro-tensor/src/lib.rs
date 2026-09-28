@@ -77,6 +77,9 @@ pub use tenferro_tensor_core::{
     TensorRef, ValidationError, ValidationKind,
 };
 
+mod erased_host;
+mod host_container;
+
 pub mod backend;
 pub mod cache;
 pub mod capability;
@@ -102,7 +105,13 @@ pub use capability::{
 pub use config::{
     CompareDir, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig,
 };
+pub use erased_host::ErasedHostTensor;
 pub use error::{BoxError, Error, ReinterpretError, Result};
+
+pub use host_container::{
+    DefaultScalars, DefaultScalarsRef, DefaultScalarsView, HostTensor, HostTensorView,
+};
+
 pub use types::{
     col_major_strides, AllocationDomainId, AllocationId, BackendStorage, BackendStorageHandle,
     ColMajorView, ColMajorViewMut, CpuDomainId, DType, DeviceAccessError, DeviceAccessRequest,

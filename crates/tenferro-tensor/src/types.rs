@@ -4702,6 +4702,44 @@ pub trait TensorScalar: Copy + Clone + Send + Sync + 'static + private::Sealed {
     /// ```
     fn dtype() -> DType;
 
+    /// Build the crate's default scalar set from validated column-major data.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::{DType, TensorScalar};
+    ///
+    /// let set = <f64 as TensorScalar>::into_default_scalars(vec![2].into(), vec![1.0, 2.0])?;
+    /// assert_eq!(set.dtype(), DType::F64);
+    /// # Ok::<(), tenferro_tensor_core::ValidationError>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_tensor_core::ValidationError::ShapeDataLengthMismatch`]
+    /// when the shape product differs from `data.len()`, or
+    /// [`tenferro_tensor_core::ValidationError::IntegerOverflow`] when shape
+    /// arithmetic overflows.
+    fn into_default_scalars(
+        shape: tenferro_tensor_core::ShapeVec,
+        data: Vec<Self>,
+    ) -> tenferro_tensor_core::Result<crate::DefaultScalars>;
+
+    /// Borrow the default scalar set's values when it holds this scalar type.
+    ///
+    /// Returns `None` when the set currently holds another member.
+    fn default_scalars_slice(set: &crate::DefaultScalars) -> Option<&[Self]>;
+
+    /// Exclusively borrow the default scalar set's values when it holds this scalar type.
+    ///
+    /// Returns `None` when the set currently holds another member.
+    fn default_scalars_slice_mut(set: &mut crate::DefaultScalars) -> Option<&mut [Self]>;
+
+    /// Move the host tensor out of the default scalar set when it holds this scalar type.
+    ///
+    /// Returns `None` when the set currently holds another member.
+    fn from_default_scalars(set: crate::DefaultScalars) -> Option<crate::HostTensor<Self>>;
+
     /// Wrap typed column-major data into a [`Tensor`] enum variant.
     /// # Errors
     ///
@@ -4867,6 +4905,42 @@ macro_rules! impl_tensor_scalar {
             #[inline]
             fn dtype() -> DType {
                 DType::$dtype
+            }
+
+            fn into_default_scalars(
+                shape: tenferro_tensor_core::ShapeVec,
+                data: Vec<Self>,
+            ) -> tenferro_tensor_core::Result<crate::DefaultScalars> {
+                crate::HostTensor::from_vec_col_major(shape, data).map(|tensor| {
+                    crate::DefaultScalars::from_payload(
+                        crate::host_container::DefaultScalarsValue::$variant(tensor),
+                    )
+                })
+            }
+
+            fn default_scalars_slice(set: &crate::DefaultScalars) -> Option<&[Self]> {
+                match set.payload() {
+                    crate::host_container::DefaultScalarsValue::$variant(tensor) => {
+                        Some(tensor.as_slice())
+                    }
+                    _ => None,
+                }
+            }
+
+            fn default_scalars_slice_mut(set: &mut crate::DefaultScalars) -> Option<&mut [Self]> {
+                match set.payload_mut() {
+                    crate::host_container::DefaultScalarsValue::$variant(tensor) => {
+                        Some(tensor.as_mut_slice())
+                    }
+                    _ => None,
+                }
+            }
+
+            fn from_default_scalars(set: crate::DefaultScalars) -> Option<crate::HostTensor<Self>> {
+                match set.into_payload() {
+                    crate::host_container::DefaultScalarsValue::$variant(tensor) => Some(tensor),
+                    _ => None,
+                }
             }
 
             fn into_tensor(shape: Vec<usize>, data: Vec<Self>) -> crate::Result<Tensor> {
