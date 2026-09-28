@@ -647,6 +647,7 @@ gpu	tenferro-gpu	cubecl::tests::raw_session_tests::raw_session_restores_context_
 gpu	tenferro-gpu	cubecl::tests::raw_session_tests::raw_tensor_ref_carries_validated_span
 gpu	tenferro-gpu	cubecl::tests::reduction_tests::test_cubecl_bool_reductions_are_unsupported
 gpu	tenferro-gpu	cubecl::tests::reduction_tests::test_cubecl_complex_sum_and_prod_match_cpu
+gpu	tenferro-gpu	cubecl::tests::reduction_tests::test_cubecl_complex_sum_and_prod_match_cpu_on_plane_path
 gpu	tenferro-gpu	cubecl::tests::reduction_tests::test_cubecl_float_max_min_reductions_propagate_nan_for_unit_and_plane
 gpu	tenferro-gpu	cubecl::tests::reduction_tests::test_cubecl_float_reductions_match_cpu
 gpu	tenferro-gpu	cubecl::tests::reduction_tests::test_cubecl_full_axis_reductions_preserve_scalar_shape_and_values
