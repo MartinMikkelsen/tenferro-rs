@@ -90,6 +90,7 @@ fn a_locally_declared_set_reports_its_own_members() {
     assert_eq!(narrow.tag(), TestTag::F32);
     assert_eq!(<TestSet as ScalarSet>::TAGS, &[TestTag::F64, TestTag::F32]);
     assert_eq!(TestTag::SPECS.len(), TestTag::TAGS.len());
+    assert_eq!(TestTag::F32.spec().kind, crate::MemberKind::Float);
     assert_eq!(
         <TestSet as ScalarSet>::promote(TestTag::F32, TestTag::F64),
         TestTag::F64

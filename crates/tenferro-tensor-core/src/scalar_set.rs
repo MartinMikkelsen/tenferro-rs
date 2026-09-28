@@ -170,35 +170,53 @@ pub const fn promote_specs(lhs: MemberSpec, rhs: MemberSpec) -> MemberSpec {
     }
 }
 
-/// Promote two members of one set, given its tags and each tag's facts.
+/// Promote two members of one set from its parallel tag and fact tables.
 ///
-/// The set supplies its tags in declaration order together with the facts for
-/// each tag. The result is the tag whose facts represent both inputs under
-/// [`promote_specs`], preferring the narrowest member that still holds both.
+/// `tags` and `specs` are emitted together in the same order by
+/// [`define_scalar_tag!`], so a tag that is not listed in `tags` (an externally
+/// defined member) promotes to itself.
 ///
 /// # Examples
 ///
 /// ```rust
 /// use tenferro_tensor_core::{promote_in_set, DType};
 ///
-/// assert_eq!(promote_in_set(DType::TAGS, DType::I32, DType::F32, |tag| tag.spec()), DType::F64);
+/// assert_eq!(
+///     promote_in_set(DType::TAGS, DType::SPECS, DType::I32, DType::F32),
+///     DType::F64
+/// );
 /// ```
 #[must_use]
-pub fn promote_in_set<Tag: Copy>(
+pub fn promote_in_set<Tag: Copy + PartialEq>(
     tags: &[Tag],
+    specs: &[MemberSpec],
     lhs: Tag,
     rhs: Tag,
-    spec_of: impl Fn(Tag) -> MemberSpec,
 ) -> Tag {
-    let target = promote_specs(spec_of(lhs), spec_of(rhs));
-    for tag in tags {
-        if spec_of(*tag) == target {
-            return *tag;
+    // INVARIANT: `define_scalar_tag!` emits `TAGS` and `SPECS` from one member
+    // list, so the two tables always hold the same entries in the same order.
+    let (Some(lhs_index), Some(rhs_index)) = (
+        tags.iter().position(|tag| *tag == lhs),
+        tags.iter().position(|tag| *tag == rhs),
+    ) else {
+        return lhs;
+    };
+    let (Some(lhs_spec), Some(rhs_spec)) = (specs.get(lhs_index), specs.get(rhs_index)) else {
+        return lhs;
+    };
+    let target = promote_specs(*lhs_spec, *rhs_spec);
+    for (index, spec) in specs.iter().enumerate() {
+        if *spec == target {
+            if let Some(tag) = tags.get(index) {
+                return *tag;
+            }
         }
     }
     let mut chosen: Option<(Tag, MemberSpec)> = None;
-    for tag in tags {
-        let spec = spec_of(*tag);
+    for (index, spec) in specs.iter().enumerate() {
+        let Some(tag) = tags.get(index).copied() else {
+            break;
+        };
         if spec.kind != target.kind {
             continue;
         }
@@ -222,13 +240,104 @@ pub fn promote_in_set<Tag: Copy>(
             }
         };
         if better {
-            chosen = Some((*tag, spec));
+            chosen = Some((tag, *spec));
         }
     }
     match chosen {
         Some((tag, _)) => tag,
         None => lhs,
     }
+}
+
+/// Define a closed scalar set's tag type and its promotion facts.
+///
+/// The declaration lists each member once. The macro emits the tag enum and the
+/// member facts (`spec`, `TAGS`, `SPECS`), plus the `external` variant when the
+/// declaration names one. Use this form when the value enum lives in another
+/// crate: tenferro's own preset set declares its tag here and its value enum
+/// beside the tensor family that carries it.
+///
+/// # Examples
+///
+/// ```rust
+/// use tenferro_tensor_core::{define_scalar_tag, MemberKind};
+///
+/// define_scalar_tag! {
+///     /// Tag for a two-member set.
+///     pub enum PairTag {
+///         /// Double precision.
+///         F64 => f64 : Float 1 64,
+///         /// Single precision.
+///         F32 => f32 : Float 0 32,
+///     }
+/// }
+///
+/// assert_eq!(PairTag::F32.spec().kind, MemberKind::Float);
+/// assert_eq!(PairTag::TAGS, &[PairTag::F64, PairTag::F32]);
+/// ```
+#[macro_export]
+macro_rules! define_scalar_tag {
+    (
+        $(#[$tag_meta:meta])*
+        $tag_vis:vis enum $tag:ident {
+            $(
+                $(#[$variant_meta:meta])*
+                $variant:ident => $ty:ty : $kind:ident $level:literal $width:literal
+            ),+ $(,)?
+        }
+        $( external $ext_variant:ident($ext_ty:ty); )?
+    ) => {
+        $(#[$tag_meta])*
+        #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+        $tag_vis enum $tag {
+            $(
+                $(#[$variant_meta])*
+                $variant,
+            )+
+            $( $ext_variant($ext_ty), )?
+        }
+
+        impl $tag {
+            /// Promotion facts of this member.
+            ///
+            /// # Examples
+            ///
+            /// ```rust
+            /// use tenferro_tensor_core::{MemberKind, DType};
+            ///
+            /// assert_eq!(DType::F64.spec().kind, MemberKind::Float);
+            /// ```
+            #[must_use]
+            pub const fn spec(self) -> $crate::MemberSpec {
+                match self {
+                    $(
+                        $tag::$variant => $crate::MemberSpec::new(
+                            $crate::MemberKind::$kind,
+                            $level,
+                            $width,
+                        ),
+                    )+
+                    $( $tag::$ext_variant(_) => {
+                        $crate::MemberSpec::new($crate::MemberKind::External, 0, 0)
+                    } )?
+                }
+            }
+
+            /// Every member tag, in declaration order.
+            pub const TAGS: &'static [Self] = &[
+                $(
+                    $tag::$variant,
+                )+
+            ];
+
+            /// Promotion facts of every member, in declaration order.
+            pub const SPECS: &'static [$crate::MemberSpec] = &[
+                $(
+                    $crate::MemberSpec::new($crate::MemberKind::$kind, $level, $width),
+                )+
+            ];
+        }
+    };
 }
 
 /// Define a closed scalar set: its tag type, its value enum, and its membership.
@@ -275,14 +384,15 @@ macro_rules! define_scalar_set {
         $set_vis:vis enum $set:ident;
         $( external $ext_variant:ident($ext_ty:ty); )?
     ) => {
-        $(#[$tag_meta])*
-        #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-        $tag_vis enum $tag {
-            $(
-                $(#[$variant_meta])*
-                $variant,
-            )+
-            $( $ext_variant($ext_ty), )?
+        $crate::define_scalar_tag! {
+            $(#[$tag_meta])*
+            $tag_vis enum $tag {
+                $(
+                    $(#[$variant_meta])*
+                    $variant => $ty : $kind $level $width
+                ),+
+            }
+            $( external $ext_variant($ext_ty); )?
         }
 
         $(#[$set_meta])*
@@ -292,47 +402,6 @@ macro_rules! define_scalar_set {
                 $(#[$variant_meta])*
                 $variant($crate::HostTensor<$ty>),
             )+
-        }
-
-        impl $tag {
-            /// Promotion facts of this member.
-            ///
-            /// # Examples
-            ///
-            /// ```rust
-            /// use tenferro_tensor_core::{MemberKind, DType};
-            ///
-            /// assert_eq!(DType::F64.spec().kind, MemberKind::Float);
-            /// ```
-            #[must_use]
-            pub const fn spec(self) -> $crate::MemberSpec {
-                match self {
-                    $(
-                        $tag::$variant => $crate::MemberSpec::new(
-                            $crate::MemberKind::$kind,
-                            $level,
-                            $width,
-                        ),
-                    )+
-                    $( $tag::$ext_variant(_) => {
-                        $crate::MemberSpec::new($crate::MemberKind::External, 0, 0)
-                    } )?
-                }
-            }
-
-            /// Every member tag, in declaration order.
-            pub const TAGS: &'static [Self] = &[
-                $(
-                    $tag::$variant,
-                )+
-            ];
-
-            /// Promotion facts of every member, in declaration order.
-            pub const SPECS: &'static [$crate::MemberSpec] = &[
-                $(
-                    $crate::MemberSpec::new($crate::MemberKind::$kind, $level, $width),
-                )+
-            ];
         }
 
         impl $crate::ScalarSet for $set {
@@ -361,7 +430,7 @@ macro_rules! define_scalar_set {
                         return rhs;
                     }
                 )?
-                $crate::promote_in_set(<$tag>::TAGS, lhs, rhs, |tag| tag.spec())
+                $crate::promote_in_set(<$tag>::TAGS, <$tag>::SPECS, lhs, rhs)
             }
         }
     };
