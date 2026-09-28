@@ -746,15 +746,12 @@ impl CanonicalFallbackSpy {
                     }
                     other => panic!("conjugated lhs was not materialized: {other:?}"),
                 }
-                match parts.rhs {
-                    TensorRead::Tensor(rhs) if rhs.dtype() == tenferro_tensor::DType::C64 => {
-                        let rhs = rhs
-                            .as_typed::<Complex64>()
-                            .expect("the dtype guard selects this arm");
-                        assert_eq!(rhs.host_data()?, &[Complex64::new(3.0, 4.0)]);
-                    }
-                    other => panic!("rhs was not materialized: {other:?}"),
-                }
+                // The unconjugated rhs is already canonical, so it arrives as
+                // the caller's borrowed view rather than a packed copy.
+                assert_eq!(
+                    parts.rhs.as_slice::<Complex64>()?,
+                    &[Complex64::new(3.0, 4.0)]
+                );
                 match &mut *parts.output {
                     TensorWrite::Tensor(output)
                         if output.dtype() == tenferro_tensor::DType::C64 =>
@@ -2344,9 +2341,9 @@ fn opted_in_layout_provider_unsupported_falls_back_to_zeroed_materialization() {
     });
     let uninit_calls = Arc::clone(&layout.uninit_calls);
     assert_canonical_operand_materialization_with_layout(layout);
-    // Both canonical operands (lhs and rhs) attempted the uninit path before
-    // falling back to the zeroed materialization.
-    assert_eq!(*uninit_calls.lock().unwrap(), 2);
+    // The conjugated lhs attempted the uninit path before falling back to the
+    // zeroed materialization; the already-canonical rhs is borrowed, not packed.
+    assert_eq!(*uninit_calls.lock().unwrap(), 1);
 }
 
 /// The outer-scheduled grouped table carries an arm per floating and complex preset scalar. The existing
@@ -2983,4 +2980,40 @@ fn all_batch_overwrite_writes_permuted_product_into_output() {
     assert_eq!(output.as_slice::<f64>().unwrap(), expected.as_slice());
     assert_eq!(*gemm.gemm_calls.lock().unwrap(), 0);
     assert_eq!(*gemm.strided_calls.lock().unwrap(), 0);
+}
+
+#[test]
+fn canonical_fallback_borrows_an_operand_that_is_already_canonical() {
+    let layout_calls = Arc::new(Mutex::new(0));
+    let gemm = Arc::new(GemmSpy::new(CpuProviderOutcome::Executed));
+    let bundle = CpuProviderBundle::custom_builder()
+        .gemm_provider(gemm.clone())
+        .layout_transform_provider(Arc::new(LayoutSpy {
+            calls: Arc::clone(&layout_calls),
+        }))
+        .build()
+        .unwrap();
+    // lhs contracts its middle axis, so its free axes need packing; rhs [k, n]
+    // is already compact in canonical order and must be borrowed as is.
+    let lhs = Tensor::from_vec_col_major(vec![2, 3, 2], vec![1.0_f64; 12]).unwrap();
+    let rhs = Tensor::from_vec_col_major(vec![3, 2], vec![1.0_f64; 6]).unwrap();
+    let mut output = Tensor::from_vec_col_major(vec![2, 2, 2], vec![0.0_f64; 8]).unwrap();
+    let fixture = execution_context_fixture(1);
+
+    bundle
+        .execute_dot_general_into(
+            &fixture.entry(),
+            &mut BufferPool::new(),
+            &mut GemmAnalysisCache::default(),
+            None,
+            TensorRead::from_tensor(&lhs),
+            TensorRead::from_tensor(&rhs),
+            &config(&[1], &[0], &[], &[]),
+            DotGeneralAccumulation::overwrite(DType::F64).unwrap(),
+            TensorWrite::from_tensor(&mut output),
+        )
+        .unwrap();
+
+    assert_eq!(*layout_calls.lock().unwrap(), 1, "only lhs is packed");
+    assert_eq!(*gemm.gemm_calls.lock().unwrap(), 1);
 }

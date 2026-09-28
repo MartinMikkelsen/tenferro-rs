@@ -544,6 +544,30 @@ fn execute_all_batch_elementwise(
     result
 }
 
+/// A canonical GEMM operand: the caller's compact view or a packed copy.
+// INVARIANT: two stack-local values per canonical contraction; boxing the view
+// would add a heap allocation to the path this type exists to make cheaper.
+#[allow(clippy::large_enum_variant)]
+enum CanonicalOperand<'input> {
+    Borrowed(TensorRead<'input>),
+    Packed(Tensor),
+}
+
+impl CanonicalOperand<'_> {
+    fn read(&self) -> TensorRead<'_> {
+        match self {
+            Self::Borrowed(read) => read.clone(),
+            Self::Packed(tensor) => TensorRead::from_tensor(tensor),
+        }
+    }
+
+    fn reclaim(self, buffers: &mut BufferPool) {
+        if let Self::Packed(tensor) = self {
+            crate::backend::reclaim_tensor(buffers, tensor);
+        }
+    }
+}
+
 /// Whether every operand axis is a batch axis (an elementwise product).
 fn is_all_batch_contraction(
     lhs: &TensorRead<'_>,
@@ -843,31 +867,29 @@ impl DotGeneralRuntime {
     ) -> Result<R> {
         let (lhs_perm, rhs_perm, canonical_config) =
             crate::gemm::canonical_gemm_layout(config, lhs.shape().len(), rhs.shape().len());
-        let lhs_canonical = materialize_canonical_operand(
-            self.layout.as_ref(),
+        let lhs_canonical = self.canonical_operand(
             provider_context,
             buffers,
             lhs,
             &lhs_perm,
             accumulation.lhs_conj,
         )?;
-        let rhs_canonical = match materialize_canonical_operand(
-            self.layout.as_ref(),
+        let rhs_canonical = match self.canonical_operand(
             provider_context,
             buffers,
             rhs,
             &rhs_perm,
             accumulation.rhs_conj,
         ) {
-            Ok(tensor) => tensor,
+            Ok(operand) => operand,
             Err(error) => {
-                crate::backend::reclaim_tensor(buffers, lhs_canonical);
+                lhs_canonical.reclaim(buffers);
                 return Err(error);
             }
         };
         let result = execute(
-            &TensorRead::from_tensor(&lhs_canonical),
-            &TensorRead::from_tensor(&rhs_canonical),
+            &lhs_canonical.read(),
+            &rhs_canonical.read(),
             &canonical_config,
             DotGeneralAccumulation {
                 lhs_conj: false,
@@ -875,9 +897,36 @@ impl DotGeneralRuntime {
                 ..accumulation
             },
         );
-        crate::backend::reclaim_tensor(buffers, lhs_canonical);
-        crate::backend::reclaim_tensor(buffers, rhs_canonical);
+        lhs_canonical.reclaim(buffers);
+        rhs_canonical.reclaim(buffers);
         result
+    }
+
+    /// An operand in canonical GEMM layout: borrowed when the permuted view is
+    /// already compact column-major and needs no conjugation, packed otherwise.
+    fn canonical_operand<'input>(
+        &self,
+        provider_context: &CpuExecutionContext<'_>,
+        buffers: &mut BufferPool,
+        input: &TensorRead<'input>,
+        permutation: &[usize],
+        conjugate: bool,
+    ) -> Result<CanonicalOperand<'input>> {
+        if !conjugate {
+            let permuted = TensorRead::from_view(transposed_read_view(input, permutation)?);
+            if permuted.is_col_major_contiguous()? {
+                return Ok(CanonicalOperand::Borrowed(permuted));
+            }
+        }
+        materialize_canonical_operand(
+            self.layout.as_ref(),
+            provider_context,
+            buffers,
+            input,
+            permutation,
+            conjugate,
+        )
+        .map(CanonicalOperand::Packed)
     }
 
     #[allow(clippy::too_many_arguments)]

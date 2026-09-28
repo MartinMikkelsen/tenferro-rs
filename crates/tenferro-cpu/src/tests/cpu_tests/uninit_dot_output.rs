@@ -479,6 +479,23 @@ fn canonical_packing_contraction_writes_into_the_uninit_destination() {
     let zeroed_output = allocated_dot(&mut zeroed_backend, &lhs, &rhs, &config);
 
     assert_eq!(uninit_output.shape(), &[2, 2, 2]);
+    // Reference: out[i, l, n] = sum_j lhs[i, j, l] * rhs[j, n], column-major.
+    let lhs_data = lhs.as_slice::<f64>().unwrap();
+    let rhs_data = rhs.as_slice::<f64>().unwrap();
+    let mut expected = vec![0.0; 8];
+    for n in 0..2 {
+        for l in 0..2 {
+            for i in 0..2 {
+                expected[i + 2 * l + 4 * n] = (0..3)
+                    .map(|j| lhs_data[i + 2 * j + 6 * l] * rhs_data[j + 3 * n])
+                    .sum();
+            }
+        }
+    }
+    assert_eq!(
+        uninit_output.as_slice::<f64>().unwrap(),
+        expected.as_slice()
+    );
     assert_eq!(
         uninit_output.as_slice::<f64>().unwrap(),
         zeroed_output.as_slice::<f64>().unwrap(),
