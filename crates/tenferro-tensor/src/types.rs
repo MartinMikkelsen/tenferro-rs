@@ -1030,6 +1030,18 @@ impl<T: 'static> StorageBuffer<T> {
 /// infallible host access (`as_slice`, `get`, `get_mut`, `Index`/`IndexMut`)
 /// and [`Clone`] without a runtime device check. `T` needs no `Copy`,
 /// [`TensorScalar`] or arithmetic bound for that.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_tensor::{DynRank, Host, TypedTensor};
+///
+/// let tensor: TypedTensor<f64, DynRank, Host> =
+///     TypedTensor::from_host_vec_col_major(vec![2], vec![1.0, 2.0])?;
+/// assert_eq!(tensor.as_slice(), &[1.0, 2.0]);
+/// assert_eq!(tensor[&[1]], 2.0);
+/// # Ok::<(), tenferro_tensor::Error>(())
+/// ```
 #[derive(Debug)]
 pub struct Host;
 
@@ -1039,6 +1051,17 @@ pub struct Host;
 /// and retirement state through its allocation group, so host access stays
 /// fallible and must be prepared or mapped explicitly. The marker is not proof
 /// of a particular device ordinal or provider.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_tensor::{DynRank, Gpu, Host, TypedTensor};
+///
+/// let host = TypedTensor::<f64, DynRank, Host>::from_host_vec_col_major(vec![2], vec![1.0, 2.0])?;
+/// let gpu: TypedTensor<f64, DynRank, Gpu> = host.promote()?;
+/// assert_eq!(gpu.host_data()?, &[1.0, 2.0]);
+/// # Ok::<(), tenferro_tensor::Error>(())
+/// ```
 #[derive(Debug)]
 pub struct Gpu;
 
@@ -1046,6 +1069,17 @@ pub struct Gpu;
 ///
 /// This is the default representation: one type for ordinary tensors that may
 /// be host-resident or backend-resident at runtime.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_tensor::{Dynamic, DynRank, Host, TypedTensor};
+///
+/// let host = TypedTensor::<i32, DynRank, Host>::from_host_vec_col_major(vec![2], vec![1, 2])?;
+/// let dynamic: TypedTensor<i32, DynRank, Dynamic> = host.into_dynamic();
+/// assert_eq!(dynamic.host_data()?, &[1, 2]);
+/// # Ok::<(), tenferro_tensor::Error>(())
+/// ```
 #[derive(Debug)]
 pub struct Dynamic;
 
@@ -1061,6 +1095,21 @@ mod representation_sealed {
 /// The three markers are [`Host`], [`Gpu`] and [`Dynamic`]. The trait is
 /// sealed: downstream crates select an existing representation, they do not
 /// define one.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_tensor::{Dynamic, DynRank, Host, Representation, TypedTensor};
+///
+/// fn extent<D: Representation>(tensor: &TypedTensor<f64, DynRank, D>) -> usize {
+///     tensor.shape()[0]
+/// }
+/// let host = TypedTensor::<f64, DynRank, Host>::from_host_vec_col_major(vec![3], vec![0.0; 3])?;
+/// assert_eq!(extent(&host), 3);
+/// let dynamic: TypedTensor<f64, DynRank, Dynamic> = host.into_dynamic();
+/// assert_eq!(extent(&dynamic), 3);
+/// # Ok::<(), tenferro_tensor::Error>(())
+/// ```
 pub trait Representation: representation_sealed::Sealed + 'static {
     /// Owned payload stored for this representation.
     #[doc(hidden)]
@@ -1294,16 +1343,45 @@ impl<T, R: TensorRank> TypedTensor<T, R, Host> {
     }
 
     /// Alias of [`Self::as_slice`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::{DynRank, Host, TypedTensor};
+    /// let tensor = TypedTensor::<i32, DynRank, Host>::from_host_vec_col_major(vec![2], vec![1, 2])?;
+    /// assert_eq!(tensor.host_data(), &[1, 2]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
     pub fn host_data(&self) -> &[T] {
         self.as_slice()
     }
 
     /// Exclusively borrow the owned host elements.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::{DynRank, Host, TypedTensor};
+    /// let mut tensor = TypedTensor::<i32, DynRank, Host>::from_host_vec_col_major(vec![2], vec![1, 2])?;
+    /// tensor.host_data_mut()[0] = 5;
+    /// assert_eq!(tensor.as_slice(), &[5, 2]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
     pub fn host_data_mut(&mut self) -> &mut [T] {
         self.storage.data.as_mut_slice()
     }
 
     /// Borrow one element by checked column-major multi-index.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::{DynRank, Host, TypedTensor};
+    /// let tensor = TypedTensor::<i32, DynRank, Host>::from_host_vec_col_major(vec![2, 2], vec![1, 2, 3, 4])?;
+    /// assert_eq!(tensor.get(&[1, 1])?, &4);
+    /// assert!(tensor.get(&[2, 0]).is_err());
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
     ///
     /// # Errors
     /// Returns [`crate::Error::Validation`] for a wrong rank, an out-of-range
@@ -1317,6 +1395,16 @@ impl<T, R: TensorRank> TypedTensor<T, R, Host> {
 
     /// Exclusively borrow one element by checked column-major multi-index.
     ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::{DynRank, Host, TypedTensor};
+    /// let mut tensor = TypedTensor::<i32, DynRank, Host>::from_host_vec_col_major(vec![2], vec![1, 2])?;
+    /// *tensor.get_mut(&[1])? = 9;
+    /// assert_eq!(tensor.as_slice(), &[1, 9]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    ///
     /// # Errors
     /// Returns [`crate::Error::Validation`] for a wrong rank, an out-of-range
     /// coordinate or offset arithmetic overflow.
@@ -1328,11 +1416,31 @@ impl<T, R: TensorRank> TypedTensor<T, R, Host> {
     }
 
     /// Consume this tensor and return the original host vector.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::{DynRank, Host, TypedTensor};
+    /// let tensor = TypedTensor::<i32, DynRank, Host>::from_host_vec_col_major(vec![2], vec![1, 2])?;
+    /// assert_eq!(tensor.into_host_vec(), vec![1, 2]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
     pub fn into_host_vec(self) -> Vec<T> {
         self.storage.data.into_vec()
     }
 
     /// Consume this tensor and return its shape and column-major host vector.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::{DynRank, Host, TypedTensor};
+    /// let tensor = TypedTensor::<i32, DynRank, Host>::from_host_vec_col_major(vec![2, 1], vec![1, 2])?;
+    /// let (shape, data) = tensor.into_vec_col_major();
+    /// assert_eq!(shape, vec![2, 1]);
+    /// assert_eq!(data, vec![1, 2]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
     pub fn into_vec_col_major(self) -> (Vec<usize>, Vec<T>) {
         let shape = self.shape().to_vec();
         (shape, self.into_host_vec())
@@ -1381,6 +1489,17 @@ impl<T, R: TensorRank> TypedTensor<T, R, Host> {
     }
 
     /// Borrow this host owner as a typed view.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::{DynRank, Host, TypedTensor};
+    /// let tensor = TypedTensor::<i32, DynRank, Host>::from_host_vec_col_major(vec![2], vec![1, 2])?;
+    /// let view = tensor.as_view();
+    /// assert_eq!(view.shape(), &[2]);
+    /// assert_eq!(view.as_host_slice(), &[1, 2]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
     pub fn as_view(&self) -> TypedTensorView<'_, T, R, Host> {
         TypedTensorView {
             buffer: TensorStorageRef::Host(self.as_slice()),
@@ -1392,6 +1511,16 @@ impl<T, R: TensorRank> TypedTensor<T, R, Host> {
     }
 
     /// Exclusively borrow this host owner as a mutable typed view.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::{DynRank, Host, TypedTensor};
+    /// let mut tensor = TypedTensor::<i32, DynRank, Host>::from_host_vec_col_major(vec![2], vec![1, 2])?;
+    /// tensor.as_view_mut().as_host_slice_mut()[1] = 4;
+    /// assert_eq!(tensor.as_slice(), &[1, 4]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
     pub fn as_view_mut(&mut self) -> TypedTensorViewMut<'_, T, R, Host> {
         let layout = self.layout();
         let placement = self.placement.clone();
@@ -1545,6 +1674,16 @@ impl<T: TensorScalar, R: TensorRank> TypedTensor<T, R, Host> {
 impl<T, R: TensorRank> TypedTensor<T, R, Dynamic> {
     /// Borrow host elements through one owning read mapping.
     ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::TypedTensor;
+    /// let tensor = TypedTensor::<i32>::from_vec_col_major(vec![2], vec![1, 2])?;
+    /// let guard = tensor.map_read()?;
+    /// assert_eq!(&guard[..], &[1, 2]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    ///
     /// # Errors
     /// Returns [`crate::Error::HostAccess`] with
     /// [`HostAccessError::Unsupported`] when the group's allocation is not
@@ -1559,6 +1698,19 @@ impl<T, R: TensorRank> TypedTensor<T, R, Dynamic> {
     /// Exclusively borrow host elements through one owning write mapping.
     ///
     /// Publish data with [`HostWriteGuard::copy_from_slice`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::{Error, TypedTensor};
+    /// let mut tensor = TypedTensor::<i32>::from_vec_col_major(vec![2], vec![1, 2])?;
+    /// tensor
+    ///     .map_write()?
+    ///     .copy_from_slice(&[3, 4])
+    ///     .map_err(|err| Error::host_access("map_write", err))?;
+    /// assert_eq!(tensor.host_data()?, &[3, 4]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
     ///
     /// # Errors
     /// Returns [`crate::Error::HostAccess`] with
@@ -1633,6 +1785,16 @@ impl<T, R: TensorRank> TypedTensor<T, R, Gpu> {
     }
 
     /// Move this group-backed owner into the runtime union without rewriting it.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::{Dynamic, DynRank, Host, TypedTensor};
+    /// let gpu = TypedTensor::<f64, DynRank, Host>::from_host_vec_col_major(vec![1], vec![7.0])?.promote()?;
+    /// let dynamic: TypedTensor<f64, DynRank, Dynamic> = gpu.into_dynamic();
+    /// assert_eq!(dynamic.host_data()?, &[7.0]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
     pub fn into_dynamic(self) -> TypedTensor<T, R, Dynamic> {
         TypedTensor {
             shape: self.shape,
@@ -1642,11 +1804,30 @@ impl<T, R: TensorRank> TypedTensor<T, R, Gpu> {
     }
 
     /// Whether this group's descriptor names a non-CPU provider.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::{DynRank, Host, TypedTensor};
+    /// let gpu = TypedTensor::<f64, DynRank, Host>::from_host_vec_col_major(vec![1], vec![7.0])?.promote()?;
+    /// // A promoted host payload stays on the CPU provider.
+    /// assert!(!gpu.is_backend_buffer());
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
     pub fn is_backend_buffer(&self) -> bool {
         self.storage.group.is_backend_buffer()
     }
 
     /// Borrow host elements when the group's allocation is host-accessible.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::{DynRank, Host, TypedTensor};
+    /// let gpu = TypedTensor::<f64, DynRank, Host>::from_host_vec_col_major(vec![2], vec![1.0, 2.0])?.promote()?;
+    /// assert_eq!(gpu.host_data()?, &[1.0, 2.0]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
     ///
     /// # Errors
     /// Returns [`crate::Error::RuntimeState`] for a device-only allocation.
@@ -1655,6 +1836,16 @@ impl<T, R: TensorRank> TypedTensor<T, R, Gpu> {
     }
 
     /// Exclusively borrow host elements when the group's allocation is host-accessible.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::{DynRank, Host, TypedTensor};
+    /// let mut gpu = TypedTensor::<f64, DynRank, Host>::from_host_vec_col_major(vec![2], vec![1.0, 2.0])?.promote()?;
+    /// gpu.host_data_mut()?[0] = 3.0;
+    /// assert_eq!(gpu.host_data()?, &[3.0, 2.0]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
     ///
     /// # Errors
     /// Returns [`crate::Error::RuntimeState`] for a device-only allocation.
@@ -1749,6 +1940,19 @@ impl<T, R: TensorRank> TypedTensor<T, R, Dynamic> {
     /// Checked narrowing to the group-backed representation.
     ///
     /// Fails without consuming ownership of the source tensor.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::{DynRank, Gpu, Host, TypedTensor};
+    /// let host = TypedTensor::<f64, DynRank, Host>::from_host_vec_col_major(vec![1], vec![2.0])?;
+    /// let dynamic = host.promote()?.into_dynamic();
+    /// let gpu: TypedTensor<f64, DynRank, Gpu> = dynamic.into_gpu().map_err(|f| f.into_parts().1)?;
+    /// assert_eq!(gpu.host_data()?, &[2.0]);
+    /// let plain = TypedTensor::<f64>::from_vec_col_major(vec![1], vec![2.0])?;
+    /// assert!(plain.into_gpu().is_err());
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
     ///
     /// # Errors
     /// Returns [`ReinterpretError`] carrying the unchanged tensor when it is a
@@ -2793,6 +2997,17 @@ impl<'a, T: 'static, R: TensorRank, D: Representation> TypedTensorView<'a, T, R,
     }
 
     /// Return the logical rank carried by this view.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::TypedTensorView;
+    ///
+    /// let data = [0_i32; 6];
+    /// let view = TypedTensorView::from_slice(vec![2, 3], vec![1, 2], 0, &data)?;
+    /// assert_eq!(view.rank(), 2);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
     pub fn rank(&self) -> usize {
         self.shape().len()
     }
@@ -3459,6 +3674,20 @@ impl<'a, R: TensorRank> TypedTensorView<'a, Complex32, R> {
     /// The result has dynamic rank because reinterpretation prepends the
     /// component axis `[2, ...]`. Only `Complex32 <-> f32` is sealed in this
     /// API; this is representation reinterpretation, not numeric conversion.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::{Complex32, TypedTensorView};
+    ///
+    /// let data = [Complex32::new(1.0, 2.0)];
+    /// let view = TypedTensorView::from_col_major(&[1], &data)?;
+    /// let real = view.as_real_view()?;
+    /// assert_eq!(real.shape(), &[2, 1]);
+    /// assert_eq!(real.as_slice()?, &[1.0_f32, 2.0]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    ///
     /// # Errors
     ///
     /// Returns an error when the view layout is not a valid sealed
@@ -3500,6 +3729,20 @@ impl<'a, R: TensorRank> TypedTensorView<'a, Complex64, R> {
     /// The result has dynamic rank because reinterpretation prepends the
     /// component axis `[2, ...]`. Only `Complex64 <-> f64` is sealed in this
     /// API; this is representation reinterpretation, not numeric conversion.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::{Complex64, TypedTensorView};
+    ///
+    /// let data = [Complex64::new(1.0, 2.0)];
+    /// let view = TypedTensorView::from_col_major(&[1], &data)?;
+    /// let real = view.as_real_view()?;
+    /// assert_eq!(real.shape(), &[2, 1]);
+    /// assert_eq!(real.as_slice()?, &[1.0_f64, 2.0]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    ///
     /// # Errors
     ///
     /// Returns an error when the view layout is not a valid sealed
@@ -3540,6 +3783,20 @@ impl<'a, R: TensorRank> TypedTensorView<'a, f32, R> {
     ///
     /// The source must have a leading extent and stride of `2` and `1`, and
     /// every remaining stride plus the offset must be divisible by `2`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::{Complex32, TypedTensorView};
+    ///
+    /// let data = [1.0_f32, 2.0];
+    /// let view = TypedTensorView::from_col_major(&[2, 1], &data)?;
+    /// let complex = view.as_complex_view()?;
+    /// assert_eq!(complex.shape(), &[1]);
+    /// assert_eq!(complex.as_slice()?, &[Complex32::new(1.0, 2.0)]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    ///
     /// # Errors
     ///
     /// Returns an error when the view layout is not a valid sealed
@@ -3580,6 +3837,20 @@ impl<'a, R: TensorRank> TypedTensorView<'a, f64, R> {
     ///
     /// The source must have a leading extent and stride of `2` and `1`, and
     /// every remaining stride plus the offset must be divisible by `2`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::{Complex64, TypedTensorView};
+    ///
+    /// let data = [1.0_f64, 2.0];
+    /// let view = TypedTensorView::from_col_major(&[2, 1], &data)?;
+    /// let complex = view.as_complex_view()?;
+    /// assert_eq!(complex.shape(), &[1]);
+    /// assert_eq!(complex.as_slice()?, &[Complex64::new(1.0, 2.0)]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    ///
     /// # Errors
     ///
     /// Returns an error when the view layout is not a valid sealed
@@ -3862,6 +4133,19 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorViewMut<'a, T, R, Host> {
 
     /// Exclusively borrow the host elements without a runtime check.
     ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::{DynRank, Host, TypedTensorViewMut};
+    ///
+    /// let mut data = [1_i32, 2];
+    /// let mut view: TypedTensorViewMut<'_, i32, DynRank, Host> =
+    ///     TypedTensorViewMut::from_host_slice(vec![2], vec![1], 0, &mut data)?;
+    /// view.as_host_slice_mut()[0] = 5;
+    /// assert_eq!(data, [5, 2]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    ///
     /// # Panics
     ///
     /// Panics only if a `Host`-marked view was built from non-host storage,
@@ -3896,6 +4180,17 @@ impl<'a, T: 'static, R: TensorRank, D: Representation> TypedTensorViewMut<'a, T,
     }
 
     /// Return the logical rank carried by this mutable view.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::TypedTensorViewMut;
+    ///
+    /// let mut data = [0_i32; 6];
+    /// let view = TypedTensorViewMut::from_slice(vec![2, 3], vec![1, 2], 0, &mut data)?;
+    /// assert_eq!(view.rank(), 2);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
     pub fn rank(&self) -> usize {
         self.shape().len()
     }
@@ -4299,6 +4594,18 @@ impl<'a, T: 'static, R: TensorRank, D: Representation> TypedTensorViewMut<'a, T,
         self.as_read_only().to_col_major()
     }
 
+    /// Borrow this mutable view as a read-only typed view over the same storage.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::TypedTensorViewMut;
+    ///
+    /// let mut data = [1_i32, 2];
+    /// let view = TypedTensorViewMut::from_slice(vec![2], vec![1], 0, &mut data)?;
+    /// assert_eq!(view.as_read_only().as_slice()?, &[1, 2]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
     pub fn as_read_only(&self) -> TypedTensorView<'_, T, R> {
         let buffer = match &self.buffer {
             TensorStorageRefMut::Host(data) => TensorStorageRef::Host(data),
@@ -4714,6 +5021,19 @@ impl<'a, R: TensorRank> TypedTensorViewMut<'a, Complex32, R> {
     /// prepended. Backend-native buffers are rejected until their provider
     /// phase supplies the corresponding mapping capability.
     ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::{Complex32, TypedTensorViewMut};
+    ///
+    /// let mut data = [Complex32::new(1.0, 2.0)];
+    /// let mut view = TypedTensorViewMut::from_col_major(&[1], &mut data)?;
+    /// let real = view.as_real_view_mut()?;
+    /// assert_eq!(real.shape(), &[2, 1]);
+    /// assert_eq!(real.as_read_only().as_slice()?, &[1.0_f32, 2.0]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    ///
     /// # Errors
     ///
     /// Returns an error when the view layout is not injective, the sealed
@@ -4760,6 +5080,19 @@ impl<'a, R: TensorRank> TypedTensorViewMut<'a, Complex64, R> {
     /// prepended. Backend-native buffers are rejected until their provider
     /// phase supplies the corresponding mapping capability.
     ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::{Complex64, TypedTensorViewMut};
+    ///
+    /// let mut data = [Complex64::new(1.0, 2.0)];
+    /// let mut view = TypedTensorViewMut::from_col_major(&[1], &mut data)?;
+    /// let real = view.as_real_view_mut()?;
+    /// assert_eq!(real.shape(), &[2, 1]);
+    /// assert_eq!(real.as_read_only().as_slice()?, &[1.0_f64, 2.0]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    ///
     /// # Errors
     ///
     /// Returns an error when the view layout is not injective, the sealed
@@ -4803,6 +5136,19 @@ impl<'a, R: TensorRank> TypedTensorViewMut<'a, f32, R> {
     ///
     /// The source must have a leading extent and stride of `2` and `1`, and
     /// all remaining strides plus the offset must be divisible by `2`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::{Complex32, TypedTensorViewMut};
+    ///
+    /// let mut data = [1.0_f32, 2.0];
+    /// let mut view = TypedTensorViewMut::from_col_major(&[2, 1], &mut data)?;
+    /// let complex = view.as_complex_view_mut()?;
+    /// assert_eq!(complex.shape(), &[1]);
+    /// assert_eq!(complex.as_read_only().as_slice()?, &[Complex32::new(1.0, 2.0)]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
     ///
     /// # Errors
     ///
@@ -4849,6 +5195,19 @@ impl<'a, R: TensorRank> TypedTensorViewMut<'a, f64, R> {
     ///
     /// The source must have a leading extent and stride of `2` and `1`, and
     /// all remaining strides plus the offset must be divisible by `2`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::{Complex64, TypedTensorViewMut};
+    ///
+    /// let mut data = [1.0_f64, 2.0];
+    /// let mut view = TypedTensorViewMut::from_col_major(&[2, 1], &mut data)?;
+    /// let complex = view.as_complex_view_mut()?;
+    /// assert_eq!(complex.shape(), &[1]);
+    /// assert_eq!(complex.as_read_only().as_slice()?, &[Complex64::new(1.0, 2.0)]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
     ///
     /// # Errors
     ///
@@ -4946,19 +5305,68 @@ pub trait TensorScalar: Copy + Clone + Send + Sync + 'static + private::Sealed {
     /// Borrow the default scalar set's values when it holds this scalar type.
     ///
     /// Returns `None` when the set currently holds another member.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::{DefaultScalars, TensorScalar};
+    ///
+    /// let set = DefaultScalars::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?;
+    /// assert_eq!(<f64 as TensorScalar>::default_scalars_slice(&set), Some(&[1.0, 2.0][..]));
+    /// assert!(<f32 as TensorScalar>::default_scalars_slice(&set).is_none());
+    /// # Ok::<(), tenferro_tensor::ValidationError>(())
+    /// ```
     fn default_scalars_slice(set: &crate::DefaultScalars) -> Option<&[Self]>;
 
     /// Exclusively borrow the default scalar set's values when it holds this scalar type.
     ///
     /// Returns `None` when the set currently holds another member.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::{DefaultScalars, TensorScalar};
+    ///
+    /// let mut set = DefaultScalars::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?;
+    /// if let Some(values) = <f64 as TensorScalar>::default_scalars_slice_mut(&mut set) {
+    ///     values[0] = 5.0;
+    /// }
+    /// assert_eq!(set.as_slice::<f64>()?, &[5.0, 2.0]);
+    /// # Ok::<(), tenferro_tensor::ValidationError>(())
+    /// ```
     fn default_scalars_slice_mut(set: &mut crate::DefaultScalars) -> Option<&mut [Self]>;
 
     /// Move the host tensor out of the default scalar set when it holds this scalar type.
     ///
     /// Returns `None` when the set currently holds another member.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::{DefaultScalars, TensorScalar};
+    ///
+    /// let set = DefaultScalars::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?;
+    /// let host = <f64 as TensorScalar>::from_default_scalars(set);
+    /// assert_eq!(host.as_ref().map(|t| t.shape()), Some(&[2][..]));
+    /// assert_eq!(host.as_ref().map(|t| t.as_slice()), Some(&[1.0, 2.0][..]));
+    /// # Ok::<(), tenferro_tensor::ValidationError>(())
+    /// ```
     fn from_default_scalars(set: crate::DefaultScalars) -> Option<crate::HostTensor<Self>>;
 
     /// Wrap typed column-major data into a [`Tensor`] enum variant.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::{DType, TensorScalar};
+    ///
+    /// let tensor = <f64 as TensorScalar>::into_tensor(vec![2], vec![1.0, 2.0])?;
+    /// assert_eq!(tensor.dtype(), DType::F64);
+    /// assert_eq!(tensor.shape(), &[2]);
+    /// assert!(<f64 as TensorScalar>::into_tensor(vec![3], vec![1.0]).is_err());
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    ///
     /// # Errors
     ///
     /// Returns [`crate::Error::Validation`] with
@@ -5046,6 +5454,18 @@ pub trait TensorScalar: Copy + Clone + Send + Sync + 'static + private::Sealed {
     fn tensor_write(tensor: &mut TypedTensor<Self>) -> TensorWrite<'_>;
 
     /// Borrow the host data from a [`Tensor`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::{Tensor, TensorScalar};
+    ///
+    /// let tensor = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?;
+    /// assert_eq!(<f64 as TensorScalar>::as_slice(&tensor)?, &[1.0, 2.0]);
+    /// assert!(<f32 as TensorScalar>::as_slice(&tensor).is_err());
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    ///
     /// # Errors
     ///
     /// Returns [`crate::Error::Validation`] with
@@ -6796,6 +7216,17 @@ impl<'a> TensorView<'a> {
         Ok(Self::C64(TypedTensorView::from_col_major(shape, data)?))
     }
 
+    /// Return the element dtype of this borrowed view.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::{DType, TensorView};
+    ///
+    /// let view = TensorView::f64(&[2], &[1.0, 2.0])?;
+    /// assert_eq!(view.dtype(), DType::F64);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
     pub fn dtype(&self) -> DType {
         match self {
             Self::F32(_) => DType::F32,
@@ -6808,6 +7239,17 @@ impl<'a> TensorView<'a> {
         }
     }
 
+    /// Return the logical shape of this borrowed view.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::TensorView;
+    ///
+    /// let view = TensorView::i32(&[2, 1], &[1, 2])?;
+    /// assert_eq!(view.shape(), &[2, 1]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
     pub fn shape(&self) -> &[usize] {
         match self {
             Self::F32(t) => t.shape(),
@@ -6854,6 +7296,18 @@ impl<'a> TensorView<'a> {
 
     /// Reinterpret a complex view as its sealed real representation.
     ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::{Complex64, DType, TensorView};
+    ///
+    /// let data = [Complex64::new(1.0, 2.0)];
+    /// let real = TensorView::c64(&[1], &data)?.as_real_view()?;
+    /// assert_eq!(real.dtype(), DType::F64);
+    /// assert_eq!(real.as_slice::<f64>()?, &[1.0, 2.0]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    ///
     /// # Errors
     ///
     /// Returns [`crate::Error::Unsupported`] for the wrong dtype pair and
@@ -6871,6 +7325,18 @@ impl<'a> TensorView<'a> {
     }
 
     /// Reinterpret a real view as its sealed complex representation.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::{Complex64, DType, TensorView};
+    ///
+    /// let data = [1.0_f64, 2.0];
+    /// let complex = TensorView::f64(&[2, 1], &data)?.as_complex_view()?;
+    /// assert_eq!(complex.dtype(), DType::C64);
+    /// assert_eq!(complex.as_slice::<Complex64>()?, &[Complex64::new(1.0, 2.0)]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
     ///
     /// # Errors
     ///
@@ -6958,6 +7424,17 @@ impl<'a> TensorView<'a> {
     }
 
     /// Return strides in element units.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::TensorView;
+    ///
+    /// let data = [0.0_f64; 6];
+    /// let view = TensorView::f64(&[2, 3], &data)?;
+    /// assert_eq!(view.strides(), &[1, 2]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
     pub fn strides(&self) -> &[isize] {
         match self {
             Self::F32(t) => t.strides(),
@@ -7143,6 +7620,18 @@ impl<'a> TensorViewMut<'a> {
         }
     }
 
+    /// Return strides in element units.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::TensorViewMut;
+    ///
+    /// let mut data = [0.0_f64; 6];
+    /// let view = TensorViewMut::f64(&[2, 3], &mut data)?;
+    /// assert_eq!(view.strides(), &[1, 2]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
     pub fn strides(&self) -> &[isize] {
         match self {
             Self::F32(t) => t.strides(),
@@ -7257,6 +7746,18 @@ impl<'a> TensorViewMut<'a> {
         self.as_read_only().duplicate()
     }
 
+    /// Borrow this mutable view as a read-only dtype-erased view.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::TensorViewMut;
+    ///
+    /// let mut data = [1.0_f64, 2.0];
+    /// let view = TensorViewMut::f64(&[2], &mut data)?;
+    /// assert_eq!(view.as_read_only().as_slice::<f64>()?, &[1.0, 2.0]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
     pub fn as_read_only(&self) -> TensorView<'_> {
         match self {
             Self::F32(t) => TensorView::F32(t.as_read_only()),
@@ -7271,10 +7772,34 @@ impl<'a> TensorViewMut<'a> {
 }
 
 impl<'a> TensorRead<'a> {
+    /// Borrow an owned tensor as a read target without copying it.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::{Tensor, TensorRead};
+    ///
+    /// let tensor = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?;
+    /// let read = TensorRead::from_tensor(&tensor);
+    /// assert_eq!(read.as_slice::<f64>()?, &[1.0, 2.0]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
     pub fn from_tensor(tensor: &'a Tensor) -> Self {
         Self::Tensor(tensor)
     }
 
+    /// Wrap a borrowed dtype-erased view as a read target.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::{TensorRead, TensorView};
+    ///
+    /// let read = TensorRead::from_view(TensorView::i32(&[2], &[3, 4])?);
+    /// assert_eq!(read.as_slice::<i32>()?, &[3, 4]);
+    /// assert!(read.as_tensor().is_none());
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
     #[inline]
     pub fn from_view(view: TensorView<'a>) -> Self {
         Self::View(view)
@@ -7331,6 +7856,17 @@ impl<'a> TensorRead<'a> {
         self.clone().tensor_view().as_slice()
     }
 
+    /// Return the element dtype of this read target.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::{DType, Tensor, TensorRead};
+    ///
+    /// let tensor = Tensor::from_vec_col_major(vec![1], vec![1_i64])?;
+    /// assert_eq!(TensorRead::from_tensor(&tensor).dtype(), DType::I64);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
     pub fn dtype(&self) -> DType {
         match self {
             Self::Tensor(tensor) => tensor.dtype(),
@@ -7338,6 +7874,17 @@ impl<'a> TensorRead<'a> {
         }
     }
 
+    /// Return the logical shape of this read target.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::{Tensor, TensorRead};
+    ///
+    /// let tensor = Tensor::from_vec_col_major(vec![2, 1], vec![1.0_f64, 2.0])?;
+    /// assert_eq!(TensorRead::from_tensor(&tensor).shape(), &[2, 1]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
     pub fn shape(&self) -> &[usize] {
         match self {
             Self::Tensor(tensor) => tensor.shape(),
@@ -7430,6 +7977,18 @@ impl<'a> TensorRead<'a> {
         }
     }
 
+    /// Return strides in element units; owned tensors report compact column-major strides.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::{Tensor, TensorRead};
+    ///
+    /// let tensor = Tensor::from_vec_col_major(vec![2, 3], vec![0.0_f64; 6])?;
+    /// assert_eq!(TensorRead::from_tensor(&tensor).strides()?, vec![1, 2]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    ///
     /// # Errors
     ///
     /// Returns [`crate::Error::Validation`] with
@@ -7442,6 +8001,18 @@ impl<'a> TensorRead<'a> {
         }
     }
 
+    /// Return the physical element offset; owned tensors always start at `0`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::{TensorRead, TensorView, TypedTensorView};
+    ///
+    /// let data = [1.0_f64, 2.0, 3.0];
+    /// let view = TensorView::F64(TypedTensorView::from_slice(vec![2], vec![1], 1, &data)?);
+    /// assert_eq!(TensorRead::from_view(view).offset(), 1);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
     pub fn offset(&self) -> isize {
         match self {
             Self::Tensor(_) => 0,
@@ -7449,6 +8020,20 @@ impl<'a> TensorRead<'a> {
         }
     }
 
+    /// Compute the physical element offset for a logical index.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::{Tensor, TensorRead};
+    ///
+    /// let tensor = Tensor::from_vec_col_major(vec![2, 3], vec![0.0_f64; 6])?;
+    /// let read = TensorRead::from_tensor(&tensor);
+    /// assert_eq!(read.layout_linear_offset(&[1, 2])?, 5);
+    /// assert!(read.layout_linear_offset(&[2, 0]).is_err());
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    ///
     /// # Errors
     ///
     /// Returns [`crate::Error::Validation`] with
@@ -7464,6 +8049,21 @@ impl<'a> TensorRead<'a> {
         }
     }
 
+    /// Return whether this read target is compact column-major.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::{Tensor, TensorRead, TensorView, TypedTensorView};
+    ///
+    /// let tensor = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?;
+    /// assert!(TensorRead::from_tensor(&tensor).is_col_major_contiguous()?);
+    /// let data = [1.0_f64, 2.0, 3.0];
+    /// let strided = TensorView::F64(TypedTensorView::from_slice(vec![2], vec![2], 0, &data)?);
+    /// assert!(!TensorRead::from_view(strided).is_col_major_contiguous()?);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    ///
     /// # Errors
     ///
     /// Returns [`crate::Error::Validation`] with
@@ -7476,6 +8076,20 @@ impl<'a> TensorRead<'a> {
         }
     }
 
+    /// Return a compact string summary of this read target's layout metadata.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::{Tensor, TensorRead};
+    ///
+    /// let tensor = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?;
+    /// assert_eq!(
+    ///     TensorRead::from_tensor(&tensor).layout_summary(),
+    ///     "shape=[2] strides=[1] offset=0"
+    /// );
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
     pub fn layout_summary(&self) -> String {
         let strides = match self.strides() {
             Ok(strides) => strides,
@@ -7484,6 +8098,21 @@ impl<'a> TensorRead<'a> {
         layout_summary(self.shape(), &strides, self.offset())
     }
 
+    /// Assert this read target is compact column-major.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::{Tensor, TensorRead, TensorView, TypedTensorView};
+    ///
+    /// let tensor = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?;
+    /// TensorRead::from_tensor(&tensor).assert_col_major_contiguous()?;
+    /// let data = [1.0_f64, 2.0, 3.0];
+    /// let strided = TensorView::F64(TypedTensorView::from_slice(vec![2], vec![2], 0, &data)?);
+    /// assert!(TensorRead::from_view(strided).assert_col_major_contiguous().is_err());
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    ///
     /// # Errors
     ///
     /// Returns [`crate::Error::Validation`] with
@@ -7502,6 +8131,18 @@ impl<'a> TensorRead<'a> {
         )
     }
 
+    /// Return the borrowed owned tensor, or `None` when this read target is a view.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::{Tensor, TensorRead, TensorView};
+    ///
+    /// let tensor = Tensor::from_vec_col_major(vec![1], vec![1.0_f64])?;
+    /// assert!(TensorRead::from_tensor(&tensor).as_tensor().is_some());
+    /// assert!(TensorRead::from_view(TensorView::f64(&[1], &[1.0])?).as_tensor().is_none());
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
     pub fn as_tensor(&self) -> Option<&'a Tensor> {
         match self {
             Self::Tensor(tensor) => Some(*tensor),
@@ -7511,10 +8152,35 @@ impl<'a> TensorRead<'a> {
 }
 
 impl<'a> TensorWrite<'a> {
+    /// Borrow an owned tensor as a writable target without copying it.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::{Tensor, TensorWrite};
+    ///
+    /// let mut tensor = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?;
+    /// let write = TensorWrite::from_tensor(&mut tensor);
+    /// assert_eq!(write.shape(), &[2]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
     pub fn from_tensor(tensor: &'a mut Tensor) -> Self {
         Self::Tensor(tensor)
     }
 
+    /// Wrap a borrowed mutable dtype-erased view as a writable target.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::{DType, TensorViewMut, TensorWrite};
+    ///
+    /// let mut data = [1.0_f64, 2.0];
+    /// let write = TensorWrite::from_view(TensorViewMut::f64(&[2], &mut data)?);
+    /// assert_eq!(write.dtype(), DType::F64);
+    /// assert_eq!(write.as_read().as_slice::<f64>()?, &[1.0, 2.0]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
     pub fn from_view(view: TensorViewMut<'a>) -> Self {
         Self::View(view)
     }
@@ -7543,6 +8209,17 @@ impl<'a> TensorWrite<'a> {
         }
     }
 
+    /// Return the element dtype of this writable target.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::{DType, Tensor, TensorWrite};
+    ///
+    /// let mut tensor = Tensor::from_vec_col_major(vec![1], vec![1_i32])?;
+    /// assert_eq!(TensorWrite::from_tensor(&mut tensor).dtype(), DType::I32);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
     pub fn dtype(&self) -> DType {
         match self {
             Self::Tensor(tensor) => tensor.dtype(),
@@ -7550,6 +8227,17 @@ impl<'a> TensorWrite<'a> {
         }
     }
 
+    /// Return the logical shape of this writable target.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::{Tensor, TensorWrite};
+    ///
+    /// let mut tensor = Tensor::from_vec_col_major(vec![2, 1], vec![1.0_f64, 2.0])?;
+    /// assert_eq!(TensorWrite::from_tensor(&mut tensor).shape(), &[2, 1]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
     pub fn shape(&self) -> &[usize] {
         match self {
             Self::Tensor(tensor) => tensor.shape(),
@@ -7557,6 +8245,18 @@ impl<'a> TensorWrite<'a> {
         }
     }
 
+    /// Return strides in element units; owned tensors report compact column-major strides.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::{Tensor, TensorWrite};
+    ///
+    /// let mut tensor = Tensor::from_vec_col_major(vec![2, 3], vec![0.0_f64; 6])?;
+    /// assert_eq!(TensorWrite::from_tensor(&mut tensor).strides()?, vec![1, 2]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    ///
     /// # Errors
     ///
     /// Returns [`crate::Error::Validation`] with
@@ -7569,6 +8269,18 @@ impl<'a> TensorWrite<'a> {
         }
     }
 
+    /// Return the physical element offset; owned tensors always start at `0`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::{TensorViewMut, TensorWrite, TypedTensorViewMut};
+    ///
+    /// let mut data = [1.0_f64, 2.0, 3.0];
+    /// let view = TensorViewMut::F64(TypedTensorViewMut::from_slice(vec![2], vec![1], 1, &mut data)?);
+    /// assert_eq!(TensorWrite::from_view(view).offset(), 1);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
     pub fn offset(&self) -> isize {
         match self {
             Self::Tensor(_) => 0,
@@ -7576,6 +8288,20 @@ impl<'a> TensorWrite<'a> {
         }
     }
 
+    /// Compute the physical element offset for a logical index.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::{Tensor, TensorWrite};
+    ///
+    /// let mut tensor = Tensor::from_vec_col_major(vec![2, 3], vec![0.0_f64; 6])?;
+    /// let write = TensorWrite::from_tensor(&mut tensor);
+    /// assert_eq!(write.layout_linear_offset(&[1, 2])?, 5);
+    /// assert!(write.layout_linear_offset(&[0]).is_err());
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    ///
     /// # Errors
     ///
     /// Returns [`crate::Error::Validation`] with
@@ -7591,6 +8317,21 @@ impl<'a> TensorWrite<'a> {
         }
     }
 
+    /// Return whether this writable target is compact column-major.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::{Tensor, TensorViewMut, TensorWrite, TypedTensorViewMut};
+    ///
+    /// let mut tensor = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?;
+    /// assert!(TensorWrite::from_tensor(&mut tensor).is_col_major_contiguous()?);
+    /// let mut data = [1.0_f64, 2.0, 3.0];
+    /// let strided = TensorViewMut::F64(TypedTensorViewMut::from_slice(vec![2], vec![2], 0, &mut data)?);
+    /// assert!(!TensorWrite::from_view(strided).is_col_major_contiguous()?);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    ///
     /// # Errors
     ///
     /// Returns [`crate::Error::Validation`] with
@@ -7603,6 +8344,20 @@ impl<'a> TensorWrite<'a> {
         }
     }
 
+    /// Return a compact string summary of this writable target's layout metadata.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::{Tensor, TensorWrite};
+    ///
+    /// let mut tensor = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?;
+    /// assert_eq!(
+    ///     TensorWrite::from_tensor(&mut tensor).layout_summary(),
+    ///     "shape=[2] strides=[1] offset=0"
+    /// );
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
     pub fn layout_summary(&self) -> String {
         let strides = match self.strides() {
             Ok(strides) => strides,
@@ -7611,6 +8366,21 @@ impl<'a> TensorWrite<'a> {
         layout_summary(self.shape(), &strides, self.offset())
     }
 
+    /// Assert this writable target is compact column-major.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::{Tensor, TensorViewMut, TensorWrite, TypedTensorViewMut};
+    ///
+    /// let mut tensor = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?;
+    /// TensorWrite::from_tensor(&mut tensor).assert_col_major_contiguous()?;
+    /// let mut data = [1.0_f64, 2.0, 3.0];
+    /// let strided = TensorViewMut::F64(TypedTensorViewMut::from_slice(vec![2], vec![2], 0, &mut data)?);
+    /// assert!(TensorWrite::from_view(strided).assert_col_major_contiguous().is_err());
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    ///
     /// # Errors
     ///
     /// Returns [`crate::Error::Validation`] with
@@ -8397,6 +9167,16 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
 
     /// Consume this compact tensor and return the original host `Vec<T>`.
     ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::TypedTensor;
+    /// let tensor = TypedTensor::<i32>::from_vec_col_major(vec![2], vec![1, 2])?;
+    /// let data = tensor.into_host_vec().map_err(|failure| failure.into_parts().1)?;
+    /// assert_eq!(data, vec![1, 2]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    ///
     /// # Errors
     /// Returns [`ReinterpretError`] carrying the unchanged tensor when the
     /// storage is device-only or the managed root cannot export a host vector.
@@ -8429,6 +9209,17 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
 
     /// Consume the original host vector along with its column-major shape.
     ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::TypedTensor;
+    /// let tensor = TypedTensor::<i32>::from_vec_col_major(vec![2, 1], vec![1, 2])?;
+    /// let (shape, data) = tensor.into_vec_col_major().map_err(|failure| failure.into_parts().1)?;
+    /// assert_eq!(shape, vec![2, 1]);
+    /// assert_eq!(data, vec![1, 2]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    ///
     /// # Errors
     /// Returns [`ReinterpretError`] carrying the unchanged tensor when the
     /// storage is device-only or the managed root cannot export a host vector.
@@ -8446,6 +9237,15 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
     }
 
     /// Borrow the plain host values (or an existing managed host root).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::TypedTensor;
+    /// let tensor = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 2.0])?;
+    /// assert_eq!(tensor.host_data()?, &[1.0, 2.0]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
     ///
     /// # Errors
     /// Returns [`crate::Error::RuntimeState`] for device-only storage.
@@ -8472,6 +9272,16 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
     }
 
     /// Mutably borrow the plain host values (or an existing managed host root).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::TypedTensor;
+    /// let mut tensor = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 2.0])?;
+    /// tensor.host_data_mut()?[0] = 5.0;
+    /// assert_eq!(tensor.host_data()?, &[5.0, 2.0]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
     ///
     /// # Errors
     /// Returns [`crate::Error::RuntimeState`] for device-only storage.

@@ -30,6 +30,21 @@ fn checked_compact_strides(shape: &[usize]) -> Result<Vec<isize>> {
 /// ownership. Before the unsafe completion handoff, callers receive only
 /// `MaybeUninit` storage. Each checkout owns a shared pool handle, so output
 /// and scratch leases can coexist without holding a mutable pool borrow.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_cpu_basic::{buffer_pool::BufferPool, PooledUninitOutput};
+/// let pool = BufferPool::new();
+/// let mut output = PooledUninitOutput::<i32>::new(&pool, vec![2])?;
+/// for slot in output.as_uninit_slice_mut() {
+///     slot.write(3);
+/// }
+/// // SAFETY: the loop initializes every logical destination element.
+/// let tensor = unsafe { output.assume_init() }?;
+/// assert_eq!(tensor.as_slice()?, &[3, 3]);
+/// # Ok::<(), tenferro_tensor::Error>(())
+/// ```
 pub struct PooledUninitOutput<T: PoolScalar> {
     pool: BufferPool,
     shape: Vec<usize>,
