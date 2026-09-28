@@ -44,7 +44,7 @@ pub use error::{ErrorKind, ShapeMismatch, ValidationError, ValidationKind};
 pub use layout::TensorLayout;
 pub use rank::{DynRank, IntoRankShape, Rank, TensorRank};
 pub use scalar::{ad_admission, AdAdmissionError, Scalar, ScalarArithmetic, ScalarDomain};
-pub use scalar_set::{promote_specs, MemberKind, MemberSpec, ScalarSet};
+pub use scalar_set::{promote_in_set, promote_specs, MemberKind, MemberSpec, ScalarSet};
 
 /// Small tensor shape vector with inline capacity for common dynamic ranks.
 ///

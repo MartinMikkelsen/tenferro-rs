@@ -170,6 +170,67 @@ pub const fn promote_specs(lhs: MemberSpec, rhs: MemberSpec) -> MemberSpec {
     }
 }
 
+/// Promote two members of one set, given its tags and each tag's facts.
+///
+/// The set supplies its tags in declaration order together with the facts for
+/// each tag. The result is the tag whose facts represent both inputs under
+/// [`promote_specs`], preferring the narrowest member that still holds both.
+///
+/// # Examples
+///
+/// ```rust
+/// use tenferro_tensor_core::{promote_in_set, DType};
+///
+/// assert_eq!(promote_in_set(DType::TAGS, DType::I32, DType::F32, |tag| tag.spec()), DType::F64);
+/// ```
+#[must_use]
+pub fn promote_in_set<Tag: Copy>(
+    tags: &[Tag],
+    lhs: Tag,
+    rhs: Tag,
+    spec_of: impl Fn(Tag) -> MemberSpec,
+) -> Tag {
+    let target = promote_specs(spec_of(lhs), spec_of(rhs));
+    for tag in tags {
+        if spec_of(*tag) == target {
+            return *tag;
+        }
+    }
+    let mut chosen: Option<(Tag, MemberSpec)> = None;
+    for tag in tags {
+        let spec = spec_of(*tag);
+        if spec.kind != target.kind {
+            continue;
+        }
+        let better = match chosen {
+            None => true,
+            Some((_, current)) => {
+                let current_wide_enough = current.width >= target.width;
+                let candidate_wide_enough = spec.width >= target.width;
+                match (current_wide_enough, candidate_wide_enough) {
+                    (false, true) => true,
+                    (true, false) => false,
+                    (true, true) => {
+                        spec.width < current.width
+                            || (spec.width == current.width && spec.level < current.level)
+                    }
+                    (false, false) => {
+                        spec.width > current.width
+                            || (spec.width == current.width && spec.level < current.level)
+                    }
+                }
+            }
+        };
+        if better {
+            chosen = Some((*tag, spec));
+        }
+    }
+    match chosen {
+        Some((tag, _)) => tag,
+        None => lhs,
+    }
+}
+
 /// Define a closed scalar set: its tag type, its value enum, and its membership.
 ///
 /// The declaration lists each member once. The macro emits the tag enum, the
@@ -300,46 +361,7 @@ macro_rules! define_scalar_set {
                         return rhs;
                     }
                 )?
-                let target = $crate::promote_specs(lhs.spec(), rhs.spec());
-                for (index, spec) in <$tag>::SPECS.iter().enumerate() {
-                    if *spec == target {
-                        return <$tag>::TAGS[index];
-                    }
-                }
-                let mut chosen: Option<(usize, $crate::MemberSpec)> = None;
-                for (index, spec) in <$tag>::SPECS.iter().enumerate() {
-                    if spec.kind != target.kind {
-                        continue;
-                    }
-                    let better = match chosen {
-                        None => true,
-                        Some((_, current)) => {
-                            let current_wide_enough = current.width >= target.width;
-                            let candidate_wide_enough = spec.width >= target.width;
-                            match (current_wide_enough, candidate_wide_enough) {
-                                (false, true) => true,
-                                (true, false) => false,
-                                (true, true) => {
-                                    spec.width < current.width
-                                        || (spec.width == current.width
-                                            && spec.level < current.level)
-                                }
-                                (false, false) => {
-                                    spec.width > current.width
-                                        || (spec.width == current.width
-                                            && spec.level < current.level)
-                                }
-                            }
-                        }
-                    };
-                    if better {
-                        chosen = Some((index, *spec));
-                    }
-                }
-                match chosen {
-                    Some((index, _)) => <$tag>::TAGS[index],
-                    None => lhs,
-                }
+                $crate::promote_in_set(<$tag>::TAGS, lhs, rhs, |tag| tag.spec())
             }
         }
     };
