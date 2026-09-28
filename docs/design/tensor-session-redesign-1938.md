@@ -173,6 +173,24 @@ attempt does not rediscover it:
   Name both storage newtypes 'Dynamic...' only if the trait keeps a single
   buffer per direction; `RetainedRead` must carry a hand-written `Clone` because
   a derive would demand `T: Clone`.
+- **Blocker found by implementing it twice: a GAT-projected buffer costs
+  lifetime covariance, which this codebase relies on.** Selecting the view buffer
+  as `D::Buffer<'a, T>` through a generic associated type makes the projection
+  invariant in `'a`, because the compiler has no variance information for an
+  unresolved projection. `TypedTensorView<'a, ...>` then stops being covariant:
+  `TensorRead<'long>` no longer shortens to `TensorRead<'short>`, so every place
+  that unifies two borrowed reads (for example `TensorBackendOps::add_read`
+  building a two-element slice, or a view reborrowed out of a longer borrow)
+  fails to compile. Both attempts hit this: the read half compiled its own
+  bodies and then produced a wall of `lifetime may not live long enough` errors
+  in `backend.rs` and downstream. Restoring the concrete buffer field
+  (`TensorStorageRef<'a, T>` with its hand-written variance) makes the same code
+  compile again. So a literal `TypedTensorView<'a, T, R, D>` must either keep a
+  concrete buffer field and use `D` only as a construction-authority marker
+  (`Host` promises a host-slice buffer because only host constructors produce
+  it), or accept losing lifetime covariance across the whole borrowed-read
+  surface. That is a design decision for the view half, not an implementation
+  detail; make it before rewriting the ~80 methods.
 - `TypedTensorViewMut` is the expensive half: its methods split and rebuild
   mutable buffers (`try_multi_slice_mut` splits two disjoint ranges,
   `try_slice`/`try_reshape` reborrow, `transpose_view` consumes), so the trait
