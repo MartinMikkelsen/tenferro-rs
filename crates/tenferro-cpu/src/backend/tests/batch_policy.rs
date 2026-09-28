@@ -157,3 +157,36 @@ fn strided_batched_blas_vendor_route_matches_the_per_item_loop() {
         "{error}"
     );
 }
+
+#[test]
+fn thresholds_builders_and_fan_out_rule_follow_their_three_limits() {
+    let thresholds = crate::CpuBatchThresholds::default()
+        .with_vendor_batch_max_item_dim(8)
+        .with_outer_min_items(4)
+        .with_outer_min_items_per_lane(3);
+    assert_eq!(thresholds.vendor_batch_max_item_dim(), 8);
+    assert_eq!(thresholds.outer_min_items(), 4);
+    assert_eq!(thresholds.outer_min_items_per_lane(), 3);
+
+    // One lane never fans out; the total and per-lane minimums each gate it.
+    assert!(!thresholds.fans_out(100, 1));
+    assert!(!thresholds.fans_out(3, 2));
+    assert!(!thresholds.fans_out(5, 2));
+    assert!(thresholds.fans_out(6, 2));
+    // A huge per-lane minimum saturates instead of overflowing.
+    let saturating = thresholds.with_outer_min_items_per_lane(usize::MAX);
+    assert!(!saturating.fans_out(usize::MAX - 1, 2));
+}
+
+#[test]
+fn auto_vendor_batch_needs_several_items_within_the_item_limit() {
+    let thresholds = crate::CpuBatchThresholds::default().with_vendor_batch_max_item_dim(8);
+    assert!(thresholds.auto_uses_vendor_batch([[8, 8, 8], [1, 2, 3]]));
+    // A single item is a plain GEMM, not a batch.
+    assert!(!thresholds.auto_uses_vendor_batch([[4, 4, 4]]));
+    assert!(!thresholds.auto_uses_vendor_batch(std::iter::empty()));
+    // Any dimension above the limit disqualifies the whole batch.
+    for oversized in [[9, 1, 1], [1, 9, 1], [1, 1, 9]] {
+        assert!(!thresholds.auto_uses_vendor_batch([[2, 2, 2], oversized]));
+    }
+}
