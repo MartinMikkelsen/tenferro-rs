@@ -131,7 +131,7 @@ backend.with_backend_session(|session| {
     session.with_faer_parallelism(|parallel| {
         faer_operation(..., parallel)
     })
-})?;
+})??;
 ```
 
 The callback receives the same policy as an internal faer operation: bounded

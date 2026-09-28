@@ -1,4 +1,4 @@
-//! Lightweight host tensor data model and metadata-only views.
+//! Backend-independent rank/layout, dtype and scalar metadata.
 //!
 //! `tenferro-tensor-core` owns backend-independent tensor metadata: scalar
 //! tags and promotion facts, rank/layout metadata, and layout validation. It

@@ -105,7 +105,7 @@ backends are pushed into method signatures. Compare with `ndarray`'s
 
 | Tier | Tenferro | Notes |
 | --- | --- | --- |
-| Direct | `backend.with_backend_session(\|s\| a.matmul(&b, s))?` | explicit backend session argument |
+| Direct | `backend.with_backend_session(\|s\| a.matmul(&b, s))??` | explicit backend session argument |
 | Eager | `runtime.with_eager_session(\|s\| s.matmul(&a, &b))??` | `EagerRuntime` owns the borrowed backend session |
 | Traced | `a.matmul(&b)?` | builds a graph; returns `Result` |
 

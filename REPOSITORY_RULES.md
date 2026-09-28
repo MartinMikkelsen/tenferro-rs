@@ -177,7 +177,13 @@ one allowlisted entry — the API definition in `tenferro-cpu` — and
 is tracked with **zero** entries: the day library code calls it, the gate fails until
 a reviewer allowlists that call site.
 - Operation implementations reach a session through `with_backend_session` and
-  must not create execution state themselves.
+  must not create execution state themselves. Entry is fallible: admission
+  failures (reentry, a busy caller-managed domain, a scope mismatch, poisoned
+  admission state, executor failure) are typed `SessionEntryError`s reported
+  before the callback runs, never panics.
+- Backend-leaf native services are reached only through the leaf's visitor on
+  `BackendSession::native_session()`; `NativeSessionRef` has one `unsafe`
+  constructor, used only by the leaf that owns the marker.
 - A renamed import is not an exemption: the audit resolves `use ... as alias`
   and fails on an aliased entry, and its own negative tests run on every check.
 - Test, benchmark and example code is out of scope; moving that code into the
@@ -657,14 +663,14 @@ Tests follow implementation ownership.
 
 ## Tensor Core Data Model
 
-- `tenferro-tensor-core` owns backend-independent host tensor metadata and
-  contiguous host storage: `DType`, `TensorScalar`, `HostTensor<T>`, dynamic
-  `Tensor`, host/dynamic views, `TensorRef`, `ShapeVec`, `StrideVec`,
-  `SliceSpec`, and metadata-only `reshape_view`, `transpose_view`, and
-  `slice_view`.
+- `tenferro-tensor-core` owns backend-independent metadata only: rank and
+  layout (`TensorLayout`, `ShapeVec`, `StrideVec`, `SliceSpec` and the
+  metadata-only `reshape_view`, `transpose_view`, `slice_view`), `DType`,
+  `TensorScalar`, scalar tags and promotion facts. The host container
+  (`HostTensor`, `DefaultScalars`, `ScalarSet`, `ErasedHostTensor`) lives in
+  `tenferro-tensor` (#1938), and core must not refer back to tensor-owned types.
 - It must not depend on CUDA, GPU backends, backend buffers, provider
-  selection, or execution backend traits. Its owned `Tensor` must not grow
-  inherent `TensorBackend` execution helpers.
+  selection, or execution backend traits.
 - Core views and layouts validate bounds eagerly with checked arithmetic.
   `TensorLayout` metadata views may use signed strides and negative slice
   steps when reachable-range validation succeeds; zero step remains invalid.
@@ -852,7 +858,10 @@ Tests follow implementation ownership.
   crate-root session extension traits (`TensorSessionOpsExt`,
   `TypedTensorSessionOpsExt`, and `TypedTensorMaskSessionOpsExt`) whose
   methods run inside a caller-provided `BackendSession` (entered via
-  `TensorBackend::with_backend_session`). Private helper modules are fine, but
+  `BackendSessionHost::with_backend_session`, which returns
+  `Result<R, SessionEntryError>`, so a fallible operation is written `??`).
+  The facade targets the `Dynamic` representation; a `Host` owner reaches it
+  through the zero-copy `into_dynamic()`. Private helper modules are fine, but
   public `tensor` / `typed_tensor` module free functions are not part of the
   release API.
 - **Extension families**: extension crates cannot add inherent methods to

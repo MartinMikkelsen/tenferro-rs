@@ -35,10 +35,8 @@
 //! assert_eq!(a.shape(), &[2]);
 //! ```
 
-/// Lightweight backend-independent host tensor data model.
-///
-/// Execution-capable tensors and backends in this crate remain separate from
-/// the host-only core model during the crate-boundary split.
+/// Backend-independent rank/layout, dtype and scalar metadata re-exported from
+/// `tenferro-tensor-core`. The tensor types themselves live in this crate.
 pub mod core {
     pub use crate::{
         DefaultScalars, DefaultScalarsRef, DefaultScalarsView, HostTensor, HostTensorView,

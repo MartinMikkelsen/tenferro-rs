@@ -7,11 +7,14 @@ second writable owner.
 
 ## The capability triad
 
-- `TypedTensor<T, R>` or `Tensor` is an owned value.
-- `TypedTensorView<T, R>` or `TensorView` is an immutable, lifetime-bounded
+- `TypedTensor<T, R, D>` or `Tensor` is an owned value. The representation
+  `D` is `Host` (a host `Vec<T>` with infallible host access, `Clone` and
+  indexing), `Gpu` (group-backed storage whose host access is checked) or the
+  default `Dynamic` (either, checked at runtime).
+- `TypedTensorView<T, R, D>` or `TensorView` is an immutable, lifetime-bounded
   view. It preserves shape, strides, offset, placement, and static rank where
   the type carries one.
-- `TypedTensorViewMut<T, R>` or `TensorViewMut` is an exclusive mutable view.
+- `TypedTensorViewMut<T, R, D>` or `TensorViewMut` is an exclusive mutable view.
   Two mutable views are only allowed when their checked physical regions are
   provably disjoint.
 

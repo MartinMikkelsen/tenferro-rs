@@ -16,7 +16,7 @@ users import the crates that own the layer or operation family they need.
 
 The design goal is to keep these concerns separate:
 
-- host tensor data model
+- rank/layout and scalar metadata
 - concrete runtime tensors and backend traits
 - CPU/GPU backend implementations
 - traced graph construction and execution
@@ -36,7 +36,7 @@ stack. `tenferro-xla` is a peer executor over compiled static programs, not a
 | Crate | Role |
 |---|---|
 | `tenferro-tensor-core` | Rank/layout metadata, dtype tags, scalar promotion facts, and layout validation; no tensor-storage family |
-| `tenferro-tensor` | Runtime `TypedTensor<T, R>`/`Tensor` values, typed views, the host container (`HostTensor`, `DefaultScalars`, `ScalarSet`, `ErasedHostTensor`), backend traits, and backend-independent contracts |
+| `tenferro-tensor` | Runtime `TypedTensor<T, R, D>` (`Host`/`Gpu`/`Dynamic`) and `Tensor` values, typed views, the host container (`HostTensor`, `DefaultScalars`, `ScalarSet`, `ErasedHostTensor`), backend traits, and backend-independent contracts |
 | `tenferro-cpu` | Public CPU backend, CPU execution sessions, CPU execution context, provider selection, thread policy, public resource-pool controls, and the CPU runtime-registration preparation/execution adapter |
 | `tenferro-cpu-basic` | Shared CPU buffer pool, full-overwrite destination guard, and host strided-storage adapters used by CPU kernel families |
 | `tenferro-cpu-fused` | Internal CPU runtime-DAG fused elementwise adapter; delegates traversal to the fused strided kernel |

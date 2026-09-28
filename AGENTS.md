@@ -382,15 +382,15 @@ Layer 2: tenferro-tensor   - Dense runtime tensors, backend traits,
          tenferro-cpu      - CPU backend, execution sessions, kernels,
                              buffer pools
          tenferro-gpu      - CubeCL/CUDA backend and GPU transfer helpers
-Layer 1: tenferro-tensor-core - Host-only tensor data model, dtype tags,
-                                scalar trait, metadata-only views
+Layer 1: tenferro-tensor-core - Rank/layout metadata, dtype tags,
+                                scalar trait, promotion facts
 Internal: tenferro-core-ops  - Internal core primitive operation catalog
           tenferro-internal-ops - Graph op vocabulary and AD rule implementations
           tenferro-internal-extension-macros - Extension-op registration macros
 ```
 
-Ownership: `tenferro-tensor-core` owns the lightweight host tensor data model.
-`tenferro-tensor` owns concrete dense runtime value types and
+Ownership: `tenferro-tensor-core` owns rank/layout, dtype and scalar metadata.
+`tenferro-tensor` owns every tensor type (including the host container) and
 backend-independent tensor contracts. `tenferro-cpu` owns CPU backend
 execution. `tenferro-gpu` owns CubeCL/CUDA backend code and transfer helpers.
 `tenferro-internal-ops/src/ad/` is the semantic source of truth for the core

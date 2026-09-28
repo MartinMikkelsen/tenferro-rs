@@ -47,9 +47,10 @@ a runtime dtype enum and remains dynamic-rank. Use it when dtype must be
 selected dynamically, when you want the broad concrete tensor operation
 API, or when you need to pass CPU or CUDA tensors through backend dispatch.
 
-`tenferro-tensor-core` is lower-level: it owns rank/layout metadata and
-host-only adapters such as `HostTensor<T>`, not the backend-capable
-`TypedTensor<T, R>`.
+`tenferro-tensor-core` is lower-level: it owns rank/layout metadata, dtype tags
+and scalar promotion facts. The tensor types, including the host container
+`HostTensor<T>` and the backend-capable `TypedTensor<T, R, D>`, live in
+`tenferro-tensor`.
 
 `EagerTensor` is concrete eager execution. It wraps `Tensor` values in an
 `EagerRuntime`, so each operation computes a concrete result immediately.

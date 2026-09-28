@@ -12,7 +12,9 @@ migration notes live under [Plans](../plans/), not this active design index.
 | [api-and-convention-freeze.md](./api-and-convention-freeze.md) | Clean-break release posture for public API, API consistency detection, crate ownership, naming conventions, docs ownership, and audit/remediation workflow |
 | [supported-ops.md](./supported-ops.md) | Crate-by-crate inventory of supported primal and AD operations |
 | [tensor.md](./tensor.md) | Tensor representation, ownership model |
-| [tensor-session-redesign-1938.md](./tensor-session-redesign-1938.md) | Approved #1938 target for compact tensor/storage/views and explicit session execution; migration from existing contracts is in progress |
+| [tensor-session-redesign-1938.md](./tensor-session-redesign-1938.md) | Accepted #1938 target for compact tensor/storage/views and explicit session execution, with per-decision implemented mappings |
+| [exec-session.md](./exec-session.md) | Backend execution sessions: fallible entry, native-session visitors, runtime use |
+| [session-oriented-concrete-apis.md](./session-oriented-concrete-apis.md) | Session-borrowing concrete operation surface and its migration record |
 | [storage-ownership-contracts.md](./storage-ownership-contracts.md) | Normative Phase 1 contracts for the storage ownership redesign (#1555): span access and retirement, allocation groups, submission, method distribution, raw handles and reclamation, documentation ownership, and AD value retention |
 | [tensor-prims.md](./tensor-prims.md) | Tensor backend protocol and execution surface |
 | [backend-capability.md](./backend-capability.md) | Runtime backend capability descriptor for typed/erased tensor support and generated CUDA coverage |

@@ -58,7 +58,7 @@ relationship; the role is stated only on the first row.
 
 | Component | Role | Design/code provenance | Relationship |
 | --- | --- | --- | --- |
-| `tenferro-tensor-core` | Host tensor data model, dtype tags, views | — | Original |
+| `tenferro-tensor-core` | Rank/layout metadata, dtype tags, scalar promotion | — | Original |
 | `tenferro-tensor` | Dense runtime tensors, backend contracts | — | Original |
 | `tenferro-cpu` | CPU backend, kernels, buffer pools | [strided-rs](https://github.com/tensor4all/strided-rs) | Backend |
 | `tenferro-gpu` | CUDA backend, transfers | [CubeCL](https://github.com/tracel-ai/cubecl) | Backend |

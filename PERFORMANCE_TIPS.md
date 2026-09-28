@@ -489,6 +489,14 @@ Audit hints:
 - Use `Par::Seq` for one-thread contexts and explicit `Par::rayon(n)` from the
   configured `CpuContext` degree for multi-thread contexts. Do not derive the
   policy from an ambient Rayon pool during plan or session setup.
+- Tenferro-owned outer fan-out goes through `CpuExecutionContext::with_outer_lanes`
+  or the engine's `submit_outer`, never a bare `rayon::scope`, so lanes carry
+  the fan-out fact; a provider whose declared parallelism is an independent
+  runtime (the default for external BLAS/LAPACK) is rejected before any lane
+  runs. No placement promise is made for threads a provider creates.
+- Batched work follows the effective `CpuBatchPolicy` (per-operation scope >
+  scoped override > backend default). Thresholds are policy values, not
+  hard-coded constants; a forced strategy never overrides a safety rule.
 - Tensor-sized strided CPU kernels that are not provider-owned also run inside
   `CpuContext::install(...)`, so Rayon-backed `strided-kernel` work uses the
   backend's owned pool. BLAS/LAPACK provider-owned threading remains

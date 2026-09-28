@@ -319,10 +319,9 @@ GPU backend does not *open* a session, it runs unbatched. The migration question
 is therefore whether the unbatched spelling is a boundary or a hidden entry. This
 document records it as **a hidden entry**: it must be spelled as
 `with_backend_session(|s| op_in(s))` so that the ordering/lifetime contract is
-explicit at the call site. Nested-entry detection for the GPU overrides is
-currently debug-only (the portable in-session guard); release-mode enforcement
-is a follow-up recorded in
-[`session-oriented-concrete-apis.md`](./session-oriented-concrete-apis.md).
+explicit at the call site. Nested-entry detection for the GPU overrides was
+debug-only when this was written; since #1938 D6 the portable guard rejects a
+nested entry with `SessionEntryError::Reentered` in every build profile.
 
 ### F. Explicitly not entries
 
@@ -331,7 +330,9 @@ The single documented exception to the entry inventory is
 crates that must run a CPU-specific step inside a session they already own, not
 an alternative execution entry. It is retained deliberately on the
 out-of-scope list of #1929 (together with `with_backend_session` returning
-`Result<R>`, and release-mode nested-entry detection on the GPU), and any new use
+`Result<R>`, and release-mode nested-entry detection on the GPU, both since
+implemented by #1938 D6; D7 moved the bridge onto the opaque
+`NativeSessionRef`), and any new use
 of it must justify why the ordinary session route does not apply. Every other
 entry below is excluded because it is *not* an operation entry at all.
 
@@ -1082,8 +1083,10 @@ that keeps the callback available when entry admission fails), and the
 `EagerBackend` forward. It was reverted unused, because no safe call site exists in
 the current eager runtime:
 
-* a CPU permit is acquired with a `compare_exchange`, so a second concurrent
-  acquisition **panics** (`BACKEND_REENTRY_PANIC`) instead of waiting. Opening a
+* a CPU permit was acquired with a `compare_exchange`, so a second concurrent
+  acquisition **panicked** (`BACKEND_REENTRY_PANIC`) instead of waiting (since
+  #1938 D6, a permit held by another thread is waited for in FIFO order and
+  same-thread reentry is a typed `SessionEntryError::Reentered`). Opening a
   scope outside the eager backend's mutex and then locking inside it inverts the
   lock order: the scope holds the permit and waits for the mutex while a concurrent
   same-runtime operation holds the mutex and takes the permit. Today that pair
@@ -1295,8 +1298,8 @@ current outcome and remaining capabilities are in the handoff.
   in tests/benches/examples. Removing one-shot spellings will rewrite many
   test call sites; the replacement must keep the tests meaningful rather than
   mechanically wrapping each call in its own boundary.
-- **GPU release-mode enforcement** stays debug-only until the follow-up in
-  #1673's record lands.
+- **GPU release-mode enforcement** stayed debug-only at the time; resolved by
+  #1938 D6 (typed `Reentered` in every profile).
 
 ## B2 work list: which operation methods invert, and what must not change
 

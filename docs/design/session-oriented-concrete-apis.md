@@ -69,6 +69,11 @@ semantics change to the hottest segmented-execution path. That redesign is
 out of scope and tracked separately if ever desired; it must NOT be assumed
 as a prerequisite.
 
+## Evaluation-wide scope
+
+A2 (one execution scope around a whole evaluation) remains deferred; see
+[`exec-session.md`](./exec-session.md#evaluation-wide-scope-a2-is-deferred).
+
 ## Nested-entry prohibition: mechanism, not convention
 
 Operations receiving a `BackendSession` must never call `with_backend_session`
@@ -549,8 +554,9 @@ in follow-up PRs toward the same end state.
 
 Mechanical rule, behavior-preserving:
 1. Single-op call `x.add(&y, &mut backend)` →
-   `backend.with_backend_session(|s| x.add(&y, s))?`; the closure's result
-   type is the op's `Result<Tensor>` (annotate when the closure contains
+   `backend.with_backend_session(|s| x.add(&y, s))?` (since #1938 D6 the
+   entry is itself fallible, so the current spelling is `??`); the closure's
+   result type is the op's `Result<Tensor>` (annotate when the closure contains
    `?`-chains so error types are unambiguous).
 2. Consecutive session-capable ops on the same backend in one function are
    grouped in ONE `with_backend_session`; grouping stops at helpers or
@@ -653,6 +659,10 @@ remove the closure. Migration gate: scoped grep for `.index_select(`/
 docs/plans are explicitly excluded.
 
 ### 5. GPU nested-entry guard (CUDA / WebGPU)
+
+(Historical specification; superseded by #1938 D6, where the guard returns a
+typed `SessionEntryError::Reentered` in every build profile and CPU reentry is
+typed instead of a panic.)
 
 Extract the portable guard (thread-local in-session flag + panic-safe
 restore + debug assert) into a **`#[doc(hidden)] pub` shared helper** in
