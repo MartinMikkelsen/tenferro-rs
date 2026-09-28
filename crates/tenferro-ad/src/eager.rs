@@ -1581,7 +1581,11 @@ impl EagerSession<'_> {
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
     /// # Errors
-    /// Returns a typed foreign-runtime, padding-validation, or backend error.
+    /// Returns [`Error::ContextMismatch`] when an input belongs to another eager
+    /// runtime, a validation error with
+    /// `ValidationError::InvalidArgument` for a padding configuration whose
+    /// length or extents do not match the input rank, or
+    /// [`Error::TensorRuntime`] for a typed backend failure.
     pub fn pad(&mut self, input: &EagerTensor, config: PadConfig) -> Result<EagerTensor> {
         self.run_unary(input, StdTensorOp::Pad(config))
     }
@@ -1996,7 +2000,9 @@ impl EagerSession<'_> {
     ///
     /// # Errors
     ///
-    /// Propagates typed backend and eager-value registration failures.
+    /// Returns [`Error::TensorRuntime`] for a typed backend failure when the value cannot be
+    /// registered in the session, or [`Error::RuntimeState`] when the runtime's
+    /// value registry is unavailable.
     pub fn constant_from(&mut self, tensor: Tensor) -> Result<EagerTensor> {
         EagerTensor::new_leaf_in_session(Arc::clone(self.runtime), tensor, false, self.backend)
     }
@@ -2015,7 +2021,9 @@ impl EagerSession<'_> {
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
     /// # Errors
-    /// Returns a typed backend upload or eager-value registration error.
+    /// Returns [`Error::TensorRuntime`] for a typed backend failure, including a host-tensor
+    /// upload failure, or [`Error::RuntimeState`] when the runtime's value
+    /// registry is unavailable.
     pub fn constant_from_host(&mut self, tensor: Tensor) -> Result<EagerTensor> {
         let uploaded = self
             .backend
@@ -2041,7 +2049,9 @@ impl EagerSession<'_> {
     ///
     /// # Errors
     ///
-    /// Propagates typed backend and eager-value/gradient registration failures.
+    /// Returns [`Error::TensorRuntime`] for a typed backend failure when the value cannot be
+    /// registered, or [`Error::RuntimeState`] when the runtime's value or
+    /// gradient registry is unavailable.
     pub fn variable_from(&mut self, tensor: Tensor) -> Result<EagerTensor> {
         EagerTensor::new_leaf_in_session(Arc::clone(self.runtime), tensor, true, self.backend)
     }
@@ -2129,7 +2139,11 @@ impl EagerSession<'_> {
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
     /// # Errors
-    /// Returns a typed foreign-runtime, broadcast, numerical, or backend error.
+    /// Returns [`Error::ContextMismatch`] when an input belongs to another eager
+    /// runtime, a validation error with
+    /// `ValidationError::ShapeMismatch` when the operands cannot broadcast, or
+    /// [`Error::TensorRuntime`] for a typed backend failure (including integer division by zero
+    /// or a negative integer exponent).
     pub fn div(&mut self, lhs: &EagerTensor, rhs: &EagerTensor) -> Result<EagerTensor> {
         self.run_binary("div", lhs, rhs, StdTensorOp::Div)
     }
@@ -2149,7 +2163,11 @@ impl EagerSession<'_> {
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
     /// # Errors
-    /// Returns a typed foreign-runtime, broadcast, numerical, or backend error.
+    /// Returns [`Error::ContextMismatch`] when an input belongs to another eager
+    /// runtime, a validation error with
+    /// `ValidationError::ShapeMismatch` when the operands cannot broadcast, or
+    /// [`Error::TensorRuntime`] for a typed backend failure (including integer division by zero
+    /// or a negative integer exponent).
     pub fn rem(&mut self, lhs: &EagerTensor, rhs: &EagerTensor) -> Result<EagerTensor> {
         self.run_binary("rem", lhs, rhs, StdTensorOp::Rem)
     }
@@ -2169,7 +2187,11 @@ impl EagerSession<'_> {
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
     /// # Errors
-    /// Returns a typed foreign-runtime, broadcast, numerical, or backend error.
+    /// Returns [`Error::ContextMismatch`] when an input belongs to another eager
+    /// runtime, a validation error with
+    /// `ValidationError::ShapeMismatch` when the operands cannot broadcast, or
+    /// [`Error::TensorRuntime`] for a typed backend failure (including integer division by zero
+    /// or a negative integer exponent).
     pub fn pow(&mut self, lhs: &EagerTensor, rhs: &EagerTensor) -> Result<EagerTensor> {
         self.run_binary("pow", lhs, rhs, StdTensorOp::Pow)
     }
@@ -2425,7 +2447,10 @@ impl EagerSession<'_> {
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
     /// # Errors
-    /// Returns a typed foreign-runtime, non-complex-dtype, or backend error.
+    /// Returns [`Error::ContextMismatch`] when an input belongs to another eager
+    /// runtime, a validation error with
+    /// `ValidationError::DTypeMismatch` when the input dtype is not complex, or
+    /// [`Error::TensorRuntime`] for a typed backend failure.
     pub fn scale_complex(&mut self, input: &EagerTensor, factor: Complex64) -> Result<EagerTensor> {
         self.ensure_runtime(input)?;
         let scalar = match input.dtype() {
@@ -2463,7 +2488,11 @@ impl EagerSession<'_> {
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
     /// # Errors
-    /// Returns a typed foreign-runtime, rank/shape/dtype validation, or backend error.
+    /// Returns [`Error::ContextMismatch`] when an input belongs to another eager
+    /// runtime, a validation error with
+    /// `ValidationError::RankMismatch` or `ValidationError::ShapeMismatch` when
+    /// the operands are not rank-2 with matching inner dimensions, a dtype
+    /// mismatch between the operands, or [`Error::TensorRuntime`] for a typed backend failure.
     pub fn matmul(&mut self, lhs: &EagerTensor, rhs: &EagerTensor) -> Result<EagerTensor> {
         self.ensure_runtime(lhs)?;
         self.ensure_runtime(rhs)?;

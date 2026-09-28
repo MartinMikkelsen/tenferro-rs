@@ -166,7 +166,12 @@ pub trait EagerSessionLinalgExt {
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
     /// # Errors
-    /// Returns typed validation, unsupported-AD, extension, or backend errors.
+    /// Returns `Error::Validation` with `ValidationError::RankMismatch` when the
+    /// input is not a (batched) matrix, `Error::UnsupportedAdRule` when a
+    /// traced input needs a derivative this decomposition does not provide,
+    /// `Error::Extension` carrying the linalg failure
+    /// (for example `Error::NonConvergence` or an unsupported dtype), or
+    /// `Error::TensorRuntime` for a backend failure.
     fn svd_full(&mut self, input: &EagerTensor) -> Result<(EagerTensor, EagerTensor, EagerTensor)>;
 
     /// Compute a thin QR decomposition in this borrowed session.
@@ -422,7 +427,11 @@ pub trait EagerSessionLinalgExt {
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
     /// # Errors
-    /// Returns typed invalid-tolerance, validation, extension, or backend errors.
+    /// Returns `Error::Validation` with `ValidationError::InvalidArgument` for an
+    /// invalid tolerance or with `ValidationError::ShapeMismatch` for a
+    /// non-square input, `Error::Extension` carrying the linalg failure
+    /// (for example `Error::NonConvergence` or an unsupported dtype), or
+    /// `Error::TensorRuntime` for a backend failure.
     fn eigh_with_options(
         &mut self,
         input: &EagerTensor,
@@ -445,7 +454,11 @@ pub trait EagerSessionLinalgExt {
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
     /// # Errors
-    /// Returns typed rank/shape validation, extension, or backend errors.
+    /// Returns `Error::Validation` with `ValidationError::RankMismatch` or
+    /// `ValidationError::ShapeMismatch` for a non-square (batched) matrix,
+    /// `Error::Extension` carrying the linalg failure
+    /// (for example `Error::NonConvergence` or an unsupported dtype), or
+    /// `Error::TensorRuntime` for a backend failure.
     fn eig(&mut self, input: &EagerTensor) -> Result<(EagerTensor, EagerTensor)>;
 
     /// Compute the Moore-Penrose pseudoinverse using the default tolerance.
@@ -463,7 +476,10 @@ pub trait EagerSessionLinalgExt {
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
     /// # Errors
-    /// Returns typed validation, SVD, or backend errors.
+    /// Returns `Error::Validation` with `ValidationError::RankMismatch` when the
+    /// input is not a (batched) matrix, `Error::Extension` carrying the linalg failure
+    /// (for example `Error::NonConvergence` or an unsupported dtype) from the
+    /// underlying SVD, or `Error::TensorRuntime` for a backend failure.
     fn pinv(&mut self, input: &EagerTensor) -> Result<EagerTensor>;
 
     /// Compute the pseudoinverse with an explicit relative tolerance.
@@ -481,7 +497,11 @@ pub trait EagerSessionLinalgExt {
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
     /// # Errors
-    /// Returns typed validation, SVD, or backend errors.
+    /// Returns `Error::Validation` with `ValidationError::RankMismatch` when the
+    /// input is not a (batched) matrix, `ValidationError::InvalidArgument` for a
+    /// negative or non-finite tolerance, `Error::Extension` carrying the linalg failure
+    /// (for example `Error::NonConvergence` or an unsupported dtype) from
+    /// the underlying SVD, or `Error::TensorRuntime` for a backend failure.
     fn pinv_with_rtol(&mut self, input: &EagerTensor, rtol: f64) -> Result<EagerTensor>;
 
     /// Compute a vector, matrix, or tensor norm in this session.
@@ -576,7 +596,11 @@ pub trait EagerSessionLinalgExt {
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
     /// # Errors
-    /// Returns typed invalid-rank/dtype/tolerance, numerical, or backend errors.
+    /// Returns `Error::Validation` with `ValidationError::RankMismatch`,
+    /// `ValidationError::DTypeMismatch` or `ValidationError::InvalidArgument` for
+    /// an invalid rank, dtype or tolerance, `Error::Extension` carrying the linalg failure
+    /// (for example `Error::NonConvergence` or an unsupported dtype), or
+    /// `Error::TensorRuntime` for a backend failure.
     fn rank_revealing_qr(
         &mut self,
         input: &EagerTensor,

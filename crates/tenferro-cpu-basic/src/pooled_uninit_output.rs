@@ -231,8 +231,8 @@ impl<T: PoolScalar> PooledUninitOutput<T> {
     /// the output view.
     ///
     /// # Errors
-    /// Returns a validation or rank-conversion error if the checked output
-    /// metadata cannot be represented by `R`.
+    /// Returns `Error::Validation` with `ValidationError::RankMismatch` if the
+    /// checked output metadata cannot be represented by the rank `R`.
     pub unsafe fn assume_init_as_recycled<R: TensorRank>(self) -> Result<TypedTensor<T, R>> {
         // SAFETY: the caller guarantees complete initialization.
         unsafe { self.finish(true) }
