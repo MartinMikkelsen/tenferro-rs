@@ -120,12 +120,12 @@ uses one explicit CPU thread. See the
 [scope design and verification contract](../design/cpu-shared-execution-scope.md).
 
 This API supports Tenferro-managed CPU domains, not GPU or external executor
-scopes. Nested scopes return errors. The existing nested backend/session entry
-guards remain: do not call ordinary eager/backend APIs from an active borrowed
-session or another worker thread. A different immutable backend witness cannot borrow
-the scope; infallible session APIs retain their documented panic boundary for
-invalid entry. A returned error or unwinding releases the current operation loan
-and, when the callback exits, the scope permit.
+scopes. Nested scopes return errors. Do not call ordinary eager/backend APIs from
+an active borrowed session or another worker thread: such an entry is rejected
+with a `SessionEntryError` before its callback runs. A different immutable
+backend witness cannot borrow the scope, and its session entry fails the same
+way. A returned error or unwinding releases the current operation loan and, when
+the callback exits, the scope permit.
 
 For steady-state measurement, create inputs, compile/prepare graphs, enter the
 scope and warm up **before** starting the clock. Stop the clock before cleanup.

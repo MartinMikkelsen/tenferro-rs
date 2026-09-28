@@ -386,7 +386,7 @@ impl CpuProviderBundle {
     pub(crate) fn preflight_dot_general(&self, entry: &CpuOperationEntry<'_>) -> Result<()> {
         self.inner
             .dot_general
-            .dot_general_mode(entry)
+            .dot_general_mode(entry, None)
             .map(|_| ())
             .map_err(|error| Error::backend_source(OP, error))
     }
@@ -508,7 +508,19 @@ impl DotGeneralRuntime {
     fn dot_general_mode(
         &self,
         entry: &CpuOperationEntry<'_>,
+        entered: Option<&CpuExecutionContext<'_>>,
     ) -> std::result::Result<ParallelMode, CpuProviderDomainError> {
+        // A contraction reached from a lane of outer fan-out (for example an
+        // algorithm's per-item work) contributes every provider it can reach to
+        // the lane's nesting check, whatever the capability policy.
+        if entered.is_some_and(CpuExecutionContext::is_outer_fan_out_lane) {
+            crate::provider::check_outer_fan_out_delegates(
+                self.general_capabilities
+                    .iter()
+                    .chain([&self.gemm_capabilities, &self.layout_capabilities]),
+            )?;
+            return Ok(ParallelMode::Sequential);
+        }
         if self.capability_policy == ProviderCapabilityPolicy::ProviderDefaultCompatibility {
             return Ok(entry.provider_default_compatibility_mode());
         }
@@ -524,7 +536,12 @@ impl DotGeneralRuntime {
     fn grouped_mode(
         &self,
         entry: &CpuOperationEntry<'_>,
+        entered: Option<&CpuExecutionContext<'_>>,
     ) -> std::result::Result<ParallelMode, CpuProviderDomainError> {
+        if entered.is_some_and(CpuExecutionContext::is_outer_fan_out_lane) {
+            crate::provider::check_outer_fan_out_delegates([&self.gemm_capabilities])?;
+            return Ok(ParallelMode::Sequential);
+        }
         if self.capability_policy == ProviderCapabilityPolicy::ProviderDefaultCompatibility {
             return Ok(entry.provider_default_compatibility_mode());
         }
@@ -549,7 +566,7 @@ impl DotGeneralRuntime {
     ) -> Result<()> {
         let validated = validate_dot_general(&lhs, &rhs, &output, config, accumulation)?;
         let mode = self
-            .dot_general_mode(entry)
+            .dot_general_mode(entry, entered)
             .map_err(|error| Error::backend_source(OP, error))?;
         cache.bind_provider_bundle(bundle_identity);
         entry
@@ -752,7 +769,7 @@ impl DotGeneralRuntime {
             ));
         };
         let mode = self
-            .dot_general_mode(entry)
+            .dot_general_mode(entry, entered)
             .map_err(|error| Error::backend_source(OP, error))?;
         cache.bind_provider_bundle(bundle_identity);
         entry
@@ -808,17 +825,9 @@ impl DotGeneralRuntime {
             && entry.supports_outer()
             && config.jobs().len() > 1
         {
-            if !self
-                .gemm_capabilities
-                .accepts_mode(crate::ParallelMode::Outer)
-            {
-                return Err(Error::backend_source(
-                    "grouped_gemm",
-                    crate::CpuProviderDomainError::ParallelModeNotSupported {
-                        mode: crate::ParallelMode::Outer,
-                    },
-                ));
-            }
+            // Reject an independent-runtime GEMM before any lane runs.
+            let checked = crate::provider::check_outer_fan_out_delegates([&self.gemm_capabilities])
+                .map_err(|error| Error::backend_source("grouped_gemm", error))?;
             // The outer-scheduled grouped path only carries the four floating and complex
             // presets; the table is kept in one macro so its per-dtype invocation is one line
             // rather than the full argument list, and the definition is covered once.
@@ -826,6 +835,7 @@ impl DotGeneralRuntime {
                 ($variant:ident, $storage:expr, $base:expr) => {
                     execute_grouped_outer_typed(
                         self.gemm.as_ref(),
+                        checked,
                         entry,
                         &lhs,
                         &rhs,
@@ -883,7 +893,7 @@ impl DotGeneralRuntime {
             };
         }
         let mode = self
-            .grouped_mode(entry)
+            .grouped_mode(entry, entered)
             .map_err(|error| Error::backend_source("grouped_gemm", error))?;
         entry
             .enter_or_reuse(entered, mode, |provider_context| {
@@ -1196,6 +1206,7 @@ fn checked_grouped_output_range(
 #[allow(clippy::too_many_arguments)]
 fn execute_grouped_outer_typed<T>(
     provider: &dyn CpuGemmProvider,
+    checked: crate::provider::OuterFanOutChecked,
     entry: &CpuOperationEntry<'_>,
     lhs: &TensorRead<'_>,
     rhs: &TensorRead<'_>,
@@ -1226,7 +1237,7 @@ where
     let job_states = PackedJobStates::new(config.jobs().len());
     let duplicate_index = AtomicUsize::new(NO_DUPLICATE);
     entry
-        .submit_outer(config.jobs().len(), |index, provider_context| {
+        .submit_outer(checked, config.jobs().len(), |index, provider_context| {
         if job_states.try_claim(index).is_err() {
             let _ = duplicate_index.compare_exchange(
                 NO_DUPLICATE,

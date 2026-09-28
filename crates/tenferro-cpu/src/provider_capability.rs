@@ -279,7 +279,7 @@ fn controlled_external_capabilities(
 }
 
 #[cfg(any(test, feature = "cpu-blas"))]
-fn uncontrolled_external_capabilities() -> CpuProviderExecutionCapabilities {
+pub(crate) fn uncontrolled_external_capabilities() -> CpuProviderExecutionCapabilities {
     CpuProviderExecutionCapabilities {
         thread_count: CpuThreadCountControl::GlobalOrUncontrolled,
         placement: CpuPlacementControl::ExternalWorkers,

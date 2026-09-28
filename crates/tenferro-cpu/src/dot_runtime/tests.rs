@@ -2451,3 +2451,155 @@ fn engine_outer_grouped_execution_covers_the_complex64_arm() {
     // reachable only through a gate that refuses first; this records that rather than leaving it implied.
     assert!(DotGeneralAccumulation::overwrite(DType::I32).is_err());
 }
+
+fn assert_outer_not_supported(error: &tenferro_tensor::Error) {
+    let tenferro_tensor::Error::BackendSource { source, .. } = error else {
+        panic!("outer nesting rejection must retain a typed source: {error}");
+    };
+    assert!(
+        matches!(
+            source.downcast_ref::<crate::CpuProviderDomainError>(),
+            Some(crate::CpuProviderDomainError::ParallelModeNotSupported {
+                mode: ParallelMode::Outer
+            })
+        ),
+        "{error}"
+    );
+}
+
+#[test]
+fn route_engine_outer_rejects_an_independent_runtime_gemm_before_any_lane_runs() {
+    // The default declaration of an external BLAS: its own thread team, not
+    // safe to call concurrently from engine lanes.
+    let gemm = Arc::new(
+        GemmSpy::new(CpuProviderOutcome::Executed)
+            .with_capabilities(crate::provider_capability::uncontrolled_external_capabilities()),
+    );
+    let bundle = route_bundle(gemm.clone(), None);
+    let lhs = Tensor::from_vec_col_major(vec![8], vec![2.0_f64; 8]).unwrap();
+    let rhs = Tensor::from_vec_col_major(vec![8], vec![4.0_f64; 8]).unwrap();
+    let mut output = Tensor::from_vec_col_major(vec![8], vec![-1.0_f64; 8]).unwrap();
+    let jobs =
+        std::array::from_fn::<_, 8, _>(|index| GroupedGemmJob::new(index, index, index, 1, 1, 1));
+    let (submits, installs, fixture) = counting_execution_fixture(4);
+
+    let error = bundle
+        .execute_grouped_gemm(
+            &fixture.entry(),
+            TensorRead::from_tensor(&lhs),
+            TensorRead::from_tensor(&rhs),
+            &GroupedGemmConfig::new(
+                &jobs,
+                DotGeneralAccumulation::overwrite(DType::F64).unwrap(),
+            ),
+            TensorWrite::from_tensor(&mut output),
+        )
+        .unwrap_err();
+
+    assert_outer_not_supported(&error);
+    assert_eq!(submits.load(Ordering::Relaxed), 0);
+    assert_eq!(installs.load(Ordering::Relaxed), 0);
+    assert_eq!(*gemm.grouped_calls.lock().unwrap(), 0);
+    assert_eq!(*gemm.gemm_calls.lock().unwrap(), 0);
+    assert_eq!(output.as_slice::<f64>().unwrap(), &[-1.0; 8]);
+}
+
+#[test]
+fn contraction_reached_from_an_outer_lane_checks_its_delegates_before_dispatch() {
+    let (lhs, rhs, _, config) = route_operands();
+    let (_, _, fixture) = counting_execution_fixture(4);
+    let entry = fixture.entry();
+    let checked = crate::provider::check_outer_fan_out_delegates([]).unwrap();
+
+    // An engine-worker GEMM is reached with the lane's sequential policy; it is
+    // never widened into inner parallelism inside a lane.
+    let concurrent = Arc::new(GemmSpy::new(CpuProviderOutcome::Executed));
+    let concurrent_bundle = route_bundle(concurrent.clone(), None);
+    // An independent-runtime GEMM is rejected before dispatch, even though the
+    // enclosing operation only declared its own (engine-owned) fan-out.
+    let external = Arc::new(
+        GemmSpy::new(CpuProviderOutcome::Executed)
+            .with_capabilities(crate::provider_capability::uncontrolled_external_capabilities()),
+    );
+    let external_bundle = route_bundle(external.clone(), None);
+
+    let lane_results = Mutex::new(Vec::new());
+    entry
+        .submit_outer(checked, 1, |_, lane| {
+            assert!(lane.is_outer_fan_out_lane());
+            let mut pool = BufferPool::new();
+            let mut cache = GemmAnalysisCache::default();
+            let mut concurrent_out = Tensor::from_vec_col_major(vec![2, 2], vec![0.0; 4]).unwrap();
+            let concurrent_result = concurrent_bundle.execute_dot_general_into_scoped(
+                &entry,
+                Some(lane),
+                &mut pool,
+                &mut cache,
+                None,
+                TensorRead::from_tensor(&lhs),
+                TensorRead::from_tensor(&rhs),
+                &config,
+                DotGeneralAccumulation::overwrite(DType::F64).unwrap(),
+                TensorWrite::from_tensor(&mut concurrent_out),
+            );
+            let mut external_out = Tensor::from_vec_col_major(vec![2, 2], vec![-1.0; 4]).unwrap();
+            let external_result = external_bundle.execute_dot_general_into_scoped(
+                &entry,
+                Some(lane),
+                &mut pool,
+                &mut cache,
+                None,
+                TensorRead::from_tensor(&lhs),
+                TensorRead::from_tensor(&rhs),
+                &config,
+                DotGeneralAccumulation::overwrite(DType::F64).unwrap(),
+                TensorWrite::from_tensor(&mut external_out),
+            );
+            lane_results.lock().unwrap().push((
+                concurrent_result,
+                external_result,
+                external_out.as_slice::<f64>().unwrap().to_vec(),
+            ));
+            Ok(())
+        })
+        .unwrap();
+
+    let (concurrent_result, external_result, external_out) =
+        lane_results.into_inner().unwrap().pop().unwrap();
+    concurrent_result.unwrap();
+    assert_eq!(
+        concurrent.parallelism.lock().unwrap().as_slice(),
+        &[ParallelMode::Sequential]
+    );
+    assert_outer_not_supported(&external_result.unwrap_err());
+    assert_eq!(*external.gemm_calls.lock().unwrap(), 0);
+    assert_eq!(external_out, [-1.0; 4]);
+}
+
+#[test]
+fn engine_outer_bundle_with_a_non_concurrent_gemm_is_rejected_at_install() {
+    let mut capabilities = crate::provider_capability::engine_worker_capabilities();
+    capabilities.accepts_outer = false;
+    let gemm = Arc::new(GemmSpy::new(CpuProviderOutcome::Executed).with_capabilities(capabilities));
+    let bundle = route_bundle(gemm.clone(), None);
+
+    let error = crate::CpuBackend::with_threads(2)
+        .unwrap()
+        .with_provider_bundle(bundle)
+        .unwrap_err();
+
+    assert!(
+        matches!(
+            error,
+            crate::CpuProviderBundleInstallError::IncompatibleDomain {
+                provider: crate::CpuProviderSlot::Gemm,
+                source: crate::CpuProviderDomainError::ParallelModeNotSupported {
+                    mode: ParallelMode::Outer
+                },
+                ..
+            }
+        ),
+        "{error}"
+    );
+    assert_eq!(*gemm.grouped_calls.lock().unwrap(), 0);
+}

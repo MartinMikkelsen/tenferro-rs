@@ -4,8 +4,8 @@ use super::CpuOperand;
 #[cfg(feature = "cpu-faer")]
 use super::CpuUninitGemmProvider;
 use super::{
-    CpuBatchedMatrixLayout, CpuExecutionContext, CpuGemmProvider, CpuGemmRequest,
-    CpuGeneralContractionProvider, CpuLayoutTransformProvider, CpuOperationEntry,
+    check_outer_fan_out_delegates, CpuBatchedMatrixLayout, CpuExecutionContext, CpuGemmProvider,
+    CpuGemmRequest, CpuGeneralContractionProvider, CpuLayoutTransformProvider, CpuOperationEntry,
     CpuProviderOutcome, CpuProviderUnsupported, CpuUninitLayoutTransformProvider, ParallelMode,
     StridedLayoutTransformProvider,
 };
@@ -337,11 +337,15 @@ fn outer_entry_submits_once_without_install_and_creates_sequential_children() {
 
     fixture
         .entry()
-        .submit_outer(3, |_, context| {
-            assert_eq!(context.parallel_mode(), ParallelMode::Sequential);
-            jobs.fetch_add(1, Ordering::Relaxed);
-            Ok(())
-        })
+        .submit_outer(
+            check_outer_fan_out_delegates([]).unwrap(),
+            3,
+            |_, context| {
+                assert_eq!(context.parallel_mode(), ParallelMode::Sequential);
+                jobs.fetch_add(1, Ordering::Relaxed);
+                Ok(())
+            },
+        )
         .unwrap();
 
     assert_eq!(submits.load(Ordering::Relaxed), 1);
@@ -477,12 +481,16 @@ fn outer_submission_limits_logical_participants_to_thread_budget() {
     fixture
         .execution
         .entry()
-        .submit_outer(LOGICAL_JOBS, |index, context| {
-            assert_eq!(context.parallel_mode(), ParallelMode::Sequential);
-            fixture.participants.observe();
-            seen[index].fetch_add(1, Ordering::Relaxed);
-            Ok(())
-        })
+        .submit_outer(
+            check_outer_fan_out_delegates([]).unwrap(),
+            LOGICAL_JOBS,
+            |index, context| {
+                assert_eq!(context.parallel_mode(), ParallelMode::Sequential);
+                fixture.participants.observe();
+                seen[index].fetch_add(1, Ordering::Relaxed);
+                Ok(())
+            },
+        )
         .unwrap();
 
     assert_eq!(fixture.submits.load(Ordering::Relaxed), 1);
@@ -503,7 +511,7 @@ fn outer_submission_rejects_a_single_thread_budget_without_executor_entry() {
     let error = fixture
         .execution
         .entry()
-        .submit_outer(2, |_, _| {
+        .submit_outer(check_outer_fan_out_delegates([]).unwrap(), 2, |_, _| {
             calls.fetch_add(1, Ordering::Relaxed);
             Ok(())
         })
@@ -527,11 +535,15 @@ fn outer_submission_does_not_add_calls_when_budget_covers_all_jobs() {
     fixture
         .execution
         .entry()
-        .submit_outer(seen.len(), |index, _| {
-            fixture.participants.observe();
-            seen[index].fetch_add(1, Ordering::Relaxed);
-            Ok(())
-        })
+        .submit_outer(
+            check_outer_fan_out_delegates([]).unwrap(),
+            seen.len(),
+            |index, _| {
+                fixture.participants.observe();
+                seen[index].fetch_add(1, Ordering::Relaxed);
+                Ok(())
+            },
+        )
         .unwrap();
 
     assert_eq!(fixture.submits.load(Ordering::Relaxed), 1);
@@ -701,13 +713,17 @@ fn outer_children_keep_native_work_sequential_without_double_fanout() {
 
     fixture
         .entry()
-        .submit_outer(3, |_, context| {
-            let participants = run_native_map(context, false);
-            assert_eq!(participants.max_active.load(Ordering::SeqCst), 1);
-            assert_eq!(participants.thread_ids.lock().unwrap().len(), 1);
-            completed.fetch_add(1, Ordering::Relaxed);
-            Ok(())
-        })
+        .submit_outer(
+            check_outer_fan_out_delegates([]).unwrap(),
+            3,
+            |_, context| {
+                let participants = run_native_map(context, false);
+                assert_eq!(participants.max_active.load(Ordering::SeqCst), 1);
+                assert_eq!(participants.thread_ids.lock().unwrap().len(), 1);
+                completed.fetch_add(1, Ordering::Relaxed);
+                Ok(())
+            },
+        )
         .unwrap();
 
     assert_eq!(completed.load(Ordering::Relaxed), 3);

@@ -88,8 +88,10 @@ executions remain subject to these overlap rules.
 CPU backend execution is not reentrant. Do not call a backend clone or another
 CPU backend directly from `CpuBackend::install` or a backend session, and do not
 make backend calls from Rayon tasks spawned inside one. A managed scope rejects
-same-thread, spawned, stolen, and shared-context re-entry with a panic before a
-second permit is acquired. Work moved to an unrelated executor cannot always
+same-thread, spawned, stolen, and shared-context re-entry with a typed
+`SessionEntryError::Reentered` (reported through `Error::SessionEntry` by
+direct operations such as `install`) before a second permit is acquired and
+before the nested callback runs. Work moved to an unrelated executor cannot always
 inherit that diagnostic marker and may instead wait for the outer permit, so
 waiting for it from the outer execution can deadlock. Finish the outer backend
 execution before launching new top-level backend calls. Ordinary Rayon work

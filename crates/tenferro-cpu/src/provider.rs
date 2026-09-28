@@ -171,6 +171,9 @@ pub enum ParallelMode {
 pub struct CpuExecutionContext<'a> {
     domain: &'a CpuResourceDomain,
     parallel_mode: ParallelMode,
+    // Set only for a child of tenferro's own outer fan-out (`submit_outer` or
+    // `with_outer_lanes`), never inferred from running on a Rayon worker.
+    outer_fan_out: bool,
 }
 
 impl fmt::Debug for CpuExecutionContext<'_> {
@@ -182,6 +185,7 @@ impl fmt::Debug for CpuExecutionContext<'_> {
             .field("thread_budget", &self.thread_budget())
             .field("placement_guarantee", &self.placement_guarantee())
             .field("parallel_mode", &self.parallel_mode())
+            .field("outer_fan_out", &self.outer_fan_out)
             .finish_non_exhaustive()
     }
 }
@@ -191,7 +195,97 @@ impl<'a> CpuExecutionContext<'a> {
         Self {
             domain,
             parallel_mode,
+            outer_fan_out: false,
         }
+    }
+
+    /// A child of tenferro's outer fan-out: sequential, with fan-out active.
+    fn outer_child(domain: &'a CpuResourceDomain) -> Self {
+        Self {
+            domain,
+            parallel_mode: ParallelMode::Sequential,
+            outer_fan_out: true,
+        }
+    }
+
+    /// Whether this context is one lane of tenferro's own outer fan-out.
+    ///
+    /// Such a lane runs concurrently with its siblings. Its mode is
+    /// [`ParallelMode::Sequential`], so it may not start inner parallel work, and
+    /// a provider whose declared parallelism is an independent runtime (the
+    /// default for external BLAS/LAPACK) is rejected before dispatch. Running on
+    /// a Rayon worker is not by itself outer fan-out.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_cpu::CpuBackend;
+    ///
+    /// let mut backend = CpuBackend::with_threads(1)?;
+    /// let lane = backend.with_linalg_pool(|context, _| Ok(context.is_outer_fan_out_lane()))?;
+    /// assert!(!lane);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    #[must_use]
+    pub fn is_outer_fan_out_lane(&self) -> bool {
+        self.outer_fan_out
+    }
+
+    /// Run independent lane jobs as tenferro-owned outer fan-out inside this
+    /// already-entered context's own Rayon region.
+    ///
+    /// Each item of `jobs` (typically one disjoint chunk of a batch) runs once
+    /// and receives a lane context: [`Self::is_outer_fan_out_lane`] is true and
+    /// the mode is [`ParallelMode::Sequential`], so the lane neither starts
+    /// inner parallel work nor reaches an independent-runtime provider. Fan-out
+    /// needs an [`ParallelMode::Inner`] context of a Rayon executor with more
+    /// than one thread; otherwise the jobs run in order on the calling thread,
+    /// still with a lane context. No second pool is created: jobs run on the
+    /// Rayon pool this context was entered in.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_cpu::CpuBackend;
+    ///
+    /// let mut backend = CpuBackend::with_threads(2)?;
+    /// let mut data = vec![1.0_f64; 8];
+    /// backend.with_linalg_pool(|context, _| {
+    ///     context.with_outer_lanes(data.chunks_mut(3), |chunk, lane| {
+    ///         assert!(lane.is_outer_fan_out_lane());
+    ///         chunk.iter_mut().for_each(|value| *value *= 2.0);
+    ///     });
+    ///     Ok(())
+    /// })?;
+    /// assert_eq!(data, [2.0; 8]);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn with_outer_lanes<I>(
+        &self,
+        jobs: I,
+        job: impl Fn(I::Item, &CpuExecutionContext<'a>) + Sync,
+    ) where
+        I: IntoIterator,
+        I::IntoIter: Send,
+        I::Item: Send,
+    {
+        let child = Self::outer_child(self.domain);
+        let can_fan_out = self.parallel_mode == ParallelMode::Inner
+            && self.domain.executor_capabilities().inner_parallelism == CpuInnerParallelism::Rayon
+            && self.thread_budget().get() > 1;
+        if !can_fan_out {
+            for item in jobs {
+                job(item, &child);
+            }
+            return;
+        }
+        let job = &job;
+        let jobs = jobs.into_iter();
+        rayon::scope(|scope| {
+            for item in jobs {
+                scope.spawn(move |_| job(item, &child));
+            }
+        });
     }
 
     /// Return the stable identity of the selected CPU resource domain.
@@ -466,6 +560,34 @@ impl<'a> CpuExecutionContext<'a> {
     }
 }
 
+/// Proof that every provider an outer fan-out's lanes can reach accepts
+/// concurrent sequential calls.
+///
+/// [`CpuOperationEntry::submit_outer`] takes this value, so fan-out cannot be
+/// submitted before the reachable delegates' declarations are checked: a
+/// declared nesting violation fails before any lane runs or writes output.
+#[derive(Debug)]
+pub(crate) struct OuterFanOutChecked(());
+
+/// Check the reachable delegates of an outer fan-out before submitting it.
+///
+/// Every capability listed must accept [`ParallelMode::Outer`] (sequential,
+/// concurrent-call safe, worker-local). An implementation whose parallelism is
+/// an independent runtime, the default declaration for external BLAS/LAPACK,
+/// is rejected.
+pub(crate) fn check_outer_fan_out_delegates<'c>(
+    delegates: impl IntoIterator<Item = &'c crate::CpuProviderExecutionCapabilities>,
+) -> Result<OuterFanOutChecked, crate::CpuProviderDomainError> {
+    for capabilities in delegates {
+        if !capabilities.accepts_mode(ParallelMode::Outer) {
+            return Err(crate::CpuProviderDomainError::ParallelModeNotSupported {
+                mode: ParallelMode::Outer,
+            });
+        }
+    }
+    Ok(OuterFanOutChecked(()))
+}
+
 /// Crate-private unentered capability for one CPU operation.
 ///
 /// This is the only type that owns the resource permit and may cross the
@@ -539,10 +661,15 @@ impl<'a> CpuOperationEntry<'a> {
             });
         }
         let owner = self.permit.owner();
-        Ok(with_execution_owner(owner, || {
-            let context = CpuExecutionContext::entered(self.domain, parallel_mode);
-            operation(&context)
-        }))
+        // A lane of outer fan-out keeps its fan-out fact, and it may not widen
+        // its sequential policy into inner parallelism: that would nest a second
+        // fan-out inside every sibling lane.
+        let context = if entered.is_outer_fan_out_lane() {
+            CpuExecutionContext::outer_child(self.domain)
+        } else {
+            CpuExecutionContext::entered(self.domain, parallel_mode)
+        };
+        Ok(with_execution_owner(owner, || operation(&context)))
     }
 
     /// Whether a backend session enters this domain's executor once for its
@@ -572,6 +699,7 @@ impl<'a> CpuOperationEntry<'a> {
 
     pub(crate) fn submit_outer(
         self,
+        _delegates: OuterFanOutChecked,
         len: usize,
         operation: impl Fn(usize, &CpuExecutionContext<'_>) -> Result<(), CpuDomainExecutorError> + Sync,
     ) -> Result<(), CpuDomainExecutorError> {
@@ -592,8 +720,7 @@ impl<'a> CpuOperationEntry<'a> {
             let mut index = lane;
             while index < len {
                 with_execution_owner(owner, || {
-                    let context =
-                        CpuExecutionContext::entered(self.domain, ParallelMode::Sequential);
+                    let context = CpuExecutionContext::outer_child(self.domain);
                     operation(index, &context)
                 })?;
                 let Some(next) = index.checked_add(lane_count) else {

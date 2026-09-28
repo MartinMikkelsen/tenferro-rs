@@ -2777,6 +2777,11 @@ impl CpuBackend {
                 EngineResources::new(self.shared.buffer_limit.load(Ordering::Relaxed));
             return op(&mut resources);
         }
+        // INVARIANT: this lock is poisoned only by a session callback that
+        // unwound while holding it, and `BufferPoolLoan` restores the pool's
+        // in-flight accounting on unwind, so the resources are consistent and
+        // the next session may reuse them. Pool introspection
+        // (`buffer_pool_len`, `buffer_pool_stats`) still reports the poison.
         let mut resources = self
             .engine
             .resources
