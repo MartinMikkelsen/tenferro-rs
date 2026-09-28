@@ -31,8 +31,6 @@
 //! a typed load error; they do not fall back to native CubeCL kernels.
 
 use std::ffi::c_void;
-#[cfg(test)]
-use std::sync::atomic::{AtomicUsize, Ordering};
 
 use cubecl::client::ComputeClient;
 use cubecl::prelude::{ArrayArg, CubeCount, CubeDim, CubeElement, CubePrimitive};
@@ -86,20 +84,25 @@ macro_rules! preset_scalar {
         num_complex::Complex64
     };
 }
-/// Counts native strided-source AXPBY passes so a regression that reintroduces
-/// a hidden `x` canonicalization (which would route back through cuBLAS) fails
-/// the data-movement assertion instead of only the numerics.
 #[cfg(test)]
-static STRIDED_SOURCE_PASSES: AtomicUsize = AtomicUsize::new(0);
+thread_local! {
+    /// Counts native strided-source AXPBY passes so a regression that
+    /// reintroduces a hidden `x` canonicalization (which would route back
+    /// through cuBLAS) fails the data-movement assertion instead of only the
+    /// numerics. Thread-local: the CUDA session runs its callback on the
+    /// calling thread, so a test observes only its own passes while other
+    /// tests run in parallel.
+    static STRIDED_SOURCE_PASSES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
 
 #[cfg(test)]
 pub(crate) fn reset_strided_source_passes_for_test() {
-    STRIDED_SOURCE_PASSES.store(0, Ordering::SeqCst);
+    STRIDED_SOURCE_PASSES.with(|passes| passes.set(0));
 }
 
 #[cfg(test)]
 pub(crate) fn strided_source_passes_for_test() -> usize {
-    STRIDED_SOURCE_PASSES.load(Ordering::SeqCst)
+    STRIDED_SOURCE_PASSES.with(std::cell::Cell::get)
 }
 
 const VDOT_OP: &str = "BackendSession::vdot_read";
@@ -514,7 +517,7 @@ fn axpby_strided_source_typed<T: CublasScalar>(
     y: &mut WriteRef<'_, '_, T>,
 ) -> crate::Result<()> {
     #[cfg(test)]
-    STRIDED_SOURCE_PASSES.fetch_add(1, Ordering::SeqCst);
+    STRIDED_SOURCE_PASSES.with(|passes| passes.set(passes.get() + 1));
     let plan = NativeStridedSourcePlan::new(AXPBY_OP, x.shape(), x.strides(), x.offset())?;
     let y_offset = i64::try_from(y.offset()).map_err(|_| {
         Error::invalid_argument(AXPBY_OP, "layout", "destination offset overflows i64")
