@@ -306,6 +306,15 @@ It includes:
 execution. Backends may override `with_backend_session()` to install one shared
 execution scope, for example a CPU thread-pool context.
 
+Session entry is fallible: `with_backend_session()` returns
+`Result<R, SessionEntryError>`, and every admission failure (same-thread
+reentry, a busy caller-managed domain, a mismatched execution scope, poisoned
+admission state, executor-entry failure) is reported before the callback runs.
+The callback's own result is returned unchanged inside `Ok`. A backend leaf that
+exposes native services returns an opaque `NativeSessionRef` from
+`BackendSession::native_session()`, recovered only by that leaf's visitor; the
+default is `None`.
+
 Custom operation families do not add a second backend trait. They lower to
 `ExecOp::Extension` and dispatch through their installed `ExtensionModule`.
 The owning extension crate is responsible for deciding whether that runtime
