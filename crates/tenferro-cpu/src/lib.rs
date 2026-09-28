@@ -267,8 +267,7 @@ pub use dot_runtime::{
 pub use exec_session::CpuExecSession;
 pub use indexed_plan_cache::IndexedPlanCacheLimits;
 pub use placement::{
-    CpuEngineConstructionError, CpuPlacement, CpuPlacementError, CpuPlacementGuarantee,
-    ResolvedCpuPlacement,
+    CpuEngineConstructionError, CpuPlacement, CpuPlacementError, ResolvedCpuPlacement,
 };
 pub use provider::{CpuExecutionContext, ParallelMode};
 pub use provider_capability::{

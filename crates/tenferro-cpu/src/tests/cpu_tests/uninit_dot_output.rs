@@ -13,9 +13,7 @@ use crate::provider::{
     CpuExecutionContext, CpuGemmProvider, CpuGemmRequest, CpuGroupedGemmRequest,
     CpuProviderOutcome, CpuUninitGemmProvider,
 };
-use crate::{
-    CpuDomainId, CpuPlacementGuarantee, CpuProviderBundle, ExternalCpuDomain, ResolvedCpuPlacement,
-};
+use crate::{CpuDomainId, CpuProviderBundle, ExternalCpuDomain, ResolvedCpuPlacement};
 use tenferro_tensor::BackendSessionHost;
 use tenferro_tensor::TensorRead;
 use tenferro_tensor::{DType, DotGeneralConfig};
@@ -33,7 +31,6 @@ fn backend_with_bundle(bundle: CpuProviderBundle) -> CpuBackend {
             ResolvedCpuPlacement::AllAllowed { cpus },
             Arc::new(CpuContext::with_threads(1).unwrap()),
             NonZeroUsize::new(1).unwrap(),
-            CpuPlacementGuarantee::AdvisoryDeclared,
         )
         .unwrap()],
         bundle,

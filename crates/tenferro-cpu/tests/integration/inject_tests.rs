@@ -12,9 +12,9 @@ use tenferro_cpu::inject::{
 use tenferro_cpu::{
     discover_cpu_topology, CpuBackend, CpuBackendError, CpuBackendKind, CpuDomainExecutor,
     CpuDomainExecutorCapabilities, CpuDomainExecutorError, CpuExecutorAffinity,
-    CpuExecutorReentrancy, CpuExecutorShutdown, CpuInnerParallelism, CpuPlacementGuarantee,
-    CpuProviderBundle, CpuProviderBundleInstallError, CpuProviderDomainError, CpuProviderSlot,
-    ExternalCpuDomain, ResolvedCpuPlacement, ScopedCpuJob, ScopedCpuJobs,
+    CpuExecutorReentrancy, CpuExecutorShutdown, CpuInnerParallelism, CpuProviderBundle,
+    CpuProviderBundleInstallError, CpuProviderDomainError, CpuProviderSlot, ExternalCpuDomain,
+    ResolvedCpuPlacement, ScopedCpuJob, ScopedCpuJobs,
 };
 use tenferro_tensor::{CpuDomainId, DotGeneralConfig, Tensor, TensorDot, TypedTensor};
 
@@ -62,7 +62,6 @@ fn all_allowed_external_domain(id: CpuDomainId) -> ExternalCpuDomain {
         },
         Arc::new(InlineExternalExecutor),
         NonZeroUsize::new(1).unwrap(),
-        CpuPlacementGuarantee::ExactDeclared,
     )
     .unwrap()
 }

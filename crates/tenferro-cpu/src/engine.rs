@@ -7,7 +7,7 @@ use crate::indexed_plan_cache::IndexedPlanCache;
 use crate::resource_domain::CpuResourceDomain;
 use crate::{
     CpuContext, CpuContextError, CpuDomainExecutor, CpuDomainId, CpuDomainOwnership,
-    CpuExecutorAffinity, CpuPlacementGuarantee, ExternalCpuDomain, ResolvedCpuPlacement,
+    ExternalCpuDomain, ResolvedCpuPlacement,
 };
 
 #[derive(Debug)]
@@ -49,7 +49,6 @@ impl CpuEngine {
             placement,
             Arc::new(context),
             thread_budget,
-            CpuPlacementGuarantee::ExactDeclared,
             buffer_limit,
         ))
     }
@@ -61,18 +60,11 @@ impl CpuEngine {
         buffer_limit: usize,
     ) -> Self {
         let capabilities = context.capabilities();
-        let placement_guarantee =
-            if capabilities.affinity == CpuExecutorAffinity::TenferroDomainVerified {
-                CpuPlacementGuarantee::ExactDeclared
-            } else {
-                CpuPlacementGuarantee::AdvisoryDeclared
-            };
         Self::from_managed_context(
             id,
             placement,
             context,
             capabilities.worker_count,
-            placement_guarantee,
             buffer_limit,
         )
     }
@@ -82,7 +74,6 @@ impl CpuEngine {
         placement: ResolvedCpuPlacement,
         context: Arc<CpuContext>,
         thread_budget: NonZeroUsize,
-        placement_guarantee: CpuPlacementGuarantee,
         buffer_limit: usize,
     ) -> Self {
         let executor: Arc<dyn CpuDomainExecutor> = context.clone();
@@ -92,7 +83,6 @@ impl CpuEngine {
                 placement,
                 executor,
                 thread_budget,
-                placement_guarantee,
                 CpuDomainOwnership::Managed,
             ),
             resources: Mutex::new(EngineResources::new(buffer_limit)),

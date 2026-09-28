@@ -49,9 +49,7 @@ use crate::provider_capability::builtin_blas_execution_capabilities;
 use crate::provider_capability::serial_capabilities;
 use crate::provider_capability::{engine_worker_capabilities, CpuProviderExecutionCapabilities};
 use crate::resource_domain::CpuResourceDomain;
-use crate::{
-    CpuDomainExecutorError, CpuDomainId, CpuInnerParallelism, CpuPlacementGuarantee, CpuSet,
-};
+use crate::{CpuDomainExecutorError, CpuDomainId, CpuInnerParallelism, CpuSet};
 
 /// Operand named by a provider capability reason.
 ///
@@ -183,7 +181,6 @@ impl fmt::Debug for CpuExecutionContext<'_> {
             .field("domain_id", &self.domain_id())
             .field("cpus", &self.cpus())
             .field("thread_budget", &self.thread_budget())
-            .field("placement_guarantee", &self.placement_guarantee())
             .field("parallel_mode", &self.parallel_mode())
             .field("outer_fan_out", &self.outer_fan_out)
             .finish_non_exhaustive()
@@ -344,20 +341,6 @@ impl<'a> CpuExecutionContext<'a> {
     /// ```
     pub fn thread_budget(&self) -> NonZeroUsize {
         self.domain.thread_budget()
-    }
-
-    /// Return the strength of the selected domain's placement guarantee, when present.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use tenferro_cpu::CpuExecutionContext;
-    /// # fn inspect(context: &CpuExecutionContext<'_>) {
-    /// let _guarantee = context.placement_guarantee();
-    /// # }
-    /// ```
-    pub fn placement_guarantee(&self) -> Option<CpuPlacementGuarantee> {
-        self.domain.placement_guarantee()
     }
 
     /// Return the engine-selected scheduling mode for this entered provider call.

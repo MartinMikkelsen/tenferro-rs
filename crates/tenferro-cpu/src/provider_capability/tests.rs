@@ -1,7 +1,6 @@
 use std::num::NonZeroUsize;
 
 use super::*;
-use crate::{CpuId, CpuPlacementGuarantee, CpuSet};
 
 fn expected(
     thread_count: CpuThreadCountControl,
@@ -221,18 +220,12 @@ fn builtin_blas_without_a_wired_scope_guard_stays_conservative() {
     assert!(!capabilities.accepts_outer);
 }
 
-fn cpu_set(ids: &[usize]) -> CpuSet {
-    CpuSet::new(ids.iter().copied().map(CpuId::new)).unwrap()
-}
-
 fn budget(value: usize) -> NonZeroUsize {
     NonZeroUsize::new(value).unwrap()
 }
 
 #[test]
 fn strict_budget_one_allows_only_providers_that_can_force_inline_execution() {
-    let domain = cpu_set(&[0, 1]);
-    let process_allowed = cpu_set(&[0, 1, 2, 3]);
     let probes = [
         CpuProviderProbe::Mkl {
             thread_local_setter_wired: true,
@@ -244,14 +237,7 @@ fn strict_budget_one_allows_only_providers_that_can_force_inline_execution() {
     ];
 
     for probe in probes {
-        validate_provider_for_domain(
-            classify_provider(probe),
-            budget(1),
-            CpuPlacementGuarantee::ExactDeclared,
-            &domain,
-            &process_allowed,
-        )
-        .unwrap();
+        validate_provider_for_domain(classify_provider(probe), budget(1)).unwrap();
     }
 
     let openblas_error = validate_provider_for_domain(
@@ -260,9 +246,6 @@ fn strict_budget_one_allows_only_providers_that_can_force_inline_execution() {
             process_global_set_restore_wired: true,
         })),
         budget(1),
-        CpuPlacementGuarantee::ExactDeclared,
-        &domain,
-        &process_allowed,
     )
     .unwrap_err();
     assert!(matches!(
@@ -270,14 +253,8 @@ fn strict_budget_one_allows_only_providers_that_can_force_inline_execution() {
         CpuProviderDomainError::ThreadCountNotEnforceable { .. }
     ));
 
-    let error = validate_provider_for_domain(
-        builtin_blas_execution_capabilities(),
-        budget(1),
-        CpuPlacementGuarantee::ExactDeclared,
-        &domain,
-        &process_allowed,
-    )
-    .unwrap_err();
+    let error =
+        validate_provider_for_domain(builtin_blas_execution_capabilities(), budget(1)).unwrap_err();
     assert!(matches!(
         error,
         CpuProviderDomainError::ThreadCountNotEnforceable { .. }
@@ -285,16 +262,7 @@ fn strict_budget_one_allows_only_providers_that_can_force_inline_execution() {
 }
 
 #[test]
-fn domain_compatibility_table_enforces_count_and_placement_independently() {
-    #[derive(Clone, Copy, Debug)]
-    enum Expected {
-        Compatible,
-        CountError,
-        PlacementError,
-    }
-
-    let strict_subdomain = cpu_set(&[0, 1]);
-    let process_allowed = cpu_set(&[0, 1, 2, 3]);
+fn domain_compatibility_checks_the_thread_count_and_never_provider_placement() {
     let controlled_external = classify_provider(CpuProviderProbe::Mkl {
         thread_local_setter_wired: true,
     });
@@ -313,121 +281,51 @@ fn domain_compatibility_table_enforces_count_and_placement_independently() {
         true,
     );
 
+    // (case, capabilities, thread budget, compatible)
     let cases = [
+        ("engine workers", engine, 4, true),
+        ("serial providers", serial, 4, true),
+        // Provider-created threads are unmanaged: a count-controlled external
+        // provider is accepted wherever its count can be bounded.
+        ("controlled external workers", controlled_external, 2, true),
         (
-            "engine workers honor an exact subdomain",
-            engine,
-            4,
-            CpuPlacementGuarantee::ExactDeclared,
-            &strict_subdomain,
-            Expected::Compatible,
-        ),
-        (
-            "serial providers satisfy every exact-domain budget",
-            serial,
-            4,
-            CpuPlacementGuarantee::ExactDeclared,
-            &strict_subdomain,
-            Expected::Compatible,
-        ),
-        (
-            "controlled external workers reject a strict multi-thread subdomain",
-            controlled_external,
-            2,
-            CpuPlacementGuarantee::ExactDeclared,
-            &strict_subdomain,
-            Expected::PlacementError,
-        ),
-        (
-            "controlled external workers accept the process-wide exact domain",
-            controlled_external,
-            2,
-            CpuPlacementGuarantee::ExactDeclared,
-            &process_allowed,
-            Expected::Compatible,
-        ),
-        (
-            "controlled external workers accept an advisory subdomain",
-            controlled_external,
-            2,
-            CpuPlacementGuarantee::AdvisoryDeclared,
-            &strict_subdomain,
-            Expected::Compatible,
-        ),
-        (
-            "binary control may clamp advisory execution to one thread",
+            "binary control clamps to one thread",
             binary_external,
             8,
-            CpuPlacementGuarantee::AdvisoryDeclared,
-            &strict_subdomain,
-            Expected::Compatible,
+            true,
         ),
         (
-            "binary control still rejects strict external placement above budget one",
-            binary_external,
-            8,
-            CpuPlacementGuarantee::ExactDeclared,
-            &strict_subdomain,
-            Expected::PlacementError,
+            "no placement claim after count validation",
+            explicit_without_placement,
+            2,
+            true,
         ),
         (
-            "global control cannot enforce an advisory upper bound",
+            "global control cannot bound the count",
             uncontrolled_external,
             2,
-            CpuPlacementGuarantee::AdvisoryDeclared,
-            &strict_subdomain,
-            Expected::CountError,
+            false,
         ),
         (
             "unknown providers stay conservative even at budget one",
             CpuProviderExecutionCapabilities::default(),
             1,
-            CpuPlacementGuarantee::AdvisoryDeclared,
-            &strict_subdomain,
-            Expected::CountError,
-        ),
-        (
-            "advisory domains need no placement claim after count validation",
-            explicit_without_placement,
-            2,
-            CpuPlacementGuarantee::AdvisoryDeclared,
-            &strict_subdomain,
-            Expected::Compatible,
-        ),
-        (
-            "strict domains reject a provider with no placement claim",
-            explicit_without_placement,
-            2,
-            CpuPlacementGuarantee::ExactDeclared,
-            &process_allowed,
-            Expected::PlacementError,
+            false,
         ),
     ];
 
-    for (name, capabilities, threads, guarantee, domain, expected) in cases {
-        let result = validate_provider_for_domain(
-            capabilities,
-            budget(threads),
-            guarantee,
-            domain,
-            &process_allowed,
-        );
-        match expected {
-            Expected::Compatible => assert_eq!(result, Ok(()), "{name}"),
-            Expected::CountError => assert!(
+    for (name, capabilities, threads, compatible) in cases {
+        let result = validate_provider_for_domain(capabilities, budget(threads));
+        if compatible {
+            assert_eq!(result, Ok(()), "{name}");
+        } else {
+            assert!(
                 matches!(
                     result,
                     Err(CpuProviderDomainError::ThreadCountNotEnforceable { .. })
                 ),
                 "{name}: {result:?}",
-            ),
-            Expected::PlacementError => assert!(
-                matches!(
-                    result,
-                    Err(CpuProviderDomainError::PlacementNotEnforceable { .. })
-                ),
-                "{name}: {result:?}",
-            ),
+            );
         }
     }
 }

@@ -18,8 +18,8 @@ use crate::provider::{
     CpuOperationEntry, CpuProviderOutcome, CpuProviderUnsupported, CpuUninitGemmProvider,
 };
 use crate::{
-    gemm::GemmAnalysisCache, CpuDomainExecutorError, CpuDomainId, CpuPlacementGuarantee,
-    CpuProviderDomainError, CpuSet, Error, ParallelMode, PooledUninitOutput, Result,
+    gemm::GemmAnalysisCache, CpuDomainExecutorError, CpuDomainId, CpuProviderDomainError, Error,
+    ParallelMode, PooledUninitOutput, Result,
 };
 
 const OP: &str = "dot_general";
@@ -198,13 +198,9 @@ pub(crate) struct CpuProviderBundleInner {
     pub(crate) dot_general: DotGeneralRuntime,
 }
 
-#[derive(Clone, Copy)]
-pub(crate) enum CpuProviderDomainContract<'a> {
-    CooperativeCpuSet {
-        placement_guarantee: CpuPlacementGuarantee,
-        domain_cpus: &'a CpuSet,
-        process_allowed_cpus: &'a CpuSet,
-    },
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum CpuProviderDomainContract {
+    CooperativeCpuSet,
     CallerManaged,
 }
 
@@ -295,22 +291,17 @@ impl CpuProviderBundle {
         &self,
         domain_id: CpuDomainId,
         thread_budget: std::num::NonZeroUsize,
-        contract: CpuProviderDomainContract<'_>,
+        contract: CpuProviderDomainContract,
     ) -> std::result::Result<(), CpuProviderBundleInstallError> {
         let runtime = self.dot_general();
         let validate = |provider, capabilities| {
             let result = match contract {
-                CpuProviderDomainContract::CooperativeCpuSet {
-                    placement_guarantee,
-                    domain_cpus,
-                    process_allowed_cpus,
-                } => crate::provider_capability::validate_provider_for_domain(
-                    capabilities,
-                    thread_budget,
-                    placement_guarantee,
-                    domain_cpus,
-                    process_allowed_cpus,
-                ),
+                CpuProviderDomainContract::CooperativeCpuSet => {
+                    crate::provider_capability::validate_provider_for_domain(
+                        capabilities,
+                        thread_budget,
+                    )
+                }
                 CpuProviderDomainContract::CallerManaged => {
                     crate::provider_capability::validate_provider_for_caller_managed_domain(
                         capabilities,

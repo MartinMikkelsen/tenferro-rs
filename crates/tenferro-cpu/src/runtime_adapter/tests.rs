@@ -117,7 +117,6 @@ fn public_cpu_runtime_registration_tracks_distinct_selected_cpu_domains() {
         },
         Arc::new(crate::CpuContext::with_threads(1).expect("first CPU context")),
         NonZeroUsize::new(1).unwrap(),
-        crate::CpuPlacementGuarantee::AdvisoryDeclared,
     )
     .expect("first CPU domain");
     let second_domain = crate::ExternalCpuDomain::new(
@@ -128,7 +127,6 @@ fn public_cpu_runtime_registration_tracks_distinct_selected_cpu_domains() {
         },
         Arc::new(crate::CpuContext::with_threads(1).expect("second CPU context")),
         NonZeroUsize::new(1).unwrap(),
-        crate::CpuPlacementGuarantee::AdvisoryDeclared,
     )
     .expect("second CPU domain");
     let first = crate::CpuBackend::from_external_managed_domains(first_domain_id, [first_domain])
@@ -183,7 +181,6 @@ fn public_cpu_runtime_registration_allows_two_selected_cpu_domains_in_one_runtim
         },
         Arc::new(crate::CpuContext::with_threads(1).expect("first CPU context")),
         NonZeroUsize::new(1).unwrap(),
-        crate::CpuPlacementGuarantee::AdvisoryDeclared,
     )
     .expect("first CPU domain");
     let second_domain = crate::ExternalCpuDomain::new(
@@ -194,7 +191,6 @@ fn public_cpu_runtime_registration_allows_two_selected_cpu_domains_in_one_runtim
         },
         Arc::new(crate::CpuContext::with_threads(1).expect("second CPU context")),
         NonZeroUsize::new(1).unwrap(),
-        crate::CpuPlacementGuarantee::AdvisoryDeclared,
     )
     .expect("second CPU domain");
     let first_backend = CpuBackend::from_external_managed_domains(first_domain_id, [first_domain])

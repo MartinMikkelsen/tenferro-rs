@@ -24,8 +24,8 @@ use crate::placement::{
 use crate::provider::{CpuExecutionContext, CpuOperationEntry, ParallelMode};
 use crate::{
     discover_cpu_topology, CpuAdmissionMode, CpuDomainId, CpuDomainOwnership, CpuExecutorAffinity,
-    CpuExecutorShutdown, CpuId, CpuPlacement, CpuPlacementError, CpuPlacementGuarantee, CpuSet,
-    CpuTopology, CpuTopologyError, ExternalCpuDomain, NumaNodeId, ResolvedCpuPlacement,
+    CpuExecutorShutdown, CpuId, CpuPlacement, CpuPlacementError, CpuSet, CpuTopology,
+    CpuTopologyError, ExternalCpuDomain, NumaNodeId, ResolvedCpuPlacement,
 };
 use crate::{
     CacheStats, Tensor, TensorRank, TensorRead, TensorScalar, TensorValue, TensorWrite,
@@ -507,7 +507,6 @@ pub struct CpuExecutionInfo {
     domain_cpus: Option<CpuSet>,
     worker_count: usize,
     thread_budget: usize,
-    placement_guarantee: Option<CpuPlacementGuarantee>,
     admission_mode: CpuAdmissionMode,
     domain_ownership: CpuDomainOwnership,
     executor_affinity: CpuExecutorAffinity,
@@ -630,20 +629,6 @@ impl CpuExecutionInfo {
     /// ```
     pub fn thread_budget(&self) -> usize {
         self.thread_budget
-    }
-
-    /// Return whether the selected placement is exact or advisory.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// let guarantee = tenferro_cpu::CpuBackend::new()
-    ///     .execution_info()
-    ///     .placement_guarantee();
-    /// let _ = format!("{guarantee:?}");
-    /// ```
-    pub fn placement_guarantee(&self) -> Option<CpuPlacementGuarantee> {
-        self.placement_guarantee
     }
 
     /// Return the selected domain's admission contract.
@@ -1374,7 +1359,7 @@ impl CpuBackend {
     /// use std::sync::Arc;
     /// use tenferro_cpu::{
     ///     discover_cpu_topology, CpuBackend, CpuBackendError, CpuContext,
-    ///     CpuExecutionMode, CpuPlacementGuarantee, CpuProviderBundleInstallError,
+    ///     CpuExecutionMode, CpuProviderBundleInstallError,
     ///     ExternalCpuDomain, ResolvedCpuPlacement,
     /// };
     /// use tenferro_tensor::CpuDomainId;
@@ -1388,7 +1373,6 @@ impl CpuBackend {
     ///     },
     ///     Arc::new(CpuContext::with_threads(1)?),
     ///     NonZeroUsize::new(1).unwrap(),
-    ///     CpuPlacementGuarantee::AdvisoryDeclared,
     /// )?;
     /// match CpuBackend::from_external_managed_domains(id, [domain]) {
     ///     Ok(backend) => assert_eq!(
@@ -1456,7 +1440,7 @@ impl CpuBackend {
     /// use std::sync::Arc;
     /// use tenferro_cpu::{
     ///     discover_cpu_topology, CpuBackend, CpuBackendKind, CpuContext,
-    ///     CpuExecutionMode, CpuPlacementGuarantee, CpuProviderBundle,
+    ///     CpuExecutionMode, CpuProviderBundle,
     ///     ExternalCpuDomain, ResolvedCpuPlacement,
     /// };
     /// use tenferro_tensor::CpuDomainId;
@@ -1470,7 +1454,6 @@ impl CpuBackend {
     ///     },
     ///     Arc::new(CpuContext::with_threads(1)?),
     ///     NonZeroUsize::new(1).unwrap(),
-    ///     CpuPlacementGuarantee::AdvisoryDeclared,
     /// )?;
     /// let bundle = CpuProviderBundle::builder(CpuBackendKind::Faer).build()?;
     /// let backend = CpuBackend::from_external_managed_domains_with_provider_bundle(
@@ -1561,10 +1544,10 @@ impl CpuBackend {
                             );
                         }
                         has_all_allowed = true;
-                        if domain.placement_guarantee()
-                            == Some(CpuPlacementGuarantee::ExactDeclared)
-                            && cpus != topology.allowed_cpus()
-                        {
+                        // `AllAllowed` names the whole allowed set; a different
+                        // declared set would make the domain's exclusion identity
+                        // disagree with its placement name.
+                        if cpus != topology.allowed_cpus() {
                             return Err(ExternalCpuDomainRegistryError::ExactAllAllowedMismatch {
                                 domain: domain.id(),
                                 declared: cpus.clone(),
@@ -2101,7 +2084,6 @@ impl CpuBackend {
             domain_cpus: domain.cpus().cloned(),
             worker_count: capabilities.worker_count.get(),
             thread_budget: domain.thread_budget().get(),
-            placement_guarantee: domain.placement_guarantee(),
             admission_mode: domain.admission_mode(),
             domain_ownership: domain.ownership(),
             executor_affinity,
@@ -2190,21 +2172,12 @@ impl CpuBackend {
         &self,
         bundle: &CpuProviderBundle,
     ) -> Result<(), CpuProviderBundleInstallError> {
-        let allowed = self.shared.topology.allowed_cpus();
         let validate_engine = |engine: &CpuEngine| {
             let domain = engine.domain();
-            let contract = match (domain.placement_guarantee(), domain.cpus()) {
-                (Some(placement_guarantee), Some(domain_cpus)) => {
-                    CpuProviderDomainContract::CooperativeCpuSet {
-                        placement_guarantee,
-                        domain_cpus,
-                        process_allowed_cpus: allowed,
-                    }
-                }
-                (None, None) => CpuProviderDomainContract::CallerManaged,
-                // INVARIANT: CpuResourceDomain stores placement and guarantee in
-                // the same admission enum variant, so their optionality matches.
-                _ => unreachable!("CPU domain placement and guarantee must match"),
+            let contract = if domain.cpus().is_some() {
+                CpuProviderDomainContract::CooperativeCpuSet
+            } else {
+                CpuProviderDomainContract::CallerManaged
             };
             bundle.validate_for_domain(domain.id(), domain.thread_budget(), contract)
         };
@@ -2233,11 +2206,7 @@ impl CpuBackend {
                     bundle.validate_for_domain(
                         domain_id,
                         budget,
-                        CpuProviderDomainContract::CooperativeCpuSet {
-                            placement_guarantee: CpuPlacementGuarantee::ExactDeclared,
-                            domain_cpus: node.cpus(),
-                            process_allowed_cpus: allowed,
-                        },
+                        CpuProviderDomainContract::CooperativeCpuSet,
                     )?;
                 }
             }

@@ -118,9 +118,8 @@ A second public backend entry into the same active domain is rejected, including
 entry from another worker of that pool. Provider bundles with external workers
 or uncontrolled thread counts, and BLAS/LAPACK configurations that cannot stay
 inside the supplied executor, fail during backend construction. Diagnostics
-report `CpuAdmissionMode::CallerManaged`; resolved placement, domain CPUs, and
-placement guarantee are `None` because tenferro has no verified placement
-claim.
+report `CpuAdmissionMode::CallerManaged`; resolved placement and domain CPUs
+are `None` because tenferro has no verified placement claim.
 
 ## Scoped direct faer calls
 
@@ -161,9 +160,10 @@ such as `OPENBLAS_NUM_THREADS`, `MKL_NUM_THREADS`, and `OMP_NUM_THREADS` still
 control counts where supported, but they do not upgrade the provider to a
 tenferro-managed affinity contract.
 
-If strict NUMA placement is required, select `CpuBackendKind::Faer`. If an
-application configures and pins a BLAS provider independently, that remains an
-application/provider responsibility outside the tenferro placement guarantee.
+If strict NUMA placement is required, select `CpuBackendKind::Faer`. tenferro
+makes no placement promise for threads a provider creates; if an application
+configures and pins a BLAS provider independently, that remains an
+application/provider responsibility.
 
 ### Intel OpenMP worker affinity on Linux
 

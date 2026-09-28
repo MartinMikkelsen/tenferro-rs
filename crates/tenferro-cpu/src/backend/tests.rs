@@ -115,7 +115,7 @@ fn fresh_tagging_is_field_only_and_has_no_dynamic_lookup_or_metadata_clone() {
 }
 
 #[test]
-fn provider_bundle_installation_validates_lazy_exact_numa_domains_at_the_source_boundary() {
+fn provider_bundle_installation_validates_lazy_numa_domains_at_the_source_boundary() {
     let backend = include_str!("../backend.rs");
     let validation = backend
         .split_once("fn validate_provider_bundle_for_domains")
@@ -129,7 +129,7 @@ fn provider_bundle_installation_validates_lazy_exact_numa_domains_at_the_source_
         "CpuEngineRegistry::ManagedLazy",
         "topology.nodes()",
         "node_domain_ids",
-        "CpuPlacementGuarantee::ExactDeclared",
+        "CpuProviderDomainContract::CooperativeCpuSet",
     ] {
         assert!(
             validation.contains(required),

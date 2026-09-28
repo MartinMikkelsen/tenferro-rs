@@ -498,6 +498,30 @@ identity and permit conflicts are independent of placement promises and survive
 that simplification. A supported managed-affinity contract cannot vanish as an
 incidental consequence of this change.
 
+**Implemented mapping (#1938 session phase).** The three facts are separate:
+the implementation's declaration is its `CpuProviderExecutionCapabilities`
+(`accepts_mode(Outer)` is "sequential, concurrent-call safe"); active outer
+fan-out is `CpuExecutionContext::is_outer_fan_out_lane`, set only by
+`submit_outer` and the public `with_outer_lanes`, never inferred from running on
+a Rayon worker; whether inner work is permitted is the lane's `Sequential`
+mode, which `enter_or_reuse` does not widen inside a lane. Rejection happens at
+submission: `submit_outer` takes an `OuterFanOutChecked` proof produced by
+checking every reachable delegate, so an independent-runtime GEMM fails before
+any lane runs. A contraction reached from a lane checks its general, GEMM and
+layout slots before dispatch whatever the capability policy, which makes the
+check transitive for algorithms run per item. Packed LU/solve batching now
+fans out through `with_outer_lanes` instead of a bare `rayon::scope`.
+A custom `CpuGemmProvider` installed with `with_provider_bundle` is what
+standard tensordot and einsum reach (tested); a wrapping session can override
+an operation and opt in to forwarding its delegate's native token (tested).
+
+Placement: the exact/advisory `CpuPlacementGuarantee` declaration and the
+`PlacementNotEnforceable` rejection were removed. Cooperative-domain bundle
+validation checks the thread count only; provider-created threads are
+documented as unmanaged. Managed CPU-set pinning (`TenferroDomainVerified`),
+the arbiter's CPU-set exclusion, `AllAllowed` identity validation (now
+unconditional) and the caller-managed executor rule are unchanged.
+
 ### D9. Overridable batch strategy and thresholds
 
 Use backend defaults, a scoped session override and an optional per-operation

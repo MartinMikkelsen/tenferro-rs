@@ -165,8 +165,7 @@ fn two_owner_runtime() -> Option<Runtime> {
     use std::sync::Arc;
 
     use tenferro_cpu::{
-        discover_cpu_topology, CpuContext, CpuPlacementGuarantee, CpuSet, ExternalCpuDomain,
-        ResolvedCpuPlacement,
+        discover_cpu_topology, CpuContext, CpuSet, ExternalCpuDomain, ResolvedCpuPlacement,
     };
     use tenferro_tensor::CpuDomainId;
 
@@ -195,7 +194,6 @@ fn two_owner_runtime() -> Option<Runtime> {
             },
             Arc::new(CpuContext::with_threads(1).expect("CPU context")),
             NonZeroUsize::new(1).expect("nonzero"),
-            CpuPlacementGuarantee::AdvisoryDeclared,
         )
         .map_err(|error| eprintln!("two owners: domain {domain} rejected: {error}"))
         .ok()?;

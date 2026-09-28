@@ -13,8 +13,8 @@ use tenferro_cpu::{
     discover_cpu_topology, CpuBackend, CpuBackendKind, CpuDomainExecutor,
     CpuDomainExecutorCapabilities, CpuDomainExecutorError, CpuExecutorAffinity,
     CpuExecutorReentrancy, CpuExecutorShutdown, CpuInnerParallelism, CpuPlacementControl,
-    CpuPlacementGuarantee, CpuProviderBundle, CpuProviderExecutionCapabilities,
-    CpuThreadCountControl, ExternalCpuDomain, ResolvedCpuPlacement, ScopedCpuJob, ScopedCpuJobs,
+    CpuProviderBundle, CpuProviderExecutionCapabilities, CpuThreadCountControl, ExternalCpuDomain,
+    ResolvedCpuPlacement, ScopedCpuJob, ScopedCpuJobs,
 };
 use tenferro_tensor::{
     BackendSessionHost, ContractionScalar, CpuDomainId, DType, DotGeneralAccumulation,
@@ -235,7 +235,6 @@ fn warmed_public_session_request_provider_dispatch_does_not_allocate() {
         ResolvedCpuPlacement::AllAllowed { cpus: allowed_cpus },
         Arc::new(InlineExecutor),
         NonZeroUsize::new(1).unwrap(),
-        CpuPlacementGuarantee::ExactDeclared,
     )
     .unwrap();
     let mut backend = CpuBackend::from_external_managed_domains_with_provider_bundle(

@@ -1072,16 +1072,11 @@ fn provider_capabilities_are_snapshotted_once_when_the_bundle_is_built() {
     assert_eq!(gemm_capability_calls.load(Ordering::Relaxed), 1);
     assert_eq!(layout_capability_calls.load(Ordering::Relaxed), 1);
 
-    let cpus = crate::CpuSet::new([crate::CpuId::new(0), crate::CpuId::new(1)]).unwrap();
     bundle
         .validate_for_domain(
             crate::CpuDomainId::new(17),
             NonZeroUsize::new(2).unwrap(),
-            CpuProviderDomainContract::CooperativeCpuSet {
-                placement_guarantee: crate::CpuPlacementGuarantee::ExactDeclared,
-                domain_cpus: &cpus,
-                process_allowed_cpus: &cpus,
-            },
+            CpuProviderDomainContract::CooperativeCpuSet,
         )
         .unwrap();
 

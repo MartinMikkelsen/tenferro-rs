@@ -12,7 +12,7 @@ use super::{
 use crate::{
     CpuDomainExecutor, CpuDomainExecutorCapabilities, CpuDomainExecutorError, CpuDomainId,
     CpuExecutorAffinity, CpuExecutorReentrancy, CpuExecutorShutdown, CpuId, CpuInnerParallelism,
-    CpuPlacementGuarantee, ScopedCpuJob, ScopedCpuJobs,
+    ScopedCpuJob, ScopedCpuJobs,
 };
 use rayon::prelude::*;
 use std::num::NonZeroUsize;
@@ -57,14 +57,9 @@ pub(crate) fn external_execution_context_fixture(
 ) -> CpuExecutionContextFixture {
     let cpus = crate::CpuSet::singleton(crate::CpuId::new(0));
     let placement = crate::ResolvedCpuPlacement::AllAllowed { cpus: cpus.clone() };
-    let external = crate::ExternalCpuDomain::new(
-        CpuDomainId::new(9),
-        placement,
-        executor,
-        thread_budget,
-        CpuPlacementGuarantee::AdvisoryDeclared,
-    )
-    .unwrap();
+    let external =
+        crate::ExternalCpuDomain::new(CpuDomainId::new(9), placement, executor, thread_budget)
+            .unwrap();
     let engine = crate::engine::CpuEngine::from_external(external, 0);
     let permit = crate::arbiter::ResourceArbiter::new()
         .acquire(cpus)
@@ -210,10 +205,6 @@ fn provider_context_exposes_only_execution_policy() {
             Some(&[CpuId::new(0)][..])
         );
         assert_eq!(provider_context.thread_budget().get(), 4);
-        assert_eq!(
-            provider_context.placement_guarantee(),
-            Some(CpuPlacementGuarantee::AdvisoryDeclared)
-        );
         assert_eq!(provider_context.parallel_mode(), ParallelMode::Inner);
     });
 }

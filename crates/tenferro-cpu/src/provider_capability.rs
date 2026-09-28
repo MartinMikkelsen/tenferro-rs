@@ -2,7 +2,7 @@ use std::num::NonZeroUsize;
 
 use thiserror::Error;
 
-use crate::{CpuPlacementGuarantee, CpuSet, ParallelMode};
+use crate::ParallelMode;
 
 /// Per-call control over the maximum number of threads used by a CPU provider.
 ///
@@ -129,18 +129,6 @@ pub enum CpuProviderDomainError {
         thread_budget: usize,
         /// Provider thread-count classification.
         control: CpuThreadCountControl,
-    },
-    /// The provider cannot enforce the domain's placement guarantee.
-    #[error(
-        "provider placement control {placement:?} cannot enforce {guarantee:?} placement for thread budget {thread_budget}"
-    )]
-    PlacementNotEnforceable {
-        /// Requested maximum number of participating threads.
-        thread_budget: usize,
-        /// Provider placement classification.
-        placement: CpuPlacementControl,
-        /// Placement guarantee requested by the domain.
-        guarantee: CpuPlacementGuarantee,
     },
     /// The provider can leave the supplied executor in caller-managed mode.
     #[error(
@@ -332,12 +320,16 @@ pub(crate) fn validate_provider_for_caller_managed_domain(
     }
 }
 
+/// Check a provider against a cooperative CPU-set domain's thread budget.
+///
+/// Placement is not validated: tenferro confines its own workers to the
+/// domain's CPU set but makes no promise about where threads created by an
+/// external provider run, so a provider's placement declaration is recorded
+/// for diagnostics only. Resource exclusion between domains is decided by
+/// their declared CPU sets and is independent of this check.
 pub(crate) fn validate_provider_for_domain(
     capabilities: CpuProviderExecutionCapabilities,
     thread_budget: NonZeroUsize,
-    placement_guarantee: CpuPlacementGuarantee,
-    domain_cpus: &CpuSet,
-    process_allowed_cpus: &CpuSet,
 ) -> Result<(), CpuProviderDomainError> {
     if enforced_provider_thread_limit(capabilities.thread_count, thread_budget).is_none() {
         return Err(CpuProviderDomainError::ThreadCountNotEnforceable {
@@ -345,36 +337,7 @@ pub(crate) fn validate_provider_for_domain(
             control: capabilities.thread_count,
         });
     }
-
-    match capabilities.placement {
-        CpuPlacementControl::EngineWorkers | CpuPlacementControl::CallingThread => Ok(()),
-        CpuPlacementControl::ExternalWorkers => {
-            if thread_budget.get() == 1 && capabilities.worker_local_sequential {
-                return Ok(());
-            }
-            if placement_guarantee == CpuPlacementGuarantee::AdvisoryDeclared
-                || domain_cpus == process_allowed_cpus
-            {
-                return Ok(());
-            }
-            Err(CpuProviderDomainError::PlacementNotEnforceable {
-                thread_budget: thread_budget.get(),
-                placement: capabilities.placement,
-                guarantee: placement_guarantee,
-            })
-        }
-        CpuPlacementControl::None => {
-            if placement_guarantee == CpuPlacementGuarantee::AdvisoryDeclared {
-                Ok(())
-            } else {
-                Err(CpuProviderDomainError::PlacementNotEnforceable {
-                    thread_budget: thread_budget.get(),
-                    placement: capabilities.placement,
-                    guarantee: placement_guarantee,
-                })
-            }
-        }
-    }
+    Ok(())
 }
 
 fn enforced_provider_thread_limit(

@@ -14,9 +14,9 @@ use tenferro_cpu::{
     discover_cpu_topology, CpuBackend, CpuBackendKind, CpuDomainExecutor,
     CpuDomainExecutorCapabilities, CpuDomainExecutorError, CpuExecutorAffinity,
     CpuExecutorReentrancy, CpuExecutorShutdown, CpuInnerParallelism, CpuPlacement,
-    CpuPlacementControl, CpuPlacementError, CpuPlacementGuarantee, CpuProviderBundle,
-    CpuProviderExecutionCapabilities, CpuThreadCountControl, ExternalCpuDomain, NumaNodeId,
-    ResolvedCpuPlacement, ScopedCpuJob, ScopedCpuJobs,
+    CpuPlacementControl, CpuPlacementError, CpuProviderBundle, CpuProviderExecutionCapabilities,
+    CpuThreadCountControl, ExternalCpuDomain, NumaNodeId, ResolvedCpuPlacement, ScopedCpuJob,
+    ScopedCpuJobs,
 };
 use tenferro_runtime::{Error as RuntimeError, ErrorPhase, GraphCompiler, Runtime, TracedTensor};
 use tenferro_tensor::TensorRead;
@@ -135,7 +135,6 @@ fn external_backend(counters: Arc<ExecutorCounters>) -> CpuBackend {
         },
         Arc::new(CountingExecutor { counters }),
         NonZeroUsize::new(1).unwrap(),
-        CpuPlacementGuarantee::AdvisoryDeclared,
     )
     .unwrap();
     let providers = CpuProviderBundle::builder(CpuBackendKind::default_compiled())

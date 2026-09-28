@@ -1,10 +1,7 @@
 use super::*;
 #[cfg(target_os = "linux")]
 use crate::{process_cpu_affinity, CpuSet};
-use crate::{
-    CpuDomainId, CpuDomainOwnership, CpuId, CpuPlacementGuarantee, ExternalCpuDomain,
-    ResolvedCpuPlacement,
-};
+use crate::{CpuDomainId, CpuDomainOwnership, CpuId, ExternalCpuDomain, ResolvedCpuPlacement};
 
 #[cfg(target_os = "linux")]
 #[test]
@@ -21,10 +18,6 @@ fn engine_caps_workers_to_its_cpu_domain_and_owns_resources() {
     assert_eq!(engine.placement(), Some(&placement));
     assert_eq!(engine.domain().id(), CpuDomainId::new(0));
     assert_eq!(engine.domain().ownership(), CpuDomainOwnership::Managed);
-    assert_eq!(
-        engine.domain().placement_guarantee(),
-        Some(CpuPlacementGuarantee::ExactDeclared)
-    );
     let resources = engine.resources.lock().unwrap();
     assert_eq!(resources.buffers.max_retained_capacity_bytes(), 0);
     assert_eq!(resources.gemm_analysis_cache.capacity(), 1024);
@@ -47,10 +40,6 @@ fn engine_from_context_preserves_placement_context_and_resources() {
     assert_eq!(engine.domain().thread_budget().get(), 1);
     assert_eq!(Arc::strong_count(&context), 2);
     assert_eq!(engine.domain().id(), CpuDomainId::new(3));
-    assert_eq!(
-        engine.domain().placement_guarantee(),
-        Some(CpuPlacementGuarantee::AdvisoryDeclared)
-    );
     let resources = engine.resources.lock().unwrap();
     assert_eq!(resources.buffers.max_retained_capacity_bytes(), 4096);
     assert_eq!(resources.gemm_analysis_cache.capacity(), 1024);
@@ -80,7 +69,6 @@ fn external_engine_moves_the_resource_domain_without_a_staging_context() {
         placement.clone(),
         context,
         std::num::NonZeroUsize::new(1).unwrap(),
-        CpuPlacementGuarantee::AdvisoryDeclared,
     )
     .unwrap();
 

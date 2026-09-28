@@ -10,8 +10,7 @@ use super::super::*;
 use crate::{
     CpuDomainExecutor, CpuDomainExecutorCapabilities, CpuDomainExecutorError, CpuDomainId,
     CpuDomainOwnership, CpuExecutorAffinity, CpuExecutorReentrancy, CpuExecutorShutdown, CpuId,
-    CpuInnerParallelism, CpuPlacementGuarantee, CpuSet, ExternalCpuDomain, ScopedCpuJob,
-    ScopedCpuJobs,
+    CpuInnerParallelism, CpuSet, ExternalCpuDomain, ScopedCpuJob, ScopedCpuJobs,
 };
 use tenferro_tensor::TensorRead;
 use tenferro_tensor::{BackendSessionHost, SessionEntryError};
@@ -129,7 +128,6 @@ fn shared_scope_rejects_external_domain_without_executor_admission() {
             node_placement(0, cpu_set([0, 1])),
             2,
             2,
-            CpuPlacementGuarantee::ExactDeclared,
             Arc::clone(&installs),
         )],
         topology([0, 1, 2, 3]),
@@ -146,7 +144,7 @@ fn shared_scope_rejects_external_domain_without_executor_admission() {
 }
 
 #[test]
-fn bundle_install_rejects_external_workers_for_a_strict_multithread_subdomain() {
+fn bundle_install_accepts_external_workers_on_a_multithread_subdomain() {
     let backend = external_backend(
         CpuDomainId::new(7),
         [external_domain(
@@ -154,26 +152,20 @@ fn bundle_install_rejects_external_workers_for_a_strict_multithread_subdomain() 
             node_placement(0, cpu_set([0, 1])),
             2,
             2,
-            CpuPlacementGuarantee::ExactDeclared,
             Arc::new(AtomicUsize::new(0)),
         )],
         topology([0, 1, 2, 3]),
     )
     .unwrap();
 
-    let error = backend
+    // Placement of provider-created threads is unmanaged, so a count-controlled
+    // external provider is accepted even though its workers may leave the
+    // domain's CPU set; the set still decides resource exclusion.
+    backend
         .with_provider_bundle(bundle_with_gemm_capabilities(
             controlled_external_capabilities(),
         ))
-        .unwrap_err();
-    assert!(matches!(
-        error,
-        CpuProviderBundleInstallError::IncompatibleDomain {
-            domain_id,
-            source: crate::CpuProviderDomainError::PlacementNotEnforceable { .. },
-            ..
-        } if domain_id == CpuDomainId::new(7)
-    ));
+        .unwrap();
 }
 
 #[test]
@@ -185,7 +177,6 @@ fn bundle_install_allows_external_workers_for_advisory_or_process_wide_domains()
             node_placement(0, cpu_set([0, 1])),
             2,
             2,
-            CpuPlacementGuarantee::AdvisoryDeclared,
             Arc::new(AtomicUsize::new(0)),
         )],
         topology([0, 1, 2, 3]),
@@ -204,7 +195,6 @@ fn bundle_install_allows_external_workers_for_advisory_or_process_wide_domains()
             all_allowed_placement(cpu_set([0, 1, 2, 3])),
             2,
             2,
-            CpuPlacementGuarantee::ExactDeclared,
             Arc::new(AtomicUsize::new(0)),
         )],
         topology([0, 1, 2, 3]),
@@ -226,7 +216,6 @@ fn bundle_install_allows_controlled_external_budget_one_inline() {
             node_placement(0, cpu_set([0])),
             1,
             1,
-            CpuPlacementGuarantee::ExactDeclared,
             Arc::new(AtomicUsize::new(0)),
         )],
         topology([0, 1]),
@@ -241,7 +230,7 @@ fn bundle_install_allows_controlled_external_budget_one_inline() {
 
 #[cfg(any(target_os = "linux", target_os = "android"))]
 #[test]
-fn bundle_install_checks_lazily_constructible_exact_numa_domains() {
+fn bundle_install_accepts_external_workers_on_lazily_constructible_numa_domains() {
     let allowed = cpu_set([0, 1, 2, 3]);
     let topology =
         CpuTopology::from_discovered(allowed.clone(), [(NumaNodeId::new(0), cpu_set([0, 1]))])
@@ -254,19 +243,11 @@ fn bundle_install_checks_lazily_constructible_exact_numa_domains() {
         ResolvedCpuExecution::Managed(ResolvedCpuPlacement::AllAllowed { cpus: allowed }),
     );
 
-    let error = backend
+    backend
         .with_provider_bundle(bundle_with_gemm_capabilities(
             controlled_external_capabilities(),
         ))
-        .unwrap_err();
-    assert!(matches!(
-        error,
-        CpuProviderBundleInstallError::IncompatibleDomain {
-            domain_id,
-            source: crate::CpuProviderDomainError::PlacementNotEnforceable { .. },
-            ..
-        } if domain_id == CpuDomainId::new(1)
-    ));
+        .unwrap();
 }
 
 #[test]
@@ -278,7 +259,6 @@ fn bundle_install_rejects_uncontrolled_count_with_typed_source() {
             all_allowed_placement(cpu_set([0, 1])),
             2,
             2,
-            CpuPlacementGuarantee::ExactDeclared,
             Arc::new(AtomicUsize::new(0)),
         )],
         topology([0, 1]),
@@ -311,7 +291,6 @@ fn external_constructor_rejects_an_initial_incompatible_bundle_atomically() {
             drops: Some(Arc::clone(&drops)),
         }),
         NonZeroUsize::new(2).unwrap(),
-        CpuPlacementGuarantee::ExactDeclared,
     )
     .unwrap();
 
@@ -322,7 +301,8 @@ fn external_constructor_rejects_an_initial_incompatible_bundle_atomically() {
             topology([0, 1, 2, 3]),
             ResourceArbiter::new(),
             CpuBackendKind::Faer,
-            bundle_with_gemm_capabilities(controlled_external_capabilities()),
+            // An uncontrolled thread count cannot honor the two-thread budget.
+            bundle_with_gemm_capabilities(crate::CpuProviderExecutionCapabilities::default()),
         )
         .unwrap_err();
 
@@ -340,7 +320,7 @@ fn external_constructor_rejects_an_initial_incompatible_bundle_atomically() {
         CpuProviderBundleInstallError::IncompatibleDomain {
             domain_id,
             provider: crate::CpuProviderSlot::Gemm,
-            source: crate::CpuProviderDomainError::PlacementNotEnforceable { .. },
+            source: crate::CpuProviderDomainError::ThreadCountNotEnforceable { .. },
         } if *domain_id == CpuDomainId::new(12)
     ));
     assert!(std::error::Error::source(install_source)
@@ -363,7 +343,6 @@ fn external_constructor_accepts_the_initial_standard_faer_bundle() {
                 node_placement(0, cpu_set([0, 1])),
                 2,
                 2,
-                CpuPlacementGuarantee::ExactDeclared,
                 Arc::new(AtomicUsize::new(0)),
             )],
             topology([0, 1, 2, 3]),
@@ -387,7 +366,6 @@ fn external_constructor_rejects_the_initial_uncontrolled_standard_blas_bundle() 
                 all_allowed_placement(cpu_set([0, 1])),
                 1,
                 1,
-                CpuPlacementGuarantee::ExactDeclared,
                 Arc::new(AtomicUsize::new(0)),
             )],
             topology([0, 1]),
@@ -423,7 +401,6 @@ fn external_registry_routes_without_reconstructing_executors() {
         node_placement(0, allowed.clone()),
         2,
         1,
-        CpuPlacementGuarantee::ExactDeclared,
         Arc::clone(&node_runs),
     );
     let all = external_domain(
@@ -431,7 +408,6 @@ fn external_registry_routes_without_reconstructing_executors() {
         all_allowed_placement(allowed),
         3,
         2,
-        CpuPlacementGuarantee::ExactDeclared,
         Arc::clone(&all_runs),
     );
 
@@ -476,7 +452,6 @@ fn external_diagnostics_distinguish_worker_count_and_thread_budget() {
             placement.clone(),
             3,
             2,
-            CpuPlacementGuarantee::AdvisoryDeclared,
             Arc::new(AtomicUsize::new(0)),
         )],
         topology,
@@ -491,10 +466,6 @@ fn external_diagnostics_distinguish_worker_count_and_thread_budget() {
     assert_eq!(info.worker_count(), 3);
     assert_eq!(info.thread_budget(), 2);
     assert_eq!(backend.num_threads(), 2);
-    assert_eq!(
-        info.placement_guarantee(),
-        Some(CpuPlacementGuarantee::AdvisoryDeclared)
-    );
     assert_eq!(info.domain_ownership(), CpuDomainOwnership::ExternalManaged);
     assert_eq!(
         info.executor_affinity(),
@@ -510,7 +481,6 @@ fn external_diagnostics_never_upgrade_caller_affinity_or_shutdown_ownership() {
         node_placement(0, cpu_set([0])),
         Arc::new(CpuContext::with_threads(1).unwrap()),
         NonZeroUsize::new(1).unwrap(),
-        CpuPlacementGuarantee::ExactDeclared,
     )
     .unwrap();
     let backend = external_backend(CpuDomainId::new(5), [domain], topology([0])).unwrap();
@@ -533,7 +503,6 @@ fn explicit_unregistered_external_placement_is_typed_and_never_falls_back() {
             node_placement(0, cpu_set([0])),
             1,
             1,
-            CpuPlacementGuarantee::ExactDeclared,
             Arc::clone(&installs),
         )],
         topology([0, 1]),
@@ -827,7 +796,6 @@ fn overlapping_exact_and_advisory_external_domains_serialize() {
                 node_placement(0, cpu_set([0, 1])),
                 1,
                 1,
-                CpuPlacementGuarantee::ExactDeclared,
                 Arc::new(AtomicUsize::new(0)),
             ),
             external_domain(
@@ -835,7 +803,6 @@ fn overlapping_exact_and_advisory_external_domains_serialize() {
                 node_placement(1, cpu_set([1, 2])),
                 1,
                 1,
-                CpuPlacementGuarantee::AdvisoryDeclared,
                 Arc::new(AtomicUsize::new(0)),
             ),
         ],
@@ -902,7 +869,6 @@ fn external_executor_error_keeps_its_diagnostic_and_releases_the_permit() {
         node_placement(0, cpu_set([0, 1])),
         Arc::new(RejectingExecutor),
         NonZeroUsize::new(1).unwrap(),
-        CpuPlacementGuarantee::ExactDeclared,
     )
     .unwrap();
     let backend = external_backend(
@@ -959,7 +925,6 @@ fn external_linalg_execution_uses_the_supplied_no_inner_executor() {
             node_placement(0, cpu_set([0])),
             1,
             1,
-            CpuPlacementGuarantee::ExactDeclared,
             Arc::clone(&installs),
         )],
         topology([0]),
@@ -986,7 +951,6 @@ fn external_elementwise_and_session_operations_use_the_supplied_no_inner_executo
             node_placement(0, cpu_set([0])),
             1,
             1,
-            CpuPlacementGuarantee::ExactDeclared,
             Arc::clone(&installs),
         )],
         topology([0]),
@@ -1026,7 +990,6 @@ fn external_provider_dot_uses_the_supplied_no_inner_executor() {
             node_placement(0, cpu_set([0])),
             1,
             1,
-            CpuPlacementGuarantee::ExactDeclared,
             Arc::clone(&installs),
         )],
         topology([0]),
@@ -1078,7 +1041,6 @@ fn sequential_direct_session_native_dot_and_linalg_each_enter_exactly_once() {
         node_placement(0, cpu_set([0])),
         executor,
         NonZeroUsize::new(1).unwrap(),
-        CpuPlacementGuarantee::ExactDeclared,
     )
     .unwrap();
     let backend = external_backend(CpuDomainId::new(1), [domain], topology([0])).unwrap();
@@ -1161,7 +1123,6 @@ fn external_executor_error_is_preserved_as_a_typed_tensor_source() {
         node_placement(0, cpu_set([0])),
         Arc::new(RejectingExecutor),
         NonZeroUsize::new(1).unwrap(),
-        CpuPlacementGuarantee::ExactDeclared,
     )
     .unwrap();
     let mut backend = external_backend(CpuDomainId::new(1), [domain], topology([0])).unwrap();
@@ -1525,14 +1486,7 @@ fn registry_error(result: Result<CpuBackend, CpuBackendError>) -> ExternalCpuDom
 }
 
 fn external_domain_for_validation(id: u64, placement: ResolvedCpuPlacement) -> ExternalCpuDomain {
-    external_domain(
-        id,
-        placement,
-        1,
-        1,
-        CpuPlacementGuarantee::ExactDeclared,
-        Arc::new(AtomicUsize::new(0)),
-    )
+    external_domain(id, placement, 1, 1, Arc::new(AtomicUsize::new(0)))
 }
 
 fn external_domain(
@@ -1540,7 +1494,6 @@ fn external_domain(
     placement: ResolvedCpuPlacement,
     workers: usize,
     thread_budget: usize,
-    guarantee: CpuPlacementGuarantee,
     installs: Arc<AtomicUsize>,
 ) -> ExternalCpuDomain {
     ExternalCpuDomain::new(
@@ -1552,7 +1505,6 @@ fn external_domain(
             drops: None,
         }),
         NonZeroUsize::new(thread_budget).unwrap(),
-        guarantee,
     )
     .unwrap()
 }
@@ -1571,7 +1523,6 @@ fn external_domain_with_drop_counter(
             drops: Some(drops),
         }),
         NonZeroUsize::new(1).unwrap(),
-        CpuPlacementGuarantee::ExactDeclared,
     )
     .unwrap()
 }

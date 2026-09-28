@@ -6,31 +6,24 @@ use super::*;
 use crate::{
     CpuDomainExecutor, CpuDomainExecutorCapabilities, CpuDomainExecutorError, CpuDomainId,
     CpuExecutorAffinity, CpuExecutorReentrancy, CpuExecutorShutdown, CpuId, CpuInnerParallelism,
-    CpuPlacementGuarantee, CpuSet, CpuSetError, NumaNodeId, ResolvedCpuPlacement, ScopedCpuJob,
-    ScopedCpuJobs,
+    CpuSet, CpuSetError, NumaNodeId, ResolvedCpuPlacement, ScopedCpuJob, ScopedCpuJobs,
 };
 
 #[test]
-fn external_domain_guarantees_round_trip_without_upgrading_affinity() {
-    for guarantee in [
-        CpuPlacementGuarantee::ExactDeclared,
-        CpuPlacementGuarantee::AdvisoryDeclared,
-    ] {
-        let domain = ExternalCpuDomain::new(
-            CpuDomainId::new(7),
-            node_placement(0, &[0, 1]),
-            Arc::new(TestExecutor::new(2)),
-            nonzero(2),
-            guarantee,
-        )
-        .unwrap();
+fn external_domain_keeps_its_cpu_set_without_upgrading_affinity() {
+    let domain = ExternalCpuDomain::new(
+        CpuDomainId::new(7),
+        node_placement(0, &[0, 1]),
+        Arc::new(TestExecutor::new(2)),
+        nonzero(2),
+    )
+    .unwrap();
 
-        assert_eq!(domain.placement_guarantee(), Some(guarantee));
-        assert_eq!(
-            domain.executor_capabilities().affinity,
-            CpuExecutorAffinity::CallerDeclaredUnverified
-        );
-    }
+    assert_eq!(domain.cpus().map(|cpus| cpus.len()), Some(2));
+    assert_eq!(
+        domain.executor_capabilities().affinity,
+        CpuExecutorAffinity::CallerDeclaredUnverified
+    );
 }
 
 #[test]
@@ -40,7 +33,6 @@ fn worker_budget_mismatch_returns_typed_error() {
         node_placement(0, &[0, 1]),
         Arc::new(TestExecutor::new(2)),
         nonzero(3),
-        CpuPlacementGuarantee::ExactDeclared,
     )
     .unwrap_err();
 
@@ -60,23 +52,14 @@ fn external_node_domain_reports_public_diagnostics() {
     let placement = node_placement(4, &[3, 5]);
     let executor = Arc::new(TestExecutor::new(3));
     let expected_capabilities = executor.capabilities();
-    let domain = ExternalCpuDomain::new(
-        CpuDomainId::new(9),
-        placement.clone(),
-        executor,
-        nonzero(2),
-        CpuPlacementGuarantee::ExactDeclared,
-    )
-    .unwrap();
+    let domain =
+        ExternalCpuDomain::new(CpuDomainId::new(9), placement.clone(), executor, nonzero(2))
+            .unwrap();
 
     assert_eq!(domain.id(), CpuDomainId::new(9));
     assert_eq!(domain.placement(), Some(&placement));
     assert_eq!(domain.cpus().map(CpuSet::as_usize_vec), Some(vec![3, 5]));
     assert_eq!(domain.thread_budget(), nonzero(2));
-    assert_eq!(
-        domain.placement_guarantee(),
-        Some(CpuPlacementGuarantee::ExactDeclared)
-    );
     assert_eq!(domain.ownership(), CpuDomainOwnership::ExternalManaged);
     assert_eq!(domain.executor_capabilities(), expected_capabilities);
 }
@@ -89,7 +72,6 @@ fn external_all_allowed_domain_reports_public_diagnostics() {
         placement.clone(),
         Arc::new(TestExecutor::new(2)),
         nonzero(1),
-        CpuPlacementGuarantee::AdvisoryDeclared,
     )
     .unwrap();
 
@@ -99,10 +81,6 @@ fn external_all_allowed_domain_reports_public_diagnostics() {
         None
     );
     assert_eq!(domain.cpus().map(CpuSet::as_usize_vec), Some(vec![1, 8]));
-    assert_eq!(
-        domain.placement_guarantee(),
-        Some(CpuPlacementGuarantee::AdvisoryDeclared)
-    );
     assert_eq!(domain.ownership(), CpuDomainOwnership::ExternalManaged);
 }
 
@@ -117,7 +95,6 @@ fn caller_managed_domain_has_no_fabricated_placement_and_validates_budget() {
     assert_eq!(domain.admission_mode(), CpuAdmissionMode::CallerManaged);
     assert!(domain.placement().is_none());
     assert!(domain.cpus().is_none());
-    assert!(domain.placement_guarantee().is_none());
     assert_eq!(domain.executor_capabilities().worker_count.get(), 3);
     assert_eq!(domain.thread_budget().get(), 2);
 
@@ -145,7 +122,6 @@ fn external_domain_retains_executor_owner() {
         node_placement(0, &[0, 1]),
         executor,
         nonzero(2),
-        CpuPlacementGuarantee::ExactDeclared,
     )
     .unwrap();
     assert_eq!(drops.load(Ordering::Relaxed), 0);
@@ -187,7 +163,6 @@ fn managed_resource_domain_preserves_ownership_and_executor_arc() {
         node_placement(1, &[2, 3]),
         Arc::clone(&executor),
         nonzero(2),
-        CpuPlacementGuarantee::ExactDeclared,
         CpuDomainOwnership::Managed,
     );
 
@@ -203,7 +178,6 @@ fn external_domain_moves_into_resource_domain_without_replacing_executor() {
         all_allowed_placement(&[0, 1]),
         Arc::clone(&executor),
         nonzero(2),
-        CpuPlacementGuarantee::AdvisoryDeclared,
     )
     .unwrap();
 
