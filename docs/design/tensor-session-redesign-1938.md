@@ -129,78 +129,37 @@ Host-representation constructors are spelled `from_host_vec_col_major` /
 `from_host_vec_row_major` so that `TypedTensor::from_vec_col_major` stays
 unambiguous for the default `Dynamic` representation.
 
-**View parameterization status.** The owner half of this mapping is implemented;
-the view half is not, and the deviation is deliberate rather than an oversight.
-`TypedTensorView`/`TypedTensorViewMut` still carry one public type with the
-runtime union storage (`buffer` = host slice | backend | root, plus an optional
-retained region). A host owner's `as_view`/`as_view_mut` already produce a view
-with a plain host-slice buffer and no retained region, so the *runtime* property
-D3 asks for holds; what is missing is the type-level `D` parameter on the two
-view types. Landing it means splitting the view storage per representation and
-re-homing roughly eighty view methods, so it is a change of its own rather than
-an appendix to the owner work. The attempted shape, kept here so the next
-attempt does not rediscover it:
+**View parameterization status: implemented as representation markers.** Both
+view types now carry `D` (`TypedTensorView<'a, T, R = DynRank, D = Dynamic>`,
+same for the mutable view), and `Host` owners produce `Host`-marked views. The
+buffer field stays the concrete union (`TensorStorageRef`/`TensorStorageRefMut`)
+rather than a `D::Buffer` associated type, and that is a deliberate, measured
+decision: a generic-associated buffer projection is invariant in `'a`, so
+`TypedTensorView<'a, ..>` stops being covariant and `TensorRead<'long>` no longer
+shortens to `TensorRead<'short>`, which breaks the whole borrowed-read surface
+(`TensorBackendOps::add_read`/`sub_read` unifying two reads, views reborrowed out
+of longer borrows, downstream backends). Two attempts to do the split that way
+compiled their own bodies and then produced a wall of `lifetime may not live long
+enough` errors outside the view. Keeping the concrete buffer means the ranked
+view impls could simply become `D`-generic with no body changes at all.
 
-- Extend the sealed `Representation` trait with `ViewStorage<'a, T, R>` and
-  `ViewStorageMut<'a, T, R>`. `Host` selects `&'a [T]` / `&'a mut [T]`, so a host
-  view is a slice, a layout and a placement with no descriptor slot. `Gpu` and
-  `Dynamic` share one union storage (`buffer` + optional retained region),
-  because a group-backed view already knows whether it holds a backend buffer or
-  a root; splitting them further buys no guarantee.
-- Give the trait the accessors the view methods need, so those methods can stay
-  on one `impl<... D: Representation>` block instead of being duplicated:
-  `host_slice`, `backend_buffer`, `backend_allocation`, `retained_root`,
-  `backing_len`, `into_dynamic_storage` (to widen a `Host` view into the union
-  for erased dispatch) and `as_read_only_storage`.
-- Only the view methods that rebuild a view (`transpose_view`, `try_slice`,
-  `try_reshape`, `as_read_only`) need a storage clone; `ViewStorage` is
-  `Clone`, and a host slice clones for free.
-- Keep the constructor blocks on the default `Dynamic` representation, and add
-  host-slice constructors plus the host-only infallible accessors for `Host`.
-- Editing caution learned the hard way: the ~20 view struct literals and the
-  handful of destructuring patterns (`let Self { buffer, root, layout, placement }
-  = self;`) must be rewritten with exact-match edits. Scripted line surgery over
-  this file corrupted it once and had to be reverted, so a linear scan with
-  line-range-limited edits is the safer tool.
-- The read-only side turned out to be much cheaper than the mutable side, and a
-  second attempt confirmed the split. For `TypedTensorView` the trait needs six
-  accessors (`host_slice`, `backend_buffer`, `backend_allocation`,
-  `buffer_len`, `retained_root`, `join_dynamic`) and eleven method bodies change;
-  the struct's two fields become `D::Buffer` and `D::Root`, which keeps every
-  `Dynamic` literal and every `Dynamic`-only impl textually unchanged, with the
-  `GroupReadView`/`GroupWriteView` retained regions wrapped in public
-  `RetainedRead`/`RetainedWrite` newtypes so the associated types stay nameable.
-  Name both storage newtypes 'Dynamic...' only if the trait keeps a single
-  buffer per direction; `RetainedRead` must carry a hand-written `Clone` because
-  a derive would demand `T: Clone`.
-- **Blocker found by implementing it twice: a GAT-projected buffer costs
-  lifetime covariance, which this codebase relies on.** Selecting the view buffer
-  as `D::Buffer<'a, T>` through a generic associated type makes the projection
-  invariant in `'a`, because the compiler has no variance information for an
-  unresolved projection. `TypedTensorView<'a, ...>` then stops being covariant:
-  `TensorRead<'long>` no longer shortens to `TensorRead<'short>`, so every place
-  that unifies two borrowed reads (for example `TensorBackendOps::add_read`
-  building a two-element slice, or a view reborrowed out of a longer borrow)
-  fails to compile. Both attempts hit this: the read half compiled its own
-  bodies and then produced a wall of `lifetime may not live long enough` errors
-  in `backend.rs` and downstream. Restoring the concrete buffer field
-  (`TensorStorageRef<'a, T>` with its hand-written variance) makes the same code
-  compile again. So a literal `TypedTensorView<'a, T, R, D>` must either keep a
-  concrete buffer field and use `D` only as a construction-authority marker
-  (`Host` promises a host-slice buffer because only host constructors produce
-  it), or accept losing lifetime covariance across the whole borrowed-read
-  surface. That is a design decision for the view half, not an implementation
-  detail; make it before rewriting the ~80 methods.
-- `TypedTensorViewMut` is the expensive half: its methods split and rebuild
-  mutable buffers (`try_multi_slice_mut` splits two disjoint ranges,
-  `try_slice`/`try_reshape` reborrow, `transpose_view` consumes), so the trait
-  needs about seven more accessors (`host_slice_mut`, `host_slice_of_mut`,
-  `backend_buffer_of_mut`, `buffer_len_of_mut`, `retained_root_mut`,
-  `reborrow_dynamic_mut`, `into_dynamic_mut`) and eight method bodies change,
-  several of them the disjoint-split paths. Budget for that half explicitly, and
-  keep the `Dynamic`-only constructors, `as_read_only`/`into_read_only`,
-  `try_multi_slice_mut` and `try_reshape` in their own `Dynamic` impl block.
+What `D` therefore guarantees today, and what it does not:
 
+- A `Host`-marked view is only ever built by `TypedTensorView::from_host_slice` /
+  `TypedTensorViewMut::from_host_slice` and by
+  `TypedTensor<_, _, Host>::as_view`/`as_view_mut`, so it borrows a host slice and
+  carries no retained region in practice. Its `as_host_slice` /
+  `as_host_slice_mut` are infallible (documented with the construction
+  invariant). `Gpu`/`Dynamic` views use the union buffer and the runtime
+  representation checks.
+- The union `root: Option<GroupReadView>`/`Option<GroupWriteView>` field still
+  exists on the view type, so D3's "never carries an optional full group
+  descriptor" holds for a host view at runtime but not as a type-level absence of
+  the slot. Making the slot structurally absent needs either the GAT split (cost:
+  lifetime covariance, as above) or a descriptor-free host arm in a concrete
+  buffer enum (cost: the public `TensorStorageRef` gains the rank parameter and
+  its match sites change). Neither is required for the behaviour, so both are
+  recorded as the open item rather than adopted.
 ### D2. Allocation ownership, recycling, groups and extraction
 
 For a plain host tensor, adopt a `Vec<T>` directly; no group, `Arc` or extra

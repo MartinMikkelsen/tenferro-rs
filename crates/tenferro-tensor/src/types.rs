@@ -1381,17 +1381,18 @@ impl<T, R: TensorRank> TypedTensor<T, R, Host> {
     }
 
     /// Borrow this host owner as a typed view.
-    pub fn as_view(&self) -> TypedTensorView<'_, T, R> {
+    pub fn as_view(&self) -> TypedTensorView<'_, T, R, Host> {
         TypedTensorView {
             buffer: TensorStorageRef::Host(self.as_slice()),
             root: None,
             layout: self.layout(),
             placement: self.placement.clone(),
+            _representation: std::marker::PhantomData,
         }
     }
 
     /// Exclusively borrow this host owner as a mutable typed view.
-    pub fn as_view_mut(&mut self) -> TypedTensorViewMut<'_, T, R> {
+    pub fn as_view_mut(&mut self) -> TypedTensorViewMut<'_, T, R, Host> {
         let layout = self.layout();
         let placement = self.placement.clone();
         TypedTensorViewMut {
@@ -1399,6 +1400,7 @@ impl<T, R: TensorRank> TypedTensor<T, R, Host> {
             root: None,
             layout,
             placement,
+            _representation: std::marker::PhantomData,
         }
     }
 }
@@ -2487,12 +2489,41 @@ impl<T: 'static> TensorStorageRefMut<'_, T> {
 /// assert_eq!(view.get(&[1, 1]), Some(&4));
 /// # Ok::<(), tenferro_tensor::Error>(())
 /// ```
-#[derive(Clone, Debug)]
-pub struct TypedTensorView<'a, T, R: TensorRank = DynRank> {
+/// Borrowed typed view of one tensor representation.
+///
+/// The buffer stays concrete on purpose: a generic-associated buffer would make
+/// the projection invariant in `'a`, and the borrowed-read surface relies on
+/// `TensorRead<'long>` shortening to `TensorRead<'short>`. `D` therefore marks
+/// which representation produced the view - `Host` is only ever built from host
+/// slices, with no retained region.
+pub struct TypedTensorView<'a, T, R: TensorRank = DynRank, D: Representation = Dynamic> {
     buffer: TensorStorageRef<'a, T>,
     root: Option<GroupReadView<'a, T, R>>,
     layout: TensorLayout<R>,
     placement: Placement,
+    _representation: std::marker::PhantomData<D>,
+}
+
+impl<'a, T, R: TensorRank, D: Representation> Clone for TypedTensorView<'a, T, R, D> {
+    fn clone(&self) -> Self {
+        Self {
+            buffer: self.buffer.clone(),
+            root: self.root.clone(),
+            layout: self.layout.clone(),
+            placement: self.placement.clone(),
+            _representation: std::marker::PhantomData,
+        }
+    }
+}
+
+impl<'a, T, R: TensorRank, D: Representation> std::fmt::Debug for TypedTensorView<'a, T, R, D> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("TypedTensorView")
+            .field("shape", &self.layout.shape())
+            .field("placement", &self.placement)
+            .finish_non_exhaustive()
+    }
 }
 
 impl<'a, T: 'static> TypedTensorView<'a, T, DynRank> {
@@ -2568,7 +2599,7 @@ impl<'a, T: 'static> TypedTensorView<'a, T, DynRank> {
     }
 }
 
-impl<'a, T: 'static, R: TensorRank> TypedTensorView<'a, T, R> {
+impl<'a, T: 'static, R: TensorRank, D: Representation> TypedTensorView<'a, T, R, D> {
     /// Create a rank-generic borrowed host view from explicit layout metadata.
     ///
     /// # Examples
@@ -2606,7 +2637,9 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorView<'a, T, R> {
             "TypedTensorView::from_slice_ranked",
         )
     }
+}
 
+impl<'a, T: 'static, R: TensorRank, D: Representation> TypedTensorView<'a, T, R, D> {
     fn from_buffer_ref(
         shape: impl Into<R::Shape>,
         strides: impl Into<R::Strides>,
@@ -2622,9 +2655,84 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorView<'a, T, R> {
             root: None,
             layout,
             placement,
+            _representation: std::marker::PhantomData,
         })
     }
+}
 
+impl<'a, T: 'static, R: TensorRank> TypedTensorView<'a, T, R, Host> {
+    /// Create a representation-marked view over an explicit host layout.
+    ///
+    /// A `Host`-marked view is only ever built from a host slice, so it carries
+    /// no retained region and its host slice needs no runtime check.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::{DynRank, Host, TypedTensorView};
+    ///
+    /// let data = [1_i32, 2, 3, 4];
+    /// let view: TypedTensorView<'_, i32, DynRank, Host> =
+    ///     TypedTensorView::from_host_slice(vec![2, 2], vec![1, 2], 0, &data)?;
+    /// assert_eq!(view.as_host_slice(), &[1, 2, 3, 4]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::RankMismatch`] when `strides`
+    /// has a different rank, or
+    /// [`tenferro_tensor_core::ValidationError::ViewOutOfBounds`] /
+    /// [`tenferro_tensor_core::ValidationError::IntegerOverflow`] when the
+    /// reachable layout leaves `data` or overflows.
+    pub fn from_host_slice(
+        shape: impl Into<R::Shape>,
+        strides: impl Into<R::Strides>,
+        offset: isize,
+        data: &'a [T],
+    ) -> crate::Result<Self> {
+        Self::from_buffer_ref(
+            shape,
+            strides,
+            offset,
+            TensorStorageRef::Host(data),
+            default_placement(),
+            "TypedTensorView::from_host_slice",
+        )
+    }
+
+    /// Borrow the host elements without a runtime representation check.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::{DynRank, Host, TypedTensorView};
+    ///
+    /// let data = [1_i32, 2];
+    /// let view: TypedTensorView<'_, i32, DynRank, Host> =
+    ///     TypedTensorView::from_host_slice(vec![2], vec![1], 0, &data)?;
+    /// assert_eq!(view.as_host_slice(), &[1, 2]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    ///
+    /// # Panics
+    ///
+    /// Panics only if a `Host`-marked view was built from non-host storage,
+    /// which no constructor in this crate does.
+    pub fn as_host_slice(&self) -> &'a [T] {
+        match &self.buffer {
+            TensorStorageRef::Host(data) => data,
+            // INVARIANT: `Host`-marked views are constructed only by
+            // `from_host_slice` and by `TypedTensor<_, _, Host>::as_view`.
+            TensorStorageRef::Backend(_) | TensorStorageRef::Root(_) => {
+                unreachable!("a Host-marked view always borrows host storage")
+            }
+        }
+    }
+}
+
+impl<'a, T: 'static, R: TensorRank, D: Representation> TypedTensorView<'a, T, R, D> {
     /// Erase a borrowed view's rank and dtype for session dispatch without
     /// allocating tensor storage or promoting it into an allocation group.
     /// Common ranks use the existing inline shape and stride metadata.
@@ -2659,6 +2767,7 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorView<'a, T, R> {
             root: self.root.map(GroupReadView::into_dyn),
             layout,
             placement: self.placement,
+            _representation: std::marker::PhantomData,
         };
         Ok(TensorRead::from_view(T::tensor_view(view)))
     }
@@ -3224,6 +3333,7 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorView<'a, T, R> {
             root: self.root.clone(),
             layout,
             placement: self.placement.clone(),
+            _representation: std::marker::PhantomData,
         })
     }
 
@@ -3262,6 +3372,7 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorView<'a, T, R> {
             root: self.root.clone(),
             layout,
             placement: self.placement.clone(),
+            _representation: std::marker::PhantomData,
         })
     }
 
@@ -3333,6 +3444,7 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorView<'a, T, R> {
             root: self.root.as_ref().map(GroupReadView::clone_dyn),
             layout,
             placement: self.placement.clone(),
+            _representation: std::marker::PhantomData,
         })
     }
 }
@@ -3373,6 +3485,7 @@ impl<'a, R: TensorRank> TypedTensorView<'a, Complex32, R> {
             root: None,
             layout,
             placement: self.placement.clone(),
+            _representation: std::marker::PhantomData,
         })
     }
 }
@@ -3413,6 +3526,7 @@ impl<'a, R: TensorRank> TypedTensorView<'a, Complex64, R> {
             root: None,
             layout,
             placement: self.placement.clone(),
+            _representation: std::marker::PhantomData,
         })
     }
 }
@@ -3452,6 +3566,7 @@ impl<'a, R: TensorRank> TypedTensorView<'a, f32, R> {
             root: None,
             layout,
             placement: self.placement.clone(),
+            _representation: std::marker::PhantomData,
         })
     }
 }
@@ -3491,6 +3606,7 @@ impl<'a, R: TensorRank> TypedTensorView<'a, f64, R> {
             root: None,
             layout,
             placement: self.placement.clone(),
+            _representation: std::marker::PhantomData,
         })
     }
 }
@@ -3508,12 +3624,26 @@ impl<'a, R: TensorRank> TypedTensorView<'a, f64, R> {
 /// assert_eq!(view.as_read_only().get(&[2]), Some(&10));
 /// # Ok::<(), tenferro_tensor::Error>(())
 /// ```
-#[derive(Debug)]
-pub struct TypedTensorViewMut<'a, T, R: TensorRank = DynRank> {
+/// Exclusive typed view of one tensor representation.
+///
+/// As with [`TypedTensorView`], the buffer stays concrete so the view keeps its
+/// lifetime covariance, and `D` marks which representation produced the view.
+pub struct TypedTensorViewMut<'a, T, R: TensorRank = DynRank, D: Representation = Dynamic> {
     buffer: TensorStorageRefMut<'a, T>,
     root: Option<GroupWriteView<'a, T, R>>,
     layout: TensorLayout<R>,
     placement: Placement,
+    _representation: std::marker::PhantomData<D>,
+}
+
+impl<'a, T, R: TensorRank, D: Representation> std::fmt::Debug for TypedTensorViewMut<'a, T, R, D> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("TypedTensorViewMut")
+            .field("shape", &self.layout.shape())
+            .field("placement", &self.placement)
+            .finish_non_exhaustive()
+    }
 }
 
 /// Pair of mutable tensor views returned by disjoint multi-slice operations.
@@ -3613,7 +3743,7 @@ impl<'a, T: 'static> TypedTensorViewMut<'a, T, DynRank> {
     }
 }
 
-impl<'a, T: 'static, R: TensorRank> TypedTensorViewMut<'a, T, R> {
+impl<'a, T: 'static, R: TensorRank, D: Representation> TypedTensorViewMut<'a, T, R, D> {
     /// Create a rank-generic mutable host view from explicit layout metadata.
     ///
     /// # Examples
@@ -3652,7 +3782,9 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorViewMut<'a, T, R> {
             "TypedTensorViewMut::from_slice_ranked",
         )
     }
+}
 
+impl<'a, T: 'static, R: TensorRank, D: Representation> TypedTensorViewMut<'a, T, R, D> {
     fn from_buffer_ref_mut(
         shape: impl Into<R::Shape>,
         strides: impl Into<R::Strides>,
@@ -3671,9 +3803,70 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorViewMut<'a, T, R> {
             root: None,
             layout,
             placement,
+            _representation: std::marker::PhantomData,
         })
     }
+}
 
+impl<'a, T: 'static, R: TensorRank> TypedTensorViewMut<'a, T, R, Host> {
+    /// Create a representation-marked mutable view over an explicit host layout.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::{DynRank, Host, TypedTensorViewMut};
+    ///
+    /// let mut data = [1_i32, 2];
+    /// let mut view: TypedTensorViewMut<'_, i32, DynRank, Host> =
+    ///     TypedTensorViewMut::from_host_slice(vec![2], vec![1], 0, &mut data)?;
+    /// view.try_slice(&[tenferro_tensor::StridedSliceSpec::all()])?;
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::RankMismatch`] when `strides`
+    /// has a different rank, [`tenferro_tensor_core::ValidationError::OverlappingMutableLayout`]
+    /// when logical elements alias, or
+    /// [`tenferro_tensor_core::ValidationError::ViewOutOfBounds`] /
+    /// [`tenferro_tensor_core::ValidationError::IntegerOverflow`] when the
+    /// reachable layout leaves `data` or overflows.
+    pub fn from_host_slice(
+        shape: impl Into<R::Shape>,
+        strides: impl Into<R::Strides>,
+        offset: isize,
+        data: &'a mut [T],
+    ) -> crate::Result<Self> {
+        Self::from_buffer_ref_mut(
+            shape,
+            strides,
+            offset,
+            TensorStorageRefMut::Host(data),
+            default_placement(),
+            "TypedTensorViewMut::from_host_slice",
+        )
+    }
+
+    /// Exclusively borrow the host elements without a runtime check.
+    ///
+    /// # Panics
+    ///
+    /// Panics only if a `Host`-marked view was built from non-host storage,
+    /// which no constructor in this crate does.
+    pub fn as_host_slice_mut(&mut self) -> &mut [T] {
+        match &mut self.buffer {
+            TensorStorageRefMut::Host(data) => data,
+            // INVARIANT: `Host`-marked views are constructed only by
+            // `from_host_slice` and by `TypedTensor<_, _, Host>::as_view_mut`.
+            TensorStorageRefMut::Backend(_) => {
+                unreachable!("a Host-marked view always borrows host storage")
+            }
+        }
+    }
+}
+
+impl<'a, T: 'static, R: TensorRank, D: Representation> TypedTensorViewMut<'a, T, R, D> {
     /// Return the logical shape.
     ///
     /// # Examples
@@ -4104,6 +4297,7 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorViewMut<'a, T, R> {
             root: None,
             layout: self.layout.clone(),
             placement: self.placement.clone(),
+            _representation: std::marker::PhantomData,
         }
     }
 
@@ -4129,6 +4323,7 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorViewMut<'a, T, R> {
             root: None,
             layout: self.layout,
             placement: self.placement,
+            _representation: std::marker::PhantomData,
         }
     }
 
@@ -4164,6 +4359,7 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorViewMut<'a, T, R> {
             root,
             layout,
             placement,
+            _representation: std::marker::PhantomData,
         } = self;
         let layout = layout
             .transpose_view(axes)
@@ -4177,12 +4373,14 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorViewMut<'a, T, R> {
                 root,
                 layout,
                 placement,
+                _representation: std::marker::PhantomData,
             }),
             TensorStorageRefMut::Backend(buffer) => Ok(TypedTensorViewMut {
                 buffer: TensorStorageRefMut::Backend(buffer),
                 root,
                 layout,
                 placement,
+                _representation: std::marker::PhantomData,
             }),
         }
     }
@@ -4232,12 +4430,14 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorViewMut<'a, T, R> {
                 root: None,
                 layout,
                 placement,
+                _representation: std::marker::PhantomData,
             }),
             TensorStorageRefMut::Backend(buffer) => Ok(TypedTensorViewMut {
                 buffer: TensorStorageRefMut::Backend(*buffer),
                 root: None,
                 layout,
                 placement,
+                _representation: std::marker::PhantomData,
             }),
         }
     }
@@ -4481,12 +4681,14 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorViewMut<'a, T, R> {
                 root: None,
                 layout,
                 placement,
+                _representation: std::marker::PhantomData,
             }),
             TensorStorageRefMut::Backend(buffer) => Ok(TypedTensorViewMut {
                 buffer: TensorStorageRefMut::Backend(*buffer),
                 root: None,
                 layout,
                 placement,
+                _representation: std::marker::PhantomData,
             }),
         }
     }
@@ -4533,6 +4735,7 @@ impl<'a, R: TensorRank> TypedTensorViewMut<'a, Complex32, R> {
             root: None,
             layout,
             placement: self.placement.clone(),
+            _representation: std::marker::PhantomData,
         })
     }
 }
@@ -4578,6 +4781,7 @@ impl<'a, R: TensorRank> TypedTensorViewMut<'a, Complex64, R> {
             root: None,
             layout,
             placement: self.placement.clone(),
+            _representation: std::marker::PhantomData,
         })
     }
 }
@@ -4623,6 +4827,7 @@ impl<'a, R: TensorRank> TypedTensorViewMut<'a, f32, R> {
             root: None,
             layout,
             placement: self.placement.clone(),
+            _representation: std::marker::PhantomData,
         })
     }
 }
@@ -4668,6 +4873,7 @@ impl<'a, R: TensorRank> TypedTensorViewMut<'a, f64, R> {
             root: None,
             layout,
             placement: self.placement.clone(),
+            _representation: std::marker::PhantomData,
         })
     }
 }
@@ -6142,6 +6348,7 @@ fn typed_view_with_layout<T: TensorScalar + 'static>(
             root: None,
             layout,
             placement: tensor.placement.clone(),
+            _representation: std::marker::PhantomData,
         },
         DynamicStorage::Group(core) => {
             let root = core.group.view::<T>().unwrap_or_else(|error| {
@@ -6157,6 +6364,7 @@ fn typed_view_with_layout<T: TensorScalar + 'static>(
                 root: Some(root),
                 layout,
                 placement: tensor.placement.clone(),
+                _representation: std::marker::PhantomData,
             }
         }
     }
@@ -6186,6 +6394,7 @@ pub(crate) fn tensor_view_from_group<'a, T: TensorScalar>(
         root: Some(view.clone()),
         layout,
         placement,
+        _representation: std::marker::PhantomData,
     };
     Ok(T::tensor_view(typed))
 }
@@ -8658,6 +8867,7 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
                 root: None,
                 layout,
                 placement,
+                _representation: std::marker::PhantomData,
             },
             DynamicStorage::Group(core) => {
                 // Managed owners are constructed only with their matching preset T.
@@ -8678,6 +8888,7 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
                     root: Some(root),
                     layout,
                     placement,
+                    _representation: std::marker::PhantomData,
                 }
             }
         }
@@ -8711,6 +8922,7 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
                 root: None,
                 layout,
                 placement,
+                _representation: std::marker::PhantomData,
             },
             DynamicStorage::Group(core) => {
                 let mut root = core.group.view_mut::<T>().unwrap_or_else(|error| {
@@ -8729,6 +8941,7 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
                     root: Some(root),
                     layout,
                     placement,
+                    _representation: std::marker::PhantomData,
                 }
             }
         }
@@ -8796,6 +9009,7 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
             root: Some(root),
             layout,
             placement: self.placement.clone(),
+            _representation: std::marker::PhantomData,
         })
     }
 
@@ -8868,6 +9082,7 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
             root: Some(root),
             layout,
             placement,
+            _representation: std::marker::PhantomData,
         })
     }
 
@@ -9155,6 +9370,7 @@ impl<R: TensorRank> TypedTensor<Complex32, R> {
             root: None,
             layout,
             placement,
+            _representation: std::marker::PhantomData,
         })
     }
 
@@ -9230,6 +9446,7 @@ impl<R: TensorRank> TypedTensor<Complex64, R> {
             root: None,
             layout,
             placement,
+            _representation: std::marker::PhantomData,
         })
     }
 
@@ -9307,6 +9524,7 @@ impl<R: TensorRank> TypedTensor<f32, R> {
             root: None,
             layout,
             placement,
+            _representation: std::marker::PhantomData,
         })
     }
 
@@ -9385,6 +9603,7 @@ impl<R: TensorRank> TypedTensor<f64, R> {
             root: None,
             layout,
             placement,
+            _representation: std::marker::PhantomData,
         })
     }
 

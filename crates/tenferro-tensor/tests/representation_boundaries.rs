@@ -279,3 +279,34 @@ fn read_mapping_lends_a_host_view_without_copying() {
     // is the guard's slice.
     assert_eq!(view.host_storage().unwrap().as_ptr(), guard.as_ptr());
 }
+
+#[test]
+fn views_carry_a_representation_marker_and_host_views_need_no_check() {
+    // A host owner produces a Host-marked view, whose host slice is available
+    // without the runtime representation check the union view needs.
+    let host = TypedTensor::<i32, Rank<2>, Host>::from_host_vec_col_major([2, 2], vec![1, 2, 3, 4])
+        .unwrap();
+    let view: tenferro_tensor::TypedTensorView<'_, i32, Rank<2>, Host> = host.as_view();
+    assert_eq!(view.as_host_slice(), &[1, 2, 3, 4]);
+    assert!(view.host_storage().is_ok());
+    assert_eq!(view.get(&[1, 1]), Some(&4));
+
+    // The same view built directly from a host slice is Host-marked too.
+    let data = [10_i32, 20, 30, 40];
+    let direct: tenferro_tensor::TypedTensorView<'_, i32, Rank<2>, Host> =
+        tenferro_tensor::TypedTensorView::from_host_slice([2, 2], [1, 2], 0, &data).unwrap();
+    assert_eq!(direct.as_host_slice().as_ptr(), data.as_ptr());
+    assert_eq!(direct.layout().strides(), &[1, 2]);
+
+    let mut mutable = [1_i32, 2, 3, 4];
+    let mut mutable_view: tenferro_tensor::TypedTensorViewMut<'_, i32, Rank<2>, Host> =
+        tenferro_tensor::TypedTensorViewMut::from_host_slice([2, 2], [1, 2], 0, &mut mutable)
+            .unwrap();
+    mutable_view.as_host_slice_mut()[3] = 9;
+    assert_eq!(mutable[3], 9);
+
+    // A plain union view is still the default and still checked at runtime.
+    let union = host.into_dynamic();
+    let dynamic: tenferro_tensor::TypedTensorView<'_, i32, Rank<2>> = union.as_view();
+    assert!(dynamic.host_storage().is_ok());
+}
