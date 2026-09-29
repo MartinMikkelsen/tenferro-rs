@@ -1700,3 +1700,48 @@ fn auto_grouped_gemm_on_lanes_matches_reference_for_ordered_and_reversed_jobs() 
             .all(|(_, &value)| value == -7.0));
     }
 }
+
+#[test]
+fn auto_allocated_batched_gemm_on_lanes_matches_reference() {
+    use tenferro_tensor::DotGeneralConfig;
+
+    // The allocating entry point writes an uninitialized pooled destination;
+    // 1024 4x4x4 products clear the Auto lane gate at 4 threads, so each lane
+    // fully overwrites its own chunk of that destination (#1898).
+    let (m, batch) = (4_usize, 1024_usize);
+    let lhs_data: Vec<f64> = (0..m * m * batch).map(|i| (i % 13) as f64 - 6.0).collect();
+    let rhs_data: Vec<f64> = (0..m * m * batch).map(|i| (i % 7) as f64 * 0.5).collect();
+    let lhs = Tensor::from_vec_col_major(vec![m, m, batch], lhs_data.clone()).unwrap();
+    let rhs = Tensor::from_vec_col_major(vec![m, m, batch], rhs_data.clone()).unwrap();
+    let config = DotGeneralConfig {
+        lhs_contracting_dims: [1].as_slice().into(),
+        rhs_contracting_dims: [0].as_slice().into(),
+        lhs_batch_dims: [2].as_slice().into(),
+        rhs_batch_dims: [2].as_slice().into(),
+    };
+
+    let mut backend = CpuBackend::with_threads(4).unwrap();
+    let output = backend
+        .with_backend_session(|session| {
+            session.dot_general_read(
+                TensorRead::from_tensor(&lhs),
+                TensorRead::from_tensor(&rhs),
+                &config,
+            )
+        })
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(output.shape(), &[m, m, batch]);
+    let out = output.as_slice::<f64>().unwrap();
+    for b in 0..batch {
+        for j in 0..m {
+            for i in 0..m {
+                let expected: f64 = (0..m)
+                    .map(|k| lhs_data[i + m * k + m * m * b] * rhs_data[k + m * j + m * m * b])
+                    .sum();
+                assert_eq!(out[i + m * j + m * m * b], expected, "({i}, {j}, {b})");
+            }
+        }
+    }
+}

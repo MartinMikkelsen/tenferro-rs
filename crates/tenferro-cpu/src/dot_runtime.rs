@@ -1588,12 +1588,134 @@ fn execute_gemm_plan_into_uninit(
     accumulation: DotGeneralAccumulation,
     output_bytes: &mut [MaybeUninit<u8>],
 ) -> Result<CpuProviderOutcome> {
+    // An allocated batch takes the same Auto lane split as a caller-owned
+    // destination; without it eager and allocating calls stayed serial (#1898).
+    if plan.batch_count() > 1 && context.batch_policy().strategy() == CpuBatchStrategy::Auto {
+        if let Some(outcome) = try_execute_gemm_plan_into_uninit_on_lanes(
+            witness,
+            context,
+            plan,
+            lhs,
+            rhs,
+            accumulation,
+            output_bytes,
+        )? {
+            return Ok(outcome);
+        }
+    }
     let request = plan.uninit_request(lhs, rhs, accumulation);
     // SAFETY: the witness is structural proof the provider asserted the
     // full-overwrite contract via `unsafe impl`; the caller guarantees
     // beta == 0, so every destination element is written before `Executed`
     // and never read.
     unsafe { witness.gemm_into_uninit(context, request, output_bytes) }
+}
+
+/// Run an allocated strided batch as one contiguous chunk of items per outer
+/// lane, under the same gate as [`try_execute_gemm_plan_on_lanes`]. Each lane
+/// fully overwrites its own disjoint byte range. Returns `None` to keep the
+/// single provider call.
+fn try_execute_gemm_plan_into_uninit_on_lanes(
+    witness: &dyn CpuUninitGemmProvider,
+    context: &CpuExecutionContext<'_>,
+    plan: crate::gemm::ProviderGemmPlan,
+    lhs: &TensorRead<'_>,
+    rhs: &TensorRead<'_>,
+    accumulation: DotGeneralAccumulation,
+    output_bytes: &mut [MaybeUninit<u8>],
+) -> Result<Option<CpuProviderOutcome>> {
+    let batch = plan.batch_count();
+    if !context.can_fan_out_lanes() {
+        return Ok(None);
+    }
+    let Some(lanes) = auto_lane_count(plan, context.thread_budget().get()) else {
+        return Ok(None);
+    };
+    if !context.batch_policy().thresholds().fans_out(batch, lanes)
+        || crate::provider::check_outer_fan_out_delegates([&witness.execution_capabilities()])
+            .is_err()
+    {
+        return Ok(None);
+    }
+    let element_size = match lhs.dtype() {
+        DType::F32 => std::mem::size_of::<f32>(),
+        DType::F64 => std::mem::size_of::<f64>(),
+        DType::C32 => std::mem::size_of::<Complex32>(),
+        DType::C64 => std::mem::size_of::<Complex64>(),
+        _ => return Ok(None),
+    };
+    let Some(item_span) = output_item_span(plan) else {
+        return Ok(None);
+    };
+    let layout = plan.output_layout();
+    let (Ok(first), Ok(batch_stride)) = (
+        usize::try_from(layout.offset()),
+        usize::try_from(layout.batch_stride()),
+    ) else {
+        return Ok(None);
+    };
+    // Split the destination bytes into one disjoint slice per chunk of items.
+    let mut chunks = Vec::with_capacity(lanes);
+    let mut rest = output_bytes;
+    let mut cursor = 0usize;
+    let mut start = 0usize;
+    for lane in 0..lanes {
+        let len = batch / lanes + usize::from(lane < batch % lanes);
+        let (Some(begin), Some(end)) = (
+            start
+                .checked_mul(batch_stride)
+                .and_then(|value| value.checked_add(first))
+                .and_then(|value| value.checked_mul(element_size)),
+            (start + len - 1)
+                .checked_mul(batch_stride)
+                .and_then(|value| value.checked_add(first))
+                .and_then(|value| value.checked_add(item_span))
+                .and_then(|value| value.checked_mul(element_size)),
+        ) else {
+            return Ok(None);
+        };
+        if end - cursor > rest.len() {
+            return Ok(None);
+        }
+        let (_, tail) = std::mem::take(&mut rest).split_at_mut(begin - cursor);
+        let (chunk, tail) = tail.split_at_mut(end - begin);
+        rest = tail;
+        cursor = end;
+        let Some(chunk_plan) = plan.batch_chunk(start, len, 0) else {
+            return Ok(None);
+        };
+        chunks.push((chunk_plan, chunk));
+        start += len;
+    }
+
+    let outcomes = std::sync::Mutex::new(Vec::with_capacity(lanes));
+    context.with_outer_lanes(chunks, |(chunk_plan, chunk), lane| {
+        let request = chunk_plan.uninit_request(lhs, rhs, accumulation);
+        // SAFETY: as in `execute_gemm_plan_into_uninit`; each chunk is a
+        // disjoint slice covering exactly the items of `chunk_plan`, whose
+        // output layout starts at offset 0 within that slice.
+        let outcome = unsafe { witness.gemm_into_uninit(lane, request, chunk) };
+        outcomes
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(outcome);
+    });
+    let outcomes = outcomes
+        .into_inner()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut unsupported = None;
+    for outcome in outcomes {
+        match outcome? {
+            CpuProviderOutcome::Executed => {}
+            CpuProviderOutcome::Unsupported(reason) => unsupported = Some(reason),
+        }
+    }
+    // A declining lane leaves its chunk uninitialized; the caller discards an
+    // unsupported uninitialized checkout, so partial writes are never observed.
+    Ok(Some(match unsupported {
+        None => CpuProviderOutcome::Executed,
+        Some(reason) => CpuProviderOutcome::Unsupported(reason),
+    }))
 }
 
 fn canonical_gemm_fallback_supported(reason: CpuProviderUnsupported) -> bool {
