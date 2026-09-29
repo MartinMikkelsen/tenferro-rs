@@ -1,37 +1,88 @@
 {
-  "CpuExecSession construction": [
-    "crates/tenferro-cpu/src/backend.rs::CpuBackend::run_backend_session_cached",
-    "crates/tenferro-cpu/src/exec_session/tests.rs::native_operation_enters_the_selected_rayon_executor"
-  ],
-  "CudaExecSession construction": [
-    "crates/tenferro-gpu/src/cubecl/exec_session.rs::BackendSessionHost::with_backend_session"
-  ],
-  "WebGpuExecSession construction": [
-    "crates/tenferro-gpu/src/webgpu/exec_session.rs::BackendSessionHost::with_backend_session"
-  ],
-  "default_backend_session": [],
-  "install_with_indexed_pool_context": [],
-  "install_with_pool_context": [
-    "crates/tenferro-cpu/src/backend.rs::CpuBackend::install_with_pool_context",
-    "crates/tenferro-cpu/src/backend.rs::TensorFusion::execute_broadcast_multiply",
-    "crates/tenferro-cpu/src/backend.rs::TensorFusion::execute_elementwise_fusion"
-  ],
-  "install_with_pool_context_fresh": [],
-  "run_backend_session_cached": [
-    "crates/tenferro-cpu/src/backend.rs::BackendSessionHost::with_backend_session",
-    "crates/tenferro-cpu/src/backend.rs::BackendSessionHost::with_backend_session_cached",
-    "crates/tenferro-cpu/src/backend.rs::CpuBackend::run_backend_session_cached"
-  ],
-  "with_evaluation_scope": [],
-  "with_execution_scope": [
-    "crates/tenferro-cpu/src/backend/execution_scope.rs::CpuBackend::with_execution_scope"
-  ],
-  "with_session_entry_guard": [
-    "crates/tenferro-einsum/src/typed_eager_tests.rs::BackendSessionHost::with_backend_session",
-    "crates/tenferro-gpu/src/cubecl/exec_session.rs::BackendSessionHost::with_backend_session",
-    "crates/tenferro-gpu/src/webgpu/exec_session.rs::BackendSessionHost::with_backend_session",
-    "crates/tenferro-tensor/src/backend.rs::with_session_entry_guard",
-    "crates/tenferro-tensor/src/backend/tests.rs::with_session_entry_guard_rejects_nested_entry_in_every_build",
-    "crates/tenferro-tensor/src/backend/tests.rs::with_session_entry_guard_sets_and_restores_the_flag"
-  ]
+  "CPU backend install wrappers": {
+    "crates/tenferro-cpu/src/backend.rs::CpuBackend::install_with_pool": "PENDING #1946 F6: owner-side helper used only by owner canonicalization/fusion impls; removed with them",
+    "crates/tenferro-cpu/src/backend.rs::CpuBackend::install_with_pool_context": "PENDING #1946 F6: owner-side helper used only by owner canonicalization/fusion impls; removed with them",
+    "crates/tenferro-cpu/src/backend.rs::TensorFusion::execute_broadcast_multiply": "PENDING #1946 F6: owner-side fusion execution; CpuExecSession implements TensorFusion",
+    "crates/tenferro-cpu/src/backend.rs::TensorFusion::execute_broadcast_multiply_value": "PENDING #1946 F6: owner-side fusion execution; CpuExecSession implements TensorFusion",
+    "crates/tenferro-cpu/src/backend.rs::TensorFusion::execute_elementwise_fusion": "PENDING #1946 F6: owner-side fusion execution; CpuExecSession implements TensorFusion",
+    "crates/tenferro-cpu/src/backend.rs::TensorViewCanonicalization::copy_into": "PENDING #1946 F6: owner-side canonicalization; the session exposes copy_into",
+    "crates/tenferro-cpu/src/backend.rs::TensorViewCanonicalization::to_contiguous": "PENDING #1946 F6: owner-side canonicalization; the session exposes to_contiguous"
+  },
+  "CPU execution admission": {
+    "crates/tenferro-cpu/src/backend.rs::CpuBackend::install": "public entry for a user-owned closure on the backend's domain (D6: independent user kernels); no library caller",
+    "crates/tenferro-cpu/src/backend.rs::CpuBackend::install_with_pool_context_unmarked": "PENDING #1946 F6: body of the owner-side helpers removed with F6",
+    "crates/tenferro-cpu/src/backend.rs::CpuBackend::install_with_pool_unmarked": "PENDING #1946 F6: body of the owner-side helpers removed with F6",
+    "crates/tenferro-cpu/src/backend.rs::CpuBackend::run_backend_session_cached": "session host definition: builds the backend's execution state for one callback (CPU session construction behind with_backend_session[_cached])",
+    "crates/tenferro-cpu/src/backend.rs::CpuBackend::try_install": "PENDING #1946 F6: owner-side typed copy entry used only by owner canonicalization",
+    "crates/tenferro-cpu/src/backend.rs::CpuBackend::with_linalg_pool": "PENDING #1946 F6: doc(hidden) owner linalg entry with no library caller; operation families use CpuExecSession::with_linalg_pool",
+    "crates/tenferro-cpu/src/backend.rs::TensorBuffer::reclaim_buffer": "PENDING #1946 F6: owner-side reclaim with no caller; reclaim goes through the session"
+  },
+  "CpuExecSession construction": {
+    "crates/tenferro-cpu/src/backend.rs::CpuBackend::run_backend_session_cached": "session host definition: builds the backend's execution state for one callback (CPU session construction behind with_backend_session[_cached])"
+  },
+  "CudaExecSession construction": {
+    "crates/tenferro-gpu/src/cubecl/exec_session.rs::BackendSessionHost::with_backend_session": "session host definition: builds the backend's execution state for one callback (CUDA)"
+  },
+  "WebGpuExecSession construction": {
+    "crates/tenferro-gpu/src/webgpu/exec_session.rs::BackendSessionHost::with_backend_session": "session host definition: builds the backend's execution state for one callback (WebGPU)"
+  },
+  "backend session entry": {
+    "crates/tenferro-ad/src/eager.rs::CpuPlacementBoundEager::with_eager_session": "session host definition: eager session bound to one CPU placement",
+    "crates/tenferro-ad/src/eager.rs::EagerRuntime::with_execution_session": "session host definition: the eager runtime's backend session (owner lock, then admission)",
+    "crates/tenferro-ad/src/eager.rs::EagerRuntime::with_extension_execution_context": "named native-context boundary (D6/D12): owner-only extension fallback, never nested in a session",
+    "crates/tenferro-ad/src/eager_backend.rs::BackendSessionHost::with_backend_session": "session host definition: EagerBackend forwards to its concrete CPU/CUDA/WebGPU host",
+    "crates/tenferro-ad/src/eager_exec.rs::exec_op_on_tensor_reads_with_runtime": "native-context extension fallback reached from extension::apply_eager (documented owner-only boundary)",
+    "crates/tenferro-ad/src/eager_exec.rs::exec_standard_op_on_tensor_reads": "PENDING #1946 F9: only reached from extension::apply_standard_op one-shot; removed with it",
+    "crates/tenferro-ad/src/eager_exec.rs::exec_standard_op_on_tensors": "PENDING #1946 F9: only reached from extension::apply_standard_op one-shot; removed with it",
+    "crates/tenferro-internal-extension-macros/src/lib.rs::expand_extension_runtime": "generated PreparedOperationExecutor::execute: native-context bridge receiving an owner context (D6 supported native-context region)",
+    "crates/tenferro-runtime/src/exec.rs::eval_exec_ir_single_session_slots_with_workspace": "compiled-program execution (Runtime::run_compiled): one session per session-compatible run",
+    "crates/tenferro-runtime/src/exec.rs::eval_exec_ir_unsegmented_slot_values_with_cache_and_workspace": "compiled-program execution (Runtime::run_compiled): one session per session-compatible run",
+    "crates/tenferro-runtime/src/exec.rs::eval_exec_ir_unsegmented_slots_with_cache_and_workspace": "compiled-program execution (Runtime::run_compiled): one session per session-compatible run",
+    "crates/tenferro-runtime/src/exec.rs::reclaim_last_use_inputs_via_session": "compiled-program execution: best-effort input reclaim after an owner-fallback region",
+    "crates/tenferro-runtime/src/runtime/execution.rs::ErasedTensorBackendExecutor::execute_elementwise_fusion_slots": "scheduled compiled execution (run_compiled): session per executor location",
+    "crates/tenferro-runtime/src/runtime/execution.rs::ErasedTensorBackendExecutor::execute_slot_instruction": "scheduled compiled execution (run_compiled): session per instruction and executor location",
+    "crates/tenferro-runtime/src/runtime/execution.rs::ErasedTensorBackendExecutor::materialize_slot": "scheduled compiled execution (run_compiled): output collection",
+    "crates/tenferro-runtime/src/runtime/execution.rs::ErasedTensorBackendExecutor::materialize_slot_value": "scheduled compiled execution (run_compiled): output collection",
+    "crates/tenferro-runtime/src/segment.rs::eval_exec_segmented_session_regions_slot_values_with_workspace": "compiled-program execution (Runtime::run_compiled): single-session or per-region segments",
+    "crates/tenferro-runtime/src/segment.rs::eval_exec_segmented_session_regions_slots_with_workspace": "compiled-program execution (Runtime::run_compiled): single-session or per-region segments",
+    "crates/tenferro-runtime/src/segment.rs::eval_exec_segmented_single_session_slot_values_with_workspace": "compiled-program execution (Runtime::run_compiled): single-session or per-region segments",
+    "crates/tenferro-runtime/src/segment.rs::eval_exec_segmented_single_session_slots_with_workspace": "compiled-program execution (Runtime::run_compiled): single-session or per-region segments",
+    "crates/tenferro-runtime/src/segment.rs::eval_exec_segmented_slot_values_with_cache_and_workspace": "compiled-program execution (Runtime::run_compiled): single-session or per-region segments",
+    "crates/tenferro-runtime/src/segment.rs::eval_exec_segmented_slots_with_cache_and_workspace": "compiled-program execution (Runtime::run_compiled): single-session or per-region segments",
+    "crates/tenferro-tensor/src/backend.rs::BackendSessionHost::with_backend_session_cached": "default trait method: the cached host variant delegates to with_backend_session",
+    "ext/bf16-proof/src/einsum.rs::PreparedOperationExecutor::execute": "native-context extension executor (owner context from the runtime); no in-session route yet",
+    "ext/sparse/src/extension.rs::PreparedOperationExecutor::execute": "native-context extension executor (owner context from the runtime); no in-session route yet",
+    "ext/tropical/src/extension.rs::PreparedOperationExecutor::execute": "native-context extension executor (owner context from the runtime); no in-session route yet"
+  },
+  "default_backend_session": {},
+  "eager extension context entry": {
+    "crates/tenferro-ad/src/eager.rs::EagerRuntime::with_extension_erased_context": "named native-context boundary (D6/D12): erased owner context for extension fallback",
+    "crates/tenferro-ad/src/extension.rs::try_prepared_eager_extension": "native-context extension fallback (apply_eager): owner-only boundary, documented",
+    "crates/tenferro-einsum/src/eager_ad.rs::cached_expanded_eager_program": "PENDING #1946 F5: eager einsum program preparation reached from self-entering EagerEinsumExt",
+    "crates/tenferro-fft/src/eager_in_place.rs::apply": "documented exception: consuming in-place FFT preserves exclusive ownership (REPOSITORY_RULES Public API Convention)"
+  },
+  "eager session entry": {
+    "crates/tenferro-ad/src/eager.rs::EagerRuntime::grad_optional": "named top-level AD entry point (grad)",
+    "crates/tenferro-ad/src/eager.rs::EagerRuntime::with_eager_session": "session host definition: the eager runtime's borrowed EagerSession",
+    "crates/tenferro-ad/src/eager.rs::EagerTensor::backward": "named top-level AD entry point (backward)",
+    "crates/tenferro-ad/src/eager.rs::EagerTensor::backward_from_seed": "named top-level AD entry point (backward with a seed); private, reached from backward",
+    "crates/tenferro-ad/src/eager.rs::EagerTensor::duplicate_value": "named value extraction for non-host values; EagerSession::duplicate_value is the in-session form",
+    "crates/tenferro-ad/src/eager.rs::EagerTensor::new_leaf_with_session": "value import (from_tensor_in / requires_grad_in) of non-host reads; EagerSession::constant_from / variable_from are the in-session forms",
+    "crates/tenferro-ad/src/eager.rs::GradientValue::to_tensor": "named value extraction of a gradient",
+    "crates/tenferro-ad/src/eager.rs::semantic_eager_jvp_optional": "internal to the named jvp entry point",
+    "crates/tenferro-ad/src/eager.rs::semantic_eager_vjp_many": "internal to the named vjp/backward entry points",
+    "crates/tenferro-einsum/src/eager_ad.rs::execute_eager_einsum_program": "PENDING #1946 F5: self-entering eager einsum; replaced by the EagerSession einsum",
+    "crates/tenferro-einsum/src/eager_ad.rs::tensordot": "PENDING #1946 F5: self-entering eager tensordot; replaced by the EagerSession tensordot",
+    "crates/tenferro-einsum/src/eager_ad.rs::try_direct_binary_dot_general": "PENDING #1946 F5: self-entering eager einsum fast path; replaced by the EagerSession einsum"
+  },
+  "run_backend_session_cached": {
+    "crates/tenferro-cpu/src/backend.rs::BackendSessionHost::with_backend_session": "session host definition: builds the backend's execution state for one callback (CPU)",
+    "crates/tenferro-cpu/src/backend.rs::BackendSessionHost::with_backend_session_cached": "session host definition: builds the backend's execution state for one callback (CPU, cached variant)"
+  },
+  "with_evaluation_scope": {},
+  "with_execution_scope": {},
+  "with_session_entry_guard": {
+    "crates/tenferro-gpu/src/cubecl/exec_session.rs::BackendSessionHost::with_backend_session": "session host definition: builds the backend's execution state for one callback (CUDA)",
+    "crates/tenferro-gpu/src/webgpu/exec_session.rs::BackendSessionHost::with_backend_session": "session host definition: builds the backend's execution state for one callback (WebGPU)"
+  }
 }
