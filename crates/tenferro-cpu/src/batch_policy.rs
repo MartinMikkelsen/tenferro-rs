@@ -70,6 +70,9 @@ pub struct CpuBatchThresholds {
     vendor_batch_max_item_dim: usize,
     outer_min_items: usize,
     outer_min_items_per_lane: usize,
+    lane_item_overhead_ns: usize,
+    lane_muladds_per_ns: usize,
+    lane_min_work_ns: usize,
 }
 
 impl Default for CpuBatchThresholds {
@@ -81,6 +84,15 @@ impl Default for CpuBatchThresholds {
             outer_min_items: 2,
             // Chunk granularity: every lane must receive at least one item.
             outer_min_items_per_lane: 1,
+            // Lane cost model, fitted on an AMD EPYC host (1..16 threads,
+            // faer, f64): one GEMM item costs about 50 ns of per-call work plus
+            // 1 ns per 16 multiply-adds, and a lane pays off only with about
+            // 8 us of estimated work. A pure multiply-add cutoff missed large
+            // batches of tiny items; too many short lanes made 16 threads
+            // slower than one.
+            lane_item_overhead_ns: 50,
+            lane_muladds_per_ns: 16,
+            lane_min_work_ns: 8_000,
         }
     }
 }
@@ -126,6 +138,115 @@ impl CpuBatchThresholds {
     #[must_use]
     pub fn outer_min_items_per_lane(&self) -> usize {
         self.outer_min_items_per_lane
+    }
+
+    /// Lane cost model: the estimated fixed cost of one GEMM item, in
+    /// nanoseconds, that a lane must amortize.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// assert_eq!(tenferro_cpu::CpuBatchThresholds::default().lane_item_overhead_ns(), 50);
+    /// ```
+    #[must_use]
+    pub fn lane_item_overhead_ns(&self) -> usize {
+        self.lane_item_overhead_ns
+    }
+
+    /// Lane cost model: estimated multiply-adds per nanosecond of one lane.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// assert_eq!(tenferro_cpu::CpuBatchThresholds::default().lane_muladds_per_ns(), 16);
+    /// ```
+    #[must_use]
+    pub fn lane_muladds_per_ns(&self) -> usize {
+        self.lane_muladds_per_ns
+    }
+
+    /// Lane cost model: the least estimated work, in nanoseconds, each lane
+    /// must receive before `Auto` splits a batch inside an entered session.
+    /// Zero lets the item thresholds alone decide.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// assert_eq!(tenferro_cpu::CpuBatchThresholds::default().lane_min_work_ns(), 8_000);
+    /// ```
+    #[must_use]
+    pub fn lane_min_work_ns(&self) -> usize {
+        self.lane_min_work_ns
+    }
+
+    /// Return these thresholds with a different per-item lane overhead.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_cpu::CpuBatchThresholds;
+    /// let thresholds = CpuBatchThresholds::default().with_lane_item_overhead_ns(100);
+    /// assert_eq!(thresholds.lane_item_overhead_ns(), 100);
+    /// ```
+    #[must_use]
+    pub fn with_lane_item_overhead_ns(mut self, nanoseconds: usize) -> Self {
+        self.lane_item_overhead_ns = nanoseconds;
+        self
+    }
+
+    /// Return these thresholds with a different lane throughput estimate.
+    /// Zero is treated as one multiply-add per nanosecond.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_cpu::CpuBatchThresholds;
+    /// let thresholds = CpuBatchThresholds::default().with_lane_muladds_per_ns(32);
+    /// assert_eq!(thresholds.lane_muladds_per_ns(), 32);
+    /// ```
+    #[must_use]
+    pub fn with_lane_muladds_per_ns(mut self, muladds: usize) -> Self {
+        self.lane_muladds_per_ns = muladds;
+        self
+    }
+
+    /// Return these thresholds with a different minimum work per lane.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_cpu::CpuBatchThresholds;
+    /// let thresholds = CpuBatchThresholds::default().with_lane_min_work_ns(0);
+    /// assert_eq!(thresholds.lane_min_work_ns(), 0);
+    /// ```
+    #[must_use]
+    pub fn with_lane_min_work_ns(mut self, nanoseconds: usize) -> Self {
+        self.lane_min_work_ns = nanoseconds;
+        self
+    }
+
+    /// Estimated cost of one `m x n x k` GEMM item under the lane cost model.
+    pub(crate) fn lane_item_ns(&self, m: usize, n: usize, k: usize) -> usize {
+        let muladds = m.saturating_mul(n).saturating_mul(k);
+        self.lane_item_overhead_ns
+            .saturating_add(muladds / self.lane_muladds_per_ns.max(1))
+    }
+
+    /// The lanes `Auto` uses for `items` jobs of `total_ns` estimated work on
+    /// `threads` threads, or `None` when fewer than two lanes would each
+    /// receive [`Self::lane_min_work_ns`] and pass [`Self::fans_out`].
+    pub(crate) fn auto_lanes(
+        &self,
+        items: usize,
+        total_ns: usize,
+        threads: usize,
+    ) -> Option<usize> {
+        let by_work = match self.lane_min_work_ns {
+            0 => usize::MAX,
+            min => total_ns / min,
+        };
+        let lanes = threads.min(items).min(by_work);
+        (lanes >= 2 && self.fans_out(items, lanes)).then_some(lanes)
     }
 
     /// Return these thresholds with a different vendor-batch item limit.

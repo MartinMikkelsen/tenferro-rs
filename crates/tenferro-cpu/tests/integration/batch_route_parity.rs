@@ -138,3 +138,182 @@ fn allocating_and_into_batched_dots_take_the_same_lane_decision() {
     assert!(allocated.iter().all(|call| call.0 == "uninitialized"));
     assert!(into.iter().all(|call| call.0 == "initialized"));
 }
+
+fn spy_backend(
+    threads: usize,
+    policy: Option<tenferro_cpu::CpuBatchPolicy>,
+) -> (Arc<Spy>, CpuBackend) {
+    let spy = Arc::new(Spy::default());
+    let bundle = CpuProviderBundle::custom_builder()
+        .gemm_provider(spy.clone())
+        .layout_transform_provider(Arc::new(StridedLayoutTransformProvider))
+        .build()
+        .unwrap();
+    let mut cpu = CpuBackend::with_threads(threads)
+        .unwrap()
+        .with_provider_bundle(bundle)
+        .unwrap();
+    if let Some(policy) = policy {
+        cpu = cpu.with_batch_policy(policy);
+    }
+    (spy, cpu)
+}
+
+fn batched_config() -> DotGeneralConfig {
+    DotGeneralConfig {
+        lhs_contracting_dims: [1].as_slice().into(),
+        rhs_contracting_dims: [0].as_slice().into(),
+        lhs_batch_dims: [2].as_slice().into(),
+        rhs_batch_dims: [2].as_slice().into(),
+    }
+}
+
+/// A 4x4x4 x 64 batch is below the default 8 us per-lane cost cutoff.
+fn short_batch() -> Tensor {
+    Tensor::from_vec_col_major([4, 4, 64], vec![1.0_f64; 16 * 64]).unwrap()
+}
+
+fn lane_calls(calls: &[(&'static str, bool, usize)]) -> usize {
+    calls.iter().filter(|call| call.1).count()
+}
+
+/// #1946 F3: the lane cost model is part of the effective batch policy, with
+/// backend default < scoped override precedence.
+#[test]
+fn lane_cost_model_follows_the_effective_policy() {
+    use tenferro_cpu::{with_batch_policy, CpuBatchPolicy, CpuBatchStrategy, CpuBatchThresholds};
+
+    let eager_split = CpuBatchPolicy::new(CpuBatchStrategy::Auto)
+        .with_thresholds(CpuBatchThresholds::default().with_lane_min_work_ns(0));
+    let a = short_batch();
+    let config = batched_config();
+
+    // Default policy: the short batch stays one provider call.
+    let (spy, mut cpu) = spy_backend(4, None);
+    cpu.with_backend_session(|session| {
+        session
+            .dot_general_read(
+                TensorRead::from_tensor(&a),
+                TensorRead::from_tensor(&a),
+                &config,
+            )
+            .unwrap();
+    })
+    .unwrap();
+    assert_eq!(
+        lane_calls(&spy.take()),
+        0,
+        "default: no split below the cost cutoff"
+    );
+
+    // Backend default override: the same batch splits.
+    let (spy, mut cpu) = spy_backend(4, Some(eager_split));
+    cpu.with_backend_session(|session| {
+        session
+            .dot_general_read(
+                TensorRead::from_tensor(&a),
+                TensorRead::from_tensor(&a),
+                &config,
+            )
+            .unwrap();
+    })
+    .unwrap();
+    assert_eq!(
+        lane_calls(&spy.take()),
+        4,
+        "backend default override splits"
+    );
+
+    // Scoped override on a default backend applies inside the scope only.
+    let (spy, mut cpu) = spy_backend(4, None);
+    cpu.with_backend_session(|session| {
+        with_batch_policy(session, eager_split, |session| {
+            session
+                .dot_general_read(
+                    TensorRead::from_tensor(&a),
+                    TensorRead::from_tensor(&a),
+                    &config,
+                )
+                .unwrap();
+        })
+        .unwrap();
+        assert_eq!(lane_calls(&spy.take()), 4, "scoped override splits");
+        session
+            .dot_general_read(
+                TensorRead::from_tensor(&a),
+                TensorRead::from_tensor(&a),
+                &config,
+            )
+            .unwrap();
+        assert_eq!(
+            lane_calls(&spy.take()),
+            0,
+            "the override ends with its scope"
+        );
+    })
+    .unwrap();
+}
+
+/// #1946 F3: a forced OuterParallel splits a strided batch on both routes,
+/// regardless of the cost model, and is a typed error where no lanes exist.
+#[test]
+fn forced_outer_parallel_splits_strided_batches_or_fails_typed() {
+    use tenferro_cpu::{CpuBatchPolicy, CpuBatchStrategy};
+
+    let forced = CpuBatchPolicy::new(CpuBatchStrategy::OuterParallel);
+    let a = short_batch();
+    let config = batched_config();
+    let (spy, mut cpu) = spy_backend(4, Some(forced));
+    let mut out = Tensor::from_vec_col_major([4, 4, 64], vec![0.0_f64; 16 * 64]).unwrap();
+    cpu.with_backend_session(|session| {
+        let fresh = session
+            .dot_general_read(
+                TensorRead::from_tensor(&a),
+                TensorRead::from_tensor(&a),
+                &config,
+            )
+            .unwrap();
+        assert_eq!(fresh.as_slice::<f64>().unwrap(), vec![4.0; 16 * 64]);
+        let allocated = spy.take();
+        session
+            .dot_general_read_into(
+                TensorRead::from_tensor(&a),
+                TensorRead::from_tensor(&a),
+                &config,
+                TensorWrite::from_tensor(&mut out),
+            )
+            .unwrap();
+        assert_eq!(out.as_slice::<f64>().unwrap(), vec![4.0; 16 * 64]);
+        for (route, calls) in [("allocating", allocated), ("into", spy.take())] {
+            assert_eq!(lane_calls(&calls), 4, "{route}: {calls:?}");
+            assert_eq!(
+                calls.iter().map(|call| call.2).sum::<usize>(),
+                64,
+                "{route}"
+            );
+        }
+    })
+    .unwrap();
+
+    let (spy, mut cpu) = spy_backend(1, Some(forced));
+    let error = cpu
+        .with_backend_session(|session| {
+            session.dot_general_read(
+                TensorRead::from_tensor(&a),
+                TensorRead::from_tensor(&a),
+                &config,
+            )
+        })
+        .unwrap()
+        .unwrap_err();
+    assert_eq!(
+        error.kind(),
+        tenferro_tensor::ErrorKind::Unsupported,
+        "{error}"
+    );
+    assert!(error.to_string().contains("OuterParallel"), "{error}");
+    assert!(
+        spy.take().is_empty(),
+        "no provider call before the typed error"
+    );
+}

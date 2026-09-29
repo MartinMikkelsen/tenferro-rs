@@ -3023,36 +3023,48 @@ fn canonical_fallback_borrows_an_operand_that_is_already_canonical() {
 
 #[test]
 fn auto_lane_count_needs_enough_work_per_lane() {
-    let batch_plan = |item: usize, batch: usize| {
-        let lhs =
-            Tensor::from_vec_col_major(vec![item, item, batch], vec![0.0_f64; item * item * batch])
-                .unwrap();
-        let rhs =
-            Tensor::from_vec_col_major(vec![item, item, batch], vec![0.0_f64; item * item * batch])
-                .unwrap();
-        let mut output =
-            Tensor::from_vec_col_major(vec![item, item, batch], vec![0.0_f64; item * item * batch])
-                .unwrap();
-        crate::gemm::prepare_provider_gemm(
-            &mut GemmAnalysisCache::default(),
-            None,
-            &TensorRead::from_tensor(&lhs),
-            &TensorRead::from_tensor(&rhs),
-            &TensorWrite::from_tensor(&mut output),
-            &config(&[1], &[0], &[2], &[2]),
-        )
-        .unwrap()
-        .expect("a compact strided batch has a direct plan")
+    // Strided batches of `item`^3 GEMMs under the default lane cost model.
+    let lanes = |thresholds: crate::CpuBatchThresholds, item: usize, batch: usize, threads| {
+        let item_ns = thresholds.lane_item_ns(item, item, item);
+        thresholds.auto_lanes(batch, item_ns * batch, threads)
     };
+    let default = crate::CpuBatchThresholds::default();
     // Tiny items: per-call overhead dominates, so many items fill a lane.
-    assert_eq!(super::auto_lane_count(batch_plan(4, 1024), 4), Some(4));
-    assert_eq!(super::auto_lane_count(batch_plan(4, 64), 4), None);
+    assert_eq!(lanes(default, 4, 1024, 4), Some(4));
+    assert_eq!(lanes(default, 4, 64, 4), None);
     // Larger items need fewer per lane (16^3: 306 ns, so 27 per lane);
     // lanes never exceed the threads.
-    assert_eq!(super::auto_lane_count(batch_plan(32, 8), 16), Some(2));
-    assert_eq!(super::auto_lane_count(batch_plan(16, 128), 8), Some(4));
+    assert_eq!(lanes(default, 32, 8, 16), Some(2));
+    assert_eq!(lanes(default, 16, 128, 8), Some(4));
     // One lane of work is no fan-out.
-    assert_eq!(super::auto_lane_count(batch_plan(16, 32), 8), None);
+    assert_eq!(lanes(default, 16, 32, 8), None);
+
+    // #1946 F3: every cost-model parameter comes from the policy.
+    // No minimum work: the item thresholds alone decide.
+    assert_eq!(lanes(default.with_lane_min_work_ns(0), 4, 64, 4), Some(4));
+    assert_eq!(lanes(default.with_lane_min_work_ns(0), 4, 1, 4), None);
+    // A larger minimum keeps a batch serial that the default splits.
+    assert_eq!(
+        lanes(default.with_lane_min_work_ns(1_000_000), 4, 1024, 4),
+        None
+    );
+    // A dearer per-item overhead makes a short batch worth splitting.
+    assert_eq!(
+        lanes(default.with_lane_item_overhead_ns(500), 4, 64, 4),
+        Some(4)
+    );
+    // A slower lane makes a moderate batch worth splitting; zero throughput is
+    // treated as one multiply-add per nanosecond instead of dividing by zero.
+    assert_eq!(
+        lanes(default.with_lane_muladds_per_ns(1), 16, 32, 8),
+        Some(8)
+    );
+    assert_eq!(
+        lanes(default.with_lane_muladds_per_ns(0), 16, 32, 8),
+        lanes(default.with_lane_muladds_per_ns(1), 16, 32, 8)
+    );
+    // The item thresholds still apply on top of the cost model.
+    assert_eq!(lanes(default.with_outer_min_items(2048), 4, 1024, 4), None);
 }
 
 #[test]
@@ -3139,12 +3151,24 @@ fn auto_grouped_lane_count_needs_enough_work_per_lane() {
             .collect::<Vec<_>>()
     };
     // Unit jobs cost the 50 ns overhead each: 400 fill two 8 us lanes.
-    assert_eq!(super::auto_grouped_lane_count(&jobs(6, 1), 4), None);
-    assert_eq!(super::auto_grouped_lane_count(&jobs(400, 1), 4), Some(2));
+    assert_eq!(
+        super::auto_grouped_lane_count(crate::CpuBatchThresholds::default(), &jobs(6, 1), 4),
+        None
+    );
+    assert_eq!(
+        super::auto_grouped_lane_count(crate::CpuBatchThresholds::default(), &jobs(400, 1), 4),
+        Some(2)
+    );
     // Four 32^3 jobs (about 2.1 us each) are one lane of work; four 64^3
     // jobs fill every lane, capped by the job count.
-    assert_eq!(super::auto_grouped_lane_count(&jobs(4, 32), 4), None);
-    assert_eq!(super::auto_grouped_lane_count(&jobs(4, 64), 16), Some(4));
+    assert_eq!(
+        super::auto_grouped_lane_count(crate::CpuBatchThresholds::default(), &jobs(4, 32), 4),
+        None
+    );
+    assert_eq!(
+        super::auto_grouped_lane_count(crate::CpuBatchThresholds::default(), &jobs(4, 64), 16),
+        Some(4)
+    );
 }
 
 #[test]

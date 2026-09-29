@@ -701,10 +701,16 @@ impl DotGeneralRuntime {
                     ))
                 }
             }
+            // Forced outer lanes split the batch inside the entered Inner
+            // context; one thread or an unsplittable layout is a typed error
+            // raised where the plan is known.
+            CpuBatchStrategy::OuterParallel if entry.thread_budget().get() > 1 => {
+                Ok(ParallelMode::Inner)
+            }
             CpuBatchStrategy::OuterParallel => Err(strategy_unavailable(
                 OP,
                 strategy,
-                "strided-batched contractions have no outer-parallel route; use grouped GEMM",
+                "the selected CPU domain has one thread, so there are no outer lanes",
             )),
             _ => Ok(mode),
         }
@@ -1160,9 +1166,12 @@ impl DotGeneralRuntime {
                     // Inside a session the lanes share the entered pool, so
                     // only enough estimated work per lane pays for the split.
                     Some(context) if context.can_fan_out_lanes() => {
-                        auto_grouped_lane_count(config.jobs(), context.thread_budget().get())
-                            .filter(|&lanes| policy.thresholds().fans_out(jobs, lanes))
-                            .map(|_| crate::provider::CpuOuterFanOut::Lanes(*context))
+                        auto_grouped_lane_count(
+                            policy.thresholds(),
+                            config.jobs(),
+                            context.thread_budget().get(),
+                        )
+                        .map(|_| crate::provider::CpuOuterFanOut::Lanes(*context))
                     }
                     Some(_) => None,
                 }
@@ -1194,10 +1203,12 @@ impl DotGeneralRuntime {
             // one thread. The executor keeps one index per job and schedules
             // them itself.
             let chunks = match fan_out {
-                crate::provider::CpuOuterFanOut::Lanes(context) => {
-                    auto_grouped_lane_count(config.jobs(), context.thread_budget().get())
-                        .unwrap_or_else(|| jobs.min(context.thread_budget().get()))
-                }
+                crate::provider::CpuOuterFanOut::Lanes(context) => auto_grouped_lane_count(
+                    policy.thresholds(),
+                    config.jobs(),
+                    context.thread_budget().get(),
+                )
+                .unwrap_or_else(|| jobs.min(context.thread_budget().get())),
                 crate::provider::CpuOuterFanOut::Executor(_) => jobs,
             };
             macro_rules! outer_typed {
@@ -1324,11 +1335,19 @@ fn execute_gemm_plan(
         CpuBatchStrategy::Auto if batch_count > 1 => crate::provider::CpuVendorBatch::Forbidden,
         _ => vendor_batch_for(policy, strategy),
     };
-    if strategy == CpuBatchStrategy::Auto && batch_count > 1 {
+    if batch_count > 1
+        && matches!(
+            strategy,
+            CpuBatchStrategy::Auto | CpuBatchStrategy::OuterParallel
+        )
+    {
         if let Some(outcome) =
             try_execute_gemm_plan_on_lanes(provider, context, plan, lhs, rhs, accumulation, output)?
         {
             return Ok(outcome);
+        }
+        if strategy == CpuBatchStrategy::OuterParallel {
+            return Err(forced_lanes_unavailable());
         }
     }
     let request = plan
@@ -1342,51 +1361,62 @@ fn execute_gemm_plan(
     Ok(outcome)
 }
 
-// Cost model for splitting a strided batch across outer lanes under `Auto`,
-// fitted on an AMD EPYC host (1..16 threads, faer, f64): one item costs about
-// `LANE_ITEM_OVERHEAD_NS` of per-call work plus one nanosecond per
-// `LANE_MULADDS_PER_NS` multiply-adds, and a lane pays off only with at least
-// `AUTO_LANE_MIN_NS` of estimated work. Too many short lanes made 16 threads
-// slower than one; a pure multiply-add threshold missed large batches of tiny
-// items, whose cost is per-call overhead.
-const LANE_ITEM_OVERHEAD_NS: usize = 50;
-const LANE_MULADDS_PER_NS: usize = 16;
-const AUTO_LANE_MIN_NS: usize = 8_000;
-
-/// The number of outer lanes `Auto` uses for a strided batch, or `None` when
-/// fewer than two lanes would each receive enough work.
-fn auto_lane_count(plan: crate::gemm::ProviderGemmPlan, threads: usize) -> Option<usize> {
-    let batch = plan.batch_count();
-    let item_ns = lane_item_ns(plan.rows(), plan.columns(), plan.contracted());
-    let min_items_per_lane = AUTO_LANE_MIN_NS.div_ceil(item_ns).max(1);
-    let lanes = threads.min(batch / min_items_per_lane);
-    (lanes >= 2).then_some(lanes)
+/// The lanes a strided batch runs on, or `None` for one provider call.
+///
+/// `Auto` asks the policy's lane cost model
+/// ([`crate::CpuBatchThresholds::auto_lanes`]); `OuterParallel` forces one lane
+/// per thread, capped by the batch. The context must be able to fan out.
+/// The typed error for a forced `OuterParallel` strided batch that cannot be
+/// split: the context cannot fan out, the output items do not occupy disjoint
+/// increasing ranges, or the provider may not run inside tenferro lanes.
+fn forced_lanes_unavailable() -> Error {
+    strategy_unavailable(
+        OP,
+        CpuBatchStrategy::OuterParallel,
+        "this strided batch cannot be split over outer lanes (one thread or a nested lane, \
+         overlapping or reversed output items, or a provider that runs its own threads)",
+    )
 }
 
-/// Estimated cost of one `m x n x k` GEMM item under the lane cost model.
-fn lane_item_ns(m: usize, n: usize, k: usize) -> usize {
-    let muladds = m.saturating_mul(n).saturating_mul(k);
-    LANE_ITEM_OVERHEAD_NS.saturating_add(muladds / LANE_MULADDS_PER_NS)
+fn strided_batch_lanes(
+    context: &CpuExecutionContext<'_>,
+    plan: crate::gemm::ProviderGemmPlan,
+) -> Option<usize> {
+    let batch = plan.batch_count();
+    if batch <= 1 || !context.can_fan_out_lanes() {
+        return None;
+    }
+    let threads = context.thread_budget().get();
+    let policy = context.batch_policy();
+    match policy.strategy() {
+        CpuBatchStrategy::Auto => {
+            let thresholds = policy.thresholds();
+            let item_ns = thresholds.lane_item_ns(plan.rows(), plan.columns(), plan.contracted());
+            thresholds.auto_lanes(batch, item_ns.saturating_mul(batch), threads)
+        }
+        CpuBatchStrategy::OuterParallel => Some(threads.min(batch)).filter(|&lanes| lanes >= 2),
+        _ => None,
+    }
 }
 
 /// The number of outer lanes `Auto` uses for grouped jobs inside an entered
-/// context, or `None` when fewer than two lanes would each receive
-/// [`AUTO_LANE_MIN_NS`] of estimated work. Each lane runs a contiguous chunk
-/// of at least one job, so lanes never exceed the job count.
+/// context, or `None` when fewer than two lanes would each receive enough
+/// estimated work. Each lane runs a contiguous chunk of at least one job, so
+/// lanes never exceed the job count.
 fn auto_grouped_lane_count(
+    thresholds: crate::CpuBatchThresholds,
     jobs: &[tenferro_tensor::backend::GroupedGemmJob],
     threads: usize,
 ) -> Option<usize> {
     let total_ns = jobs.iter().fold(0usize, |total, job| {
-        total.saturating_add(lane_item_ns(job.rows(), job.cols(), job.contracted()))
+        total.saturating_add(thresholds.lane_item_ns(job.rows(), job.cols(), job.contracted()))
     });
-    let lanes = threads.min(jobs.len()).min(total_ns / AUTO_LANE_MIN_NS);
-    (lanes >= 2).then_some(lanes)
+    thresholds.auto_lanes(jobs.len(), total_ns, threads)
 }
 
 /// Run a strided batch as one contiguous chunk of items per outer lane when
 /// `Auto` may fan out: the context owns more than one Rayon thread, the lane
-/// cost model ([`auto_lane_count`]) and the policy thresholds allow it, the provider
+/// cost model ([`strided_batch_lanes`]) and the policy thresholds allow it, the provider
 /// may run inside a lane, and the output items occupy disjoint increasing
 /// ranges. Returns `None` to keep the single provider call.
 fn try_execute_gemm_plan_on_lanes(
@@ -1398,16 +1428,10 @@ fn try_execute_gemm_plan_on_lanes(
     accumulation: DotGeneralAccumulation,
     output: &mut TensorWrite<'_>,
 ) -> Result<Option<CpuProviderOutcome>> {
-    let batch = plan.batch_count();
-    if !context.can_fan_out_lanes() {
-        return Ok(None);
-    }
-    let Some(lanes) = auto_lane_count(plan, context.thread_budget().get()) else {
+    let Some(lanes) = strided_batch_lanes(context, plan) else {
         return Ok(None);
     };
-    if !context.batch_policy().thresholds().fans_out(batch, lanes)
-        || crate::provider::check_outer_fan_out_delegates([&provider.execution_capabilities()])
-            .is_err()
+    if crate::provider::check_outer_fan_out_delegates([&provider.execution_capabilities()]).is_err()
     {
         return Ok(None);
     }
@@ -1590,7 +1614,13 @@ fn execute_gemm_plan_into_uninit(
 ) -> Result<CpuProviderOutcome> {
     // An allocated batch takes the same Auto lane split as a caller-owned
     // destination; without it eager and allocating calls stayed serial (#1898).
-    if plan.batch_count() > 1 && context.batch_policy().strategy() == CpuBatchStrategy::Auto {
+    let strategy = context.batch_policy().strategy();
+    if plan.batch_count() > 1
+        && matches!(
+            strategy,
+            CpuBatchStrategy::Auto | CpuBatchStrategy::OuterParallel
+        )
+    {
         if let Some(outcome) = try_execute_gemm_plan_into_uninit_on_lanes(
             witness,
             context,
@@ -1601,6 +1631,9 @@ fn execute_gemm_plan_into_uninit(
             output_bytes,
         )? {
             return Ok(outcome);
+        }
+        if strategy == CpuBatchStrategy::OuterParallel {
+            return Err(forced_lanes_unavailable());
         }
     }
     let request = plan.uninit_request(lhs, rhs, accumulation);
@@ -1625,15 +1658,10 @@ fn try_execute_gemm_plan_into_uninit_on_lanes(
     output_bytes: &mut [MaybeUninit<u8>],
 ) -> Result<Option<CpuProviderOutcome>> {
     let batch = plan.batch_count();
-    if !context.can_fan_out_lanes() {
-        return Ok(None);
-    }
-    let Some(lanes) = auto_lane_count(plan, context.thread_budget().get()) else {
+    let Some(lanes) = strided_batch_lanes(context, plan) else {
         return Ok(None);
     };
-    if !context.batch_policy().thresholds().fans_out(batch, lanes)
-        || crate::provider::check_outer_fan_out_delegates([&witness.execution_capabilities()])
-            .is_err()
+    if crate::provider::check_outer_fan_out_delegates([&witness.execution_capabilities()]).is_err()
     {
         return Ok(None);
     }
