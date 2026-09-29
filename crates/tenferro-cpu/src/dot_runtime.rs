@@ -75,6 +75,7 @@ enum ProviderCapabilityPolicy {
 const GROUPED_JOB_STATE_BITS: usize = 2;
 const GROUPED_JOBS_PER_STATE_WORD: usize = usize::BITS as usize / GROUPED_JOB_STATE_BITS;
 const GROUPED_INLINE_STATE_WORDS: usize = 4;
+#[cfg(test)]
 const GROUPED_INLINE_JOB_CAPACITY: usize = GROUPED_INLINE_STATE_WORDS * GROUPED_JOBS_PER_STATE_WORD;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -384,6 +385,7 @@ impl CpuProviderBundle {
             .map_err(|error| Error::backend_source(OP, error))
     }
 
+    #[cfg(test)]
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn execute_dot_general_into(
         &self,
@@ -440,6 +442,7 @@ impl CpuProviderBundle {
         )
     }
 
+    #[cfg(test)]
     pub(crate) fn execute_grouped_gemm(
         &self,
         entry: &CpuOperationEntry<'_>,
@@ -2299,6 +2302,7 @@ pub struct CpuProviderBundleBuilder {
 }
 
 impl CpuProviderBundleBuilder {
+    #[cfg(test)]
     pub(crate) fn provider_default_compatibility(mut self) -> Self {
         self.capability_policy = ProviderCapabilityPolicy::ProviderDefaultCompatibility;
         self
@@ -2526,19 +2530,21 @@ pub(crate) fn validate_axis_groups<'a>(
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct ValidatedDotGeneral<'a> {
     axes: CpuContractionAxes<'a>,
+    #[cfg(test)]
     output_element_count: usize,
 }
 
 impl<'a> ValidatedDotGeneral<'a> {
+    #[cfg(test)]
     pub(crate) fn axes(&self) -> &CpuContractionAxes<'a> {
         &self.axes
     }
 
+    #[cfg(test)]
     pub(crate) fn output_element_count(&self) -> usize {
         self.output_element_count
     }
 
-    #[allow(dead_code)]
     pub(crate) fn request<'request, 'input, 'output>(
         &'request self,
         lhs: &'request TensorRead<'input>,
@@ -2840,7 +2846,8 @@ pub(crate) fn validate_dot_general<'a>(
     crate::structural::validate_cpu_host_placement(OP, "output", write_placement(output))?;
     validate_read_layout(lhs, "lhs")?;
     validate_read_layout(rhs, "rhs")?;
-    let output_element_count = validate_write_layout(output, "output")?;
+    // The element count only feeds a test accessor; the validation is the point.
+    let _output_element_count = validate_write_layout(output, "output")?;
 
     let axes = validate_axis_groups(lhs.shape().len(), rhs.shape().len(), config)?;
     validate_paired_extents(lhs, rhs, &axes)?;
@@ -2848,7 +2855,8 @@ pub(crate) fn validate_dot_general<'a>(
 
     Ok(ValidatedDotGeneral {
         axes,
-        output_element_count,
+        #[cfg(test)]
+        output_element_count: _output_element_count,
     })
 }
 

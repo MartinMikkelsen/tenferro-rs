@@ -164,11 +164,7 @@ pub(crate) mod buffer_pool {
 }
 mod capability;
 pub mod context;
-// INVARIANT: Task 2 stages crate-private stack adapters here before Task 3 wires
-// them into CpuContext.
-#[allow(dead_code)]
 mod domain_executor;
-#[allow(dead_code)]
 mod dot_runtime;
 pub(crate) use tenferro_cpu_basic::PooledUninitOutput;
 pub(crate) use tenferro_cpu_basic::{erased_raw_strided_ref, erased_raw_strided_uninit_mut};
