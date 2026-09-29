@@ -3,7 +3,7 @@ mod kernels;
 mod linalg;
 
 use tenferro_gpu::cuda::CudaExecSession;
-use tenferro_tensor::{Tensor, TensorRead, TensorView};
+use tenferro_tensor::{Tensor, TensorRead, TensorView, TensorViewCanonicalization};
 
 use crate::backend::{unsupported_dtype, LinalgBackend};
 use crate::extension::{
