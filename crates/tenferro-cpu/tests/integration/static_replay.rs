@@ -13,7 +13,7 @@ fn static_analytic_replay_preserves_owned_and_reversed_values() {
     let owned = Tensor::from_typed::<f64>(typed.duplicate().unwrap());
     let reversed = typed
         .as_view()
-        .try_slice(&[StridedSliceSpec::new(0, Some(3), -1)])
+        .slice_view(&[StridedSliceSpec::new(0, Some(3), -1)])
         .unwrap();
     for op in 0..9 {
         let expected: Vec<_> = values

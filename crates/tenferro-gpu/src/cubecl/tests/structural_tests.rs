@@ -1132,7 +1132,7 @@ fn cuda_cutensor_permutation_transpose_and_to_contiguous_match_cpu() {
 
     let view = gpu_tensor
         .as_view()
-        .try_slice_axis(0, StridedSliceSpec::reverse())
+        .slice_axis_view(0, StridedSliceSpec::reverse())
         .unwrap()
         .transpose_view([1, 0])
         .unwrap();
@@ -1773,7 +1773,7 @@ fn cuda_to_contiguous_preserves_negative_stride_view() {
     };
     let view = gpu_tensor
         .as_view()
-        .try_slice_axis(0, StridedSliceSpec::reverse())
+        .slice_axis_view(0, StridedSliceSpec::reverse())
         .unwrap();
 
     let compact = in_cuda_session(&mut gpu, |s| s.to_contiguous(&view)).unwrap();

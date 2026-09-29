@@ -493,7 +493,7 @@ fn managed_borrowed_cholesky_respects_offset_and_rejects_strides() {
     let input = domain.tensor(&[2, 3], vec![-99.0_f64, -99.0, 4.0, 2.0, 2.0, 3.0]);
     let view = input
         .as_view()
-        .try_slice_axis(1, tenferro_tensor::StridedSliceSpec::new(1, Some(3), 1))
+        .slice_axis_view(1, tenferro_tensor::StridedSliceSpec::new(1, Some(3), 1))
         .unwrap();
     with_cpu_linalg(&mut backend(&domain), |session| {
         let output = session

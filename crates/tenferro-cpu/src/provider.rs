@@ -465,7 +465,7 @@ impl<'a> CpuExecutionContext<'a> {
     ///         cpu.with_linalg_pool(|context, buffers| {
     ///             let view = input
     ///                 .as_view()
-    ///                 .try_slice(&[StridedSliceSpec::reverse()])?;
+    ///                 .slice_view(&[StridedSliceSpec::reverse()])?;
     ///             context.with_materialized_tensor_read(
     ///                 buffers,
     ///                 "example",

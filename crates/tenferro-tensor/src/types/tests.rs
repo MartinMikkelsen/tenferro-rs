@@ -37,7 +37,7 @@ fn view_transforms_preserve_host_representation_marker() -> crate::Result<()> {
         TypedTensor::<f64, Rank<2>, Host>::from_host_vec_col_major([2, 2], vec![1., 2., 3., 4.])?;
 
     let view: TypedTensorView<'_, f64, Rank<2>, Host> = tensor.as_view();
-    let reshaped: TypedTensorView<'_, f64, DynRank, Host> = view.try_reshape(&[4])?;
+    let reshaped: TypedTensorView<'_, f64, DynRank, Host> = view.reshape_view(&[4])?;
     assert_eq!(reshaped.as_host_slice(), &[1., 2., 3., 4.]);
     assert_eq!(view.host_col_major_view()?.get([1, 0]), Some(&2.));
     assert_eq!(tensor.host_col_major_view()?.get([0, 1]), Some(&3.));
@@ -45,7 +45,7 @@ fn view_transforms_preserve_host_representation_marker() -> crate::Result<()> {
     let mut view_mut: TypedTensorViewMut<'_, f64, Rank<2>, Host> = tensor.as_view_mut();
     {
         let reshaped_mut: TypedTensorViewMut<'_, f64, DynRank, Host> =
-            view_mut.try_reshape(&[4])?;
+            view_mut.reshape_view(&[4])?;
         let _ = reshaped_mut;
     }
     let read_only: TypedTensorView<'_, f64, Rank<2>, Host> = view_mut.as_read_only();

@@ -79,7 +79,7 @@ fn flatten_compact_read(
     macro_rules! flatten {
         ($variant:ident, $view:expr) => {
             Ok(TensorRead::from_view(TensorView::$variant(
-                $view.try_reshape(&[element_count])?,
+                $view.reshape_view(&[element_count])?,
             )))
         };
     }

@@ -155,7 +155,7 @@ fn scoped_materialization_reclaims_successful_temporary_for_immediate_reuse() {
             <f64 as PoolScalar>::pool_release(buffers, seed);
             let retained = buffers.stats();
 
-            let view = source.as_view().try_slice(&reversed).unwrap();
+            let view = source.as_view().slice_view(&reversed).unwrap();
             let materialized_ptr = context.with_materialized_tensor_read(
                 buffers,
                 "scoped_materialization_success",
@@ -187,7 +187,7 @@ fn scoped_materialization_reclaims_temporary_after_numerical_error() {
             <f64 as PoolScalar>::pool_release(buffers, seed);
             let retained = buffers.stats();
 
-            let view = source.as_view().try_slice(&reversed).unwrap();
+            let view = source.as_view().slice_view(&reversed).unwrap();
             let error = context
                 .with_materialized_tensor_read(
                     buffers,
@@ -238,7 +238,7 @@ fn nested_materialization_reclaims_first_when_second_materialization_fails() {
             <f64 as PoolScalar>::pool_release(buffers, seed);
             let retained = buffers.stats();
 
-            let first = source.as_view().try_slice(&reversed).unwrap();
+            let first = source.as_view().slice_view(&reversed).unwrap();
             let second = opaque.as_view().transpose_view([1, 0]).unwrap();
             let error = context
                 .with_materialized_tensor_read(
@@ -321,7 +321,7 @@ fn solve_read_vector_rhs_reshape_stays_inside_one_entry() {
     let a = a_base.as_view().transpose_view([1, 0]).unwrap();
     let b = b_base
         .as_view()
-        .try_slice(&[StridedSliceSpec::reverse()])
+        .slice_view(&[StridedSliceSpec::reverse()])
         .unwrap();
 
     let output = with_cpu_linalg(&mut backend, |backend| {
@@ -448,7 +448,7 @@ fn faer_full_svd_read_enters_once_on_both_view_paths() {
     // still stay inside the same single operation entry.
     let reversed = input
         .as_view()
-        .try_slice(&[StridedSliceSpec::reverse(), StridedSliceSpec::reverse()])
+        .slice_view(&[StridedSliceSpec::reverse(), StridedSliceSpec::reverse()])
         .unwrap();
     let outputs = assert_one_install(&installs, &submits, || {
         with_cpu_linalg(&mut backend, |backend| {
@@ -479,49 +479,49 @@ fn every_one_input_read_fallback_enters_once() {
     let input = TypedTensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 3.0]).unwrap();
     let reversed = [StridedSliceSpec::reverse(), StridedSliceSpec::reverse()];
 
-    let view = input.as_view().try_slice(&reversed).unwrap();
+    let view = input.as_view().slice_view(&reversed).unwrap();
     assert_one_install(&installs, &submits, || {
         with_cpu_linalg(&mut backend, |backend| {
             backend.svd_read(TensorRead::from_view(TensorView::F64(view)))
         })
     });
 
-    let view = input.as_view().try_slice(&reversed).unwrap();
+    let view = input.as_view().slice_view(&reversed).unwrap();
     assert_one_install(&installs, &submits, || {
         with_cpu_linalg(&mut backend, |backend| {
             backend.qr_read(TensorRead::from_view(TensorView::F64(view)))
         })
     });
 
-    let view = input.as_view().try_slice(&reversed).unwrap();
+    let view = input.as_view().slice_view(&reversed).unwrap();
     assert_one_install(&installs, &submits, || {
         with_cpu_linalg(&mut backend, |backend| {
             backend.eigh_read(TensorRead::from_view(TensorView::F64(view)))
         })
     });
 
-    let view = input.as_view().try_slice(&reversed).unwrap();
+    let view = input.as_view().slice_view(&reversed).unwrap();
     assert_one_install(&installs, &submits, || {
         with_cpu_linalg(&mut backend, |backend| {
             backend.cholesky_read(TensorRead::from_view(TensorView::F64(view)))
         })
     });
 
-    let view = input.as_view().try_slice(&reversed).unwrap();
+    let view = input.as_view().slice_view(&reversed).unwrap();
     assert_one_install(&installs, &submits, || {
         with_cpu_linalg(&mut backend, |backend| {
             backend.lu_read(TensorRead::from_view(TensorView::F64(view)))
         })
     });
 
-    let view = input.as_view().try_slice(&reversed).unwrap();
+    let view = input.as_view().slice_view(&reversed).unwrap();
     assert_one_install(&installs, &submits, || {
         with_cpu_linalg(&mut backend, |backend| {
             backend.full_piv_lu_read(TensorRead::from_view(TensorView::F64(view)))
         })
     });
 
-    let view = input.as_view().try_slice(&reversed).unwrap();
+    let view = input.as_view().slice_view(&reversed).unwrap();
     assert_one_install(&installs, &submits, || {
         with_cpu_linalg(&mut backend, |backend| {
             backend.eig_read(TensorRead::from_view(TensorView::F64(view)))
@@ -654,7 +654,7 @@ fn executor_rejection_preserves_input_and_pool_then_recovers() {
     let input_before = input.host_data().unwrap().to_vec();
     let pool_before = backend.buffer_pool_stats().unwrap();
     let reversed = [StridedSliceSpec::reverse(), StridedSliceSpec::reverse()];
-    let view = input.as_view().try_slice(&reversed).unwrap();
+    let view = input.as_view().slice_view(&reversed).unwrap();
 
     let error = with_cpu_linalg(&mut backend, |backend| {
         backend.svd_read(TensorRead::from_view(TensorView::F64(view)))
@@ -672,7 +672,7 @@ fn executor_rejection_preserves_input_and_pool_then_recovers() {
     assert_eq!(input.host_data().unwrap(), input_before.as_slice());
     assert_eq!(backend.buffer_pool_stats().unwrap(), pool_before);
 
-    let view = input.as_view().try_slice(&reversed).unwrap();
+    let view = input.as_view().slice_view(&reversed).unwrap();
     let outputs = with_cpu_linalg(&mut backend, |backend| {
         backend.svd_read(TensorRead::from_view(TensorView::F64(view)))
     })
@@ -689,7 +689,7 @@ fn provider_independent_cholesky_failure_uses_one_entry_and_recovers() {
     let invalid =
         TypedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 2.0, 1.0]).unwrap();
     let reversed = [StridedSliceSpec::reverse(), StridedSliceSpec::reverse()];
-    let view = invalid.as_view().try_slice(&reversed).unwrap();
+    let view = invalid.as_view().slice_view(&reversed).unwrap();
 
     let error = with_cpu_linalg(&mut backend, |backend| {
         backend.cholesky_read(TensorRead::from_view(TensorView::F64(view)))
@@ -706,7 +706,7 @@ fn provider_independent_cholesky_failure_uses_one_entry_and_recovers() {
     assert_eq!(submits.load(Ordering::Relaxed), 0);
 
     let valid = TypedTensor::from_vec_col_major(vec![2, 2], vec![4.0_f64, 0.0, 0.0, 9.0]).unwrap();
-    let view = valid.as_view().try_slice(&reversed).unwrap();
+    let view = valid.as_view().slice_view(&reversed).unwrap();
     let output = with_cpu_linalg(&mut backend, |backend| {
         backend.cholesky_read(TensorRead::from_view(TensorView::F64(view)))
     })
@@ -731,7 +731,7 @@ fn linalg_provider_panic_allows_next_operation_without_clearing_stats_poison() {
 
     let valid = TypedTensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 3.0]).unwrap();
     let reversed = [StridedSliceSpec::reverse(), StridedSliceSpec::reverse()];
-    let view = valid.as_view().try_slice(&reversed).unwrap();
+    let view = valid.as_view().slice_view(&reversed).unwrap();
     // This assertion covers operation and pool recovery. The separate public
     // stats API intentionally preserves its documented poisoned-lock error.
     let outputs = with_cpu_linalg(&mut backend, |backend| {

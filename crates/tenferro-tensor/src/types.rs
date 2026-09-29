@@ -3565,7 +3565,7 @@ impl<'a, T: 'static, R: TensorRank, D: Representation> TypedTensorView<'a, T, R,
     ///
     /// let data = [1_i32, 2, 3];
     /// let view = TypedTensorView::from_slice(vec![3], vec![1], 0, &data)?;
-    /// let reversed = view.try_slice(&[StridedSliceSpec::reverse()])?;
+    /// let reversed = view.slice_view(&[StridedSliceSpec::reverse()])?;
     /// assert_eq!(reversed.get(&[0]), Some(&3));
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
@@ -3580,12 +3580,12 @@ impl<'a, T: 'static, R: TensorRank, D: Representation> TypedTensorView<'a, T, R,
     /// for slice arithmetic overflow, or
     /// [`tenferro_tensor_core::ValidationError::ViewOutOfBounds`] when the
     /// resulting layout exceeds the backing buffer.
-    pub fn try_slice(&self, slices: &[StridedSliceSpec]) -> crate::Result<Self> {
-        let specs = core_slice_specs(slices, self.shape(), "TypedTensorView::try_slice")?;
+    pub fn slice_view(&self, slices: &[StridedSliceSpec]) -> crate::Result<Self> {
+        let specs = core_slice_specs(slices, self.shape(), "TypedTensorView::slice_view")?;
         let layout = self
             .layout
             .slice_view(specs, self.buffer.len())
-            .map_err(|err| tensor_layout_error("TypedTensorView::try_slice", err))?;
+            .map_err(|err| tensor_layout_error("TypedTensorView::slice_view", err))?;
         Ok(Self {
             buffer: self.buffer.clone(),
             root: self.root.clone(),
@@ -3604,7 +3604,7 @@ impl<'a, T: 'static, R: TensorRank, D: Representation> TypedTensorView<'a, T, R,
     ///
     /// let data = [1_i32, 2, 3, 4];
     /// let view = TypedTensorView::from_slice(vec![2, 2], vec![1, 2], 0, &data)?;
-    /// assert_eq!(view.try_slice_axis(1, StridedSliceSpec::reverse())?.get(&[0, 0]), Some(&3));
+    /// assert_eq!(view.slice_axis_view(1, StridedSliceSpec::reverse())?.get(&[0, 0]), Some(&3));
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
     /// # Errors
@@ -3617,14 +3617,14 @@ impl<'a, T: 'static, R: TensorRank, D: Representation> TypedTensorView<'a, T, R,
     /// for slice arithmetic overflow, or
     /// [`tenferro_tensor_core::ValidationError::ViewOutOfBounds`] when the
     /// resulting layout exceeds the backing buffer.
-    pub fn try_slice_axis(&self, axis: usize, slice: StridedSliceSpec) -> crate::Result<Self> {
+    pub fn slice_axis_view(&self, axis: usize, slice: StridedSliceSpec) -> crate::Result<Self> {
         let slices = slice_axis_specs(
             self.shape().len(),
             axis,
             slice,
-            "TypedTensorView::try_slice_axis",
+            "TypedTensorView::slice_axis_view",
         )?;
-        self.try_slice(&slices)
+        self.slice_view(&slices)
     }
 
     /// Return a metadata-only dynamic-rank reshape for contiguous column-major views.
@@ -3636,7 +3636,7 @@ impl<'a, T: 'static, R: TensorRank, D: Representation> TypedTensorView<'a, T, R,
     ///
     /// let data = [1_i32, 2, 3, 4];
     /// let view = TypedTensorView::from_slice(vec![2, 2], vec![1, 2], 0, &data)?;
-    /// assert_eq!(view.try_reshape(&[4])?.shape(), &[4]);
+    /// assert_eq!(view.reshape_view(&[4])?.shape(), &[4]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
     /// # Errors
@@ -3651,7 +3651,7 @@ impl<'a, T: 'static, R: TensorRank, D: Representation> TypedTensorView<'a, T, R,
     /// arithmetic overflow, or
     /// [`tenferro_tensor_core::ValidationError::ViewOutOfBounds`] when the
     /// reshaped view exceeds the backing buffer.
-    pub fn try_reshape(
+    pub fn reshape_view(
         &self,
         shape: &[usize],
     ) -> crate::Result<TypedTensorView<'a, T, DynRank, D>> {
@@ -3659,7 +3659,7 @@ impl<'a, T: 'static, R: TensorRank, D: Representation> TypedTensorView<'a, T, R,
             &self.layout,
             shape,
             self.buffer.len(),
-            "TypedTensorView::try_reshape",
+            "TypedTensorView::reshape_view",
         )?;
         Ok(TypedTensorView {
             buffer: self.buffer.clone(),
@@ -4097,7 +4097,7 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorViewMut<'a, T, R, Host> {
     /// let mut data = [1_i32, 2];
     /// let mut view: TypedTensorViewMut<'_, i32, DynRank, Host> =
     ///     TypedTensorViewMut::from_host_slice(vec![2], vec![1], 0, &mut data)?;
-    /// view.try_slice(&[tenferro_tensor::StridedSliceSpec::all()])?;
+    /// view.slice_view(&[tenferro_tensor::StridedSliceSpec::all()])?;
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
     ///
@@ -4716,7 +4716,7 @@ impl<'a, T: 'static, R: TensorRank, D: Representation> TypedTensorViewMut<'a, T,
     ///
     /// let mut data = [1_i32, 2, 3];
     /// let mut view = TypedTensorViewMut::from_slice(vec![3], vec![1], 0, &mut data)?;
-    /// *view.try_slice(&[StridedSliceSpec::reverse()])?.get_mut(&[0]).unwrap() = 30;
+    /// *view.slice_view(&[StridedSliceSpec::reverse()])?.get_mut(&[0]).unwrap() = 30;
     /// assert_eq!(view.get(&[2]), Some(&30));
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
@@ -4733,18 +4733,18 @@ impl<'a, T: 'static, R: TensorRank, D: Representation> TypedTensorViewMut<'a, T,
     /// logical elements alias, or
     /// [`tenferro_tensor_core::ValidationError::IntegerOverflow`] for layout
     /// arithmetic overflow.
-    pub fn try_slice(
+    pub fn slice_view(
         &mut self,
         slices: &[StridedSliceSpec],
     ) -> crate::Result<TypedTensorViewMut<'_, T, R>> {
-        let specs = core_slice_specs(slices, self.shape(), "TypedTensorViewMut::try_slice")?;
+        let specs = core_slice_specs(slices, self.shape(), "TypedTensorViewMut::slice_view")?;
         let layout = self
             .layout
             .slice_view(specs, self.buffer.len())
-            .map_err(|err| tensor_layout_error("TypedTensorViewMut::try_slice", err))?;
+            .map_err(|err| tensor_layout_error("TypedTensorViewMut::slice_view", err))?;
         layout
             .validate_mutable_no_overlap()
-            .map_err(|err| tensor_layout_error("TypedTensorViewMut::try_slice", err))?;
+            .map_err(|err| tensor_layout_error("TypedTensorViewMut::slice_view", err))?;
         let placement = self.placement.clone();
         match &mut self.buffer {
             TensorStorageRefMut::Host(data) => Ok(TypedTensorViewMut {
@@ -4773,7 +4773,7 @@ impl<'a, T: 'static, R: TensorRank, D: Representation> TypedTensorViewMut<'a, T,
     ///
     /// let mut data = [1_i32, 2, 3, 4];
     /// let mut view = TypedTensorViewMut::from_slice(vec![2, 2], vec![1, 2], 0, &mut data)?;
-    /// assert_eq!(view.try_slice_axis(1, StridedSliceSpec::reverse())?.get(&[0, 0]), Some(&3));
+    /// assert_eq!(view.slice_axis_view(1, StridedSliceSpec::reverse())?.get(&[0, 0]), Some(&3));
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
     /// # Errors
@@ -4788,7 +4788,7 @@ impl<'a, T: 'static, R: TensorRank, D: Representation> TypedTensorViewMut<'a, T,
     /// logical elements alias, or
     /// [`tenferro_tensor_core::ValidationError::IntegerOverflow`] for layout
     /// arithmetic overflow.
-    pub fn try_slice_axis(
+    pub fn slice_axis_view(
         &mut self,
         axis: usize,
         slice: StridedSliceSpec,
@@ -4797,9 +4797,9 @@ impl<'a, T: 'static, R: TensorRank, D: Representation> TypedTensorViewMut<'a, T,
             self.shape().len(),
             axis,
             slice,
-            "TypedTensorViewMut::try_slice_axis",
+            "TypedTensorViewMut::slice_axis_view",
         )?;
-        self.try_slice(&slices)
+        self.slice_view(&slices)
     }
 
     /// Return two mutable metadata-only slices when their physical ranges are disjoint.
@@ -4967,7 +4967,7 @@ impl<'a, T: 'static, R: TensorRank, D: Representation> TypedTensorViewMut<'a, T,
     ///
     /// let mut data = [1_i32, 2, 3, 4];
     /// let mut view = TypedTensorViewMut::from_slice(vec![2, 2], vec![1, 2], 0, &mut data)?;
-    /// assert_eq!(view.try_reshape(&[4])?.shape(), &[4]);
+    /// assert_eq!(view.reshape_view(&[4])?.shape(), &[4]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
     /// # Errors
@@ -4983,7 +4983,7 @@ impl<'a, T: 'static, R: TensorRank, D: Representation> TypedTensorViewMut<'a, T,
     /// for shape or layout arithmetic overflow, or
     /// [`tenferro_tensor_core::ValidationError::ViewOutOfBounds`] when the
     /// reshaped view exceeds the backing buffer.
-    pub fn try_reshape(
+    pub fn reshape_view(
         &mut self,
         shape: &[usize],
     ) -> crate::Result<TypedTensorViewMut<'_, T, DynRank, D>> {
@@ -4991,11 +4991,11 @@ impl<'a, T: 'static, R: TensorRank, D: Representation> TypedTensorViewMut<'a, T,
             &self.layout,
             shape,
             self.buffer.len(),
-            "TypedTensorViewMut::try_reshape",
+            "TypedTensorViewMut::reshape_view",
         )?;
         layout
             .validate_mutable_no_overlap()
-            .map_err(|err| tensor_layout_error("TypedTensorViewMut::try_reshape", err))?;
+            .map_err(|err| tensor_layout_error("TypedTensorViewMut::reshape_view", err))?;
         let placement = self.placement.clone();
         match &mut self.buffer {
             TensorStorageRefMut::Host(data) => Ok(TypedTensorViewMut {

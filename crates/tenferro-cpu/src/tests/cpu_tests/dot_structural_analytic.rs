@@ -551,7 +551,7 @@ fn test_dot_general_read_blas_negative_stride_view_falls_back() {
             .unwrap();
     let lhs_view = lhs_source
         .as_view()
-        .try_slice_axis(1, StridedSliceSpec::reverse())
+        .slice_axis_view(1, StridedSliceSpec::reverse())
         .unwrap();
     let rhs =
         Tensor::from_vec_col_major(vec![3, 2], vec![7.0_f64, 8.0, 9.0, 10.0, 11.0, 12.0]).unwrap();

@@ -73,21 +73,6 @@ ALLOWED_CANONICAL_TRY_APIS = {
     (
         "tenferro-tensor",
         "crates/tenferro-tensor/src/types.rs",
-        "try_slice",
-    ): "canonical fallible tensor-view construction",
-    (
-        "tenferro-tensor",
-        "crates/tenferro-tensor/src/types.rs",
-        "try_slice_axis",
-    ): "canonical fallible tensor-view construction",
-    (
-        "tenferro-tensor",
-        "crates/tenferro-tensor/src/types.rs",
-        "try_reshape",
-    ): "canonical fallible tensor-view construction",
-    (
-        "tenferro-tensor",
-        "crates/tenferro-tensor/src/types.rs",
         "try_multi_slice_mut",
     ): "canonical alias-safe mutable view construction",
     (

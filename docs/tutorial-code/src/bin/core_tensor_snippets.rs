@@ -842,7 +842,7 @@ let tensor = TypedTensor::<f64, Rank<2>>::from_vec_col_major([2, 3], vec![1.0; 6
 let view = tensor.as_view();
         // snippet-start:views_and_slicing_34
 let transposed = view.transpose_view([1, 0])?;
-let reversed = transposed.try_slice(&[
+let reversed = transposed.slice_view(&[
     tenferro_tensor::StridedSliceSpec::all(),
     tenferro_tensor::StridedSliceSpec::reverse(),
 ])?;
