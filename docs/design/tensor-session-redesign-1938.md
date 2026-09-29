@@ -566,7 +566,10 @@ thresholds default to the constants they replace: `vendor_batch_max_item_dim`
 1. Routes: grouped GEMM supports all five strategies (a forced `OuterParallel`
 inside an entered session fans out over the context's own lanes); strided
 batched contractions support all but `OuterParallel`, which is a typed error;
-packed LU/solve supports all but `WholeBatchVendor`. The strided path now
+faer packed LU/solve supports all but `WholeBatchVendor`, while the LAPACK
+packed-LU loop accepts only `Auto` and `ProviderItems` and rejects the other
+forced strategies with a typed error: each `?getrf`/`?getrs` threads itself, so
+tenferro can neither make it sequential nor run several in lanes (#1884). The strided path now
 reaches the existing `cblas_?gemm_batch` binding through `WholeBatchVendor`;
 `Auto` keeps per-item GEMM there, because the bounded performance pass measured
 the vendor call 1.8x/3.8x slower for 8^3/16^3 items on OpenBLAS 0.3.32 at 1T.

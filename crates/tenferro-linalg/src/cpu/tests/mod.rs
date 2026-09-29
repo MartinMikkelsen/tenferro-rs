@@ -297,6 +297,8 @@ fn diagonal_scatter_config() -> ScatterConfig {
 mod backend;
 #[cfg(all(feature = "cpu-faer", feature = "cpu-blas"))]
 mod batched;
+#[cfg(feature = "cpu-blas")]
+mod blas_batch_policy;
 mod dtype;
 #[cfg(feature = "cpu-faer")]
 mod faer_lanes;

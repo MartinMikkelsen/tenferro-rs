@@ -92,6 +92,8 @@ macro_rules! impl_cpu_packed_lu {
                         CpuLinalgProvider::Blas => {
                             #[cfg(feature = "cpu-blas")]
                             {
+                                let batch = pivots.len().checked_div(n).unwrap_or(0);
+                                linalg::blas::check_packed_lu_batch_strategy(ctx, op, batch)?;
                                 linalg::blas::lu_solve_prepared_batched_in_place::<$scalar>(
                                     op,
                                     (n, nrhs),
@@ -136,6 +138,8 @@ macro_rules! impl_cpu_packed_lu {
                         CpuLinalgProvider::Blas => {
                             #[cfg(feature = "cpu-blas")]
                             {
+                                let batch = pivots.len().checked_div(n).unwrap_or(0);
+                                linalg::blas::check_packed_lu_batch_strategy(ctx, op, batch)?;
                                 linalg::blas::lu_factor_solve_batched_in_place::<$scalar>(
                                     op, n, nrhs, packed_lu, pivots, output,
                                 )
