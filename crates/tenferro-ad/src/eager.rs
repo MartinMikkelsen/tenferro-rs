@@ -59,10 +59,7 @@ use crate::eager_backend::{
 };
 #[cfg(test)]
 use crate::eager_exec::exec_standard_op_on_tensor_reads_in_session;
-use crate::eager_exec::{
-    eager_input_promotion_plan, exec_op_on_tensor_reads_with_runtime,
-    exec_op_on_tensors_with_runtime,
-};
+use crate::eager_exec::{eager_input_promotion_plan, exec_op_on_tensor_reads_with_runtime};
 use crate::error::{ContextId, Error, Result};
 use crate::metadata::tensor_meta_from_tensor;
 use crate::semantic_extension::SemanticExtensionRuleSet;
@@ -2742,10 +2739,9 @@ impl EagerSession<'_> {
     /// Apply one standard tensor op in this borrowed session and record it
     /// for AD when needed.
     ///
-    /// This is the session-borrowing form of
-    /// [`crate::extension::apply_standard_op`]: an extension that expands into
-    /// several ordinary `StdTensorOp` nodes runs them all in one backend
-    /// session instead of entering one per node.
+    /// Extension crates use this when an extension-level eager operation
+    /// expands into ordinary `StdTensorOp` nodes instead of a custom extension
+    /// primitive: all of them run in this one backend session.
     ///
     /// # Examples
     ///
@@ -2842,6 +2838,38 @@ impl EagerSession<'_> {
 
     pub(crate) fn runtime(&self) -> &Arc<EagerRuntime> {
         self.runtime
+    }
+
+    /// Run `f` on this runtime's extension cache store from inside the
+    /// session.
+    ///
+    /// Operation families use this for their own prepared-plan caches without
+    /// reopening the runtime: the eager owner is already locked, and the cache
+    /// lock is taken second, as in every extension execution region.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_ad::EagerRuntime;
+    ///
+    /// let ctx = EagerRuntime::new()?;
+    /// let entries = ctx.with_eager_session(|session| {
+    ///     session.with_extension_caches(|caches| caches.len())
+    /// })??;
+    /// assert_eq!(entries, 0);
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns a runtime-state error when the extension cache lock is
+    /// poisoned.
+    pub fn with_extension_caches<R>(
+        &mut self,
+        f: impl FnOnce(&mut tenferro_runtime::ExtensionCacheStore) -> R,
+    ) -> Result<R> {
+        let mut caches = self.runtime.lock_extension_caches()?;
+        Ok(f(&mut caches))
     }
 
     pub(crate) fn execute_prepared_extension(
@@ -3898,15 +3926,6 @@ impl EagerRuntime {
         let mut backend = profile_eager_op_section(lock_backend_section, || self.lock_backend())?;
         let runtime = matches!(op, StdTensorOp::Extension(_)).then_some(&self.runtime);
         profile_eager_op_section(exec_section, || execute(&mut backend, runtime))
-    }
-
-    pub(crate) fn exec_outputs(&self, op: &StdTensorOp, inputs: &[&Tensor]) -> Result<Vec<Tensor>> {
-        self.exec_outputs_with_runtime(
-            "exec_outputs.lock_backend",
-            "exec_outputs.exec_op",
-            op,
-            |backend, runtime| exec_op_on_tensors_with_runtime(op, inputs, backend, runtime),
-        )
     }
 
     pub(crate) fn exec_outputs_read(
@@ -6441,44 +6460,6 @@ fn tensor_meta_from_value(value: &TensorValue) -> TensorMeta {
         value.dtype(),
         value.shape().iter().copied().map(SymDim::from).collect(),
     )
-}
-
-pub(crate) fn exec_single_output(
-    op: &StdTensorOp,
-    inputs: &[&Tensor],
-    ctx: &EagerRuntime,
-) -> Result<Tensor> {
-    let mut outputs = ctx.exec_outputs(op, inputs)?;
-    if outputs.len() != 1 {
-        return Err(Error::Internal(format!(
-            "expected one eager output for {:?}, got {}",
-            op,
-            outputs.len()
-        )));
-    }
-    Ok(profile_eager_op_section(
-        "exec_single_output.remove_output",
-        || outputs.remove(0),
-    ))
-}
-
-pub(crate) fn exec_single_output_read(
-    op: &StdTensorOp,
-    inputs: &[TensorRead<'_>],
-    ctx: &EagerRuntime,
-) -> Result<Tensor> {
-    let mut outputs = ctx.exec_outputs_read(op, inputs)?;
-    if outputs.len() != 1 {
-        return Err(Error::Internal(format!(
-            "expected one eager output for {:?}, got {}",
-            op,
-            outputs.len()
-        )));
-    }
-    Ok(profile_eager_op_section(
-        "exec_single_output_read.remove_output",
-        || outputs.remove(0),
-    ))
 }
 
 #[cfg(test)]

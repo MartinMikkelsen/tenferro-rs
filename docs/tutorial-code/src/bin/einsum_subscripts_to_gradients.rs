@@ -1,6 +1,6 @@
 use tenferro_ad::EagerRuntime;
 use tenferro_cpu::CpuBackend;
-use tenferro_einsum::{EagerEinsumExt, EinsumOptimize, TraceContextEinsumExt};
+use tenferro_einsum::{EagerSessionEinsumExt, EinsumOptimize, TraceContextEinsumExt};
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_runtime::program::ProgramInputSpec;
 use tenferro_runtime::{GraphCompiler, Runtime, Tensor, TraceContext};
@@ -81,7 +81,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let runtime = EagerRuntime::new()?;
     let a = runtime.variable_from(a_tensor.duplicate()?)?;
     let b = runtime.variable_from(b_tensor.duplicate()?)?;
-    let product = [&a, &b].einsum("ij,jk->ik")?;
+    let product = runtime.with_eager_session(|s| s.einsum(&[&a, &b], "ij,jk->ik"))??;
 
     assert_eq!(product.shape(), &[2, 2]);
     assert_close(

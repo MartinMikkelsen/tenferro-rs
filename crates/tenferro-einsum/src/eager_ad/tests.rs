@@ -2,7 +2,14 @@ use tenferro_ad::{EagerRuntime, EagerTensor};
 use tenferro_cpu::CpuBackend;
 use tenferro_tensor::{Tensor, TensorRead, TensorView};
 
-use super::{backend_broadcast_multiply_untracked, einsum};
+use super::backend_broadcast_multiply_untracked;
+
+/// One eager session per call, running the borrowed-session einsum inside it.
+fn einsum(inputs: &[&EagerTensor], subscripts: &str) -> crate::Result<EagerTensor> {
+    inputs[0]
+        .runtime()
+        .with_eager_session(|s| super::einsum(s, inputs, subscripts))?
+}
 
 #[test]
 fn dot_general_retained_bytes_count_only_spilled_capacity() {

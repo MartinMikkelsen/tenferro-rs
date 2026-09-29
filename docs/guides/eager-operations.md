@@ -91,7 +91,9 @@ session with `runtime.with_eager_session(|session| { ... })`. This includes
 
 Operation-family crates add eager extension traits. For example,
 `tenferro_linalg::EagerTensorLinalgExt` owns linalg eager methods and
-`tenferro_einsum::EagerEinsumExt` owns eager einsum on input slices/arrays.
+`tenferro_einsum::EagerSessionEinsumExt` owns eager einsum and `tensordot` on a
+borrowed session, for example
+`ctx.with_eager_session(|s| s.einsum(&[&a, &b], "ij,jk->ik"))??`.
 
 For CUDA, eager means the operation is submitted immediately. It does not mean
 the host waits after every GPU kernel. Host synchronization happens at
@@ -249,7 +251,8 @@ means summing down each column and keeping one value per column.
 
 ## Einsum
 
-Use `tenferro_einsum::EagerEinsumExt` when working with `EagerTensor`.
+Use `tenferro_einsum::EagerSessionEinsumExt` on a borrowed session when working
+with `EagerTensor`: `ctx.with_eager_session(|s| s.einsum(&[&a, &b], "ij,jk->ik"))??`.
 For traced graph execution, use `tenferro_einsum::TraceContextEinsumExt` and
 install `tenferro_einsum::extension_module` on the `Runtime`.
 

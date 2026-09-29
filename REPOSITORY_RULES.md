@@ -880,7 +880,7 @@ Tests follow implementation ownership.
   release API.
 - **Extension families**: extension crates cannot add inherent methods to
   external tensor types, so their canonical tensor-facing surface is extension
-  traits (`TracedTensorLinalgExt`, `EagerEinsumExt`, `EagerSessionLinalgExt`,
+  traits (`TracedTensorLinalgExt`, `EagerSessionEinsumExt`, `EagerSessionLinalgExt`,
   `EagerSessionFftExt`, `TraceContextEinsumExt`, `TracedTensorEinsumExt`,
   `TracedTensorFftExt`) re-exported at the crate root. Do not expose public
   `traced_tensor` / `eager_tensor` module free functions for standard

@@ -28,6 +28,10 @@ fn prelude_calls_eager_einsum() {
         runtime,
     )
     .unwrap();
-    let result = [&lhs, &rhs].einsum("ij,jk->ik").unwrap();
+    let result = lhs
+        .runtime()
+        .with_eager_session(|s| s.einsum(&[&lhs, &rhs], "ij,jk->ik"))
+        .unwrap()
+        .unwrap();
     assert_eq!(result.shape(), &[2, 2]);
 }

@@ -10,7 +10,7 @@ data; see [crate setup and full einsum examples](einsum.md) for dependencies.
 | Need | Supported recipe |
 |---|---|
 | Execute concrete tensors now, without AD | `TensorEinsumExt::einsum` on `[&lhs, &rhs]` inside `backend.with_backend_session(...)` |
-| Execute eager tensors with AD | Import `EagerEinsumExt` (`autodiff` feature), then `[&lhs, &rhs].einsum("ij,jk->ik")`; core ops use methods such as `lhs.dot_general(&rhs, config)` |
+| Execute eager tensors with AD | Import `EagerSessionEinsumExt` (`autodiff` feature), then `ctx.with_eager_session(\|s\| s.einsum(&[&lhs, &rhs], "ij,jk->ik"))??`; core ops are `EagerSession` methods such as `s.dot_general(&lhs, &rhs, config)` |
 | Repeat one compatible concrete contraction | Keep a `ConcreteEinsumPlan`; prepare once and execute with new inputs |
 | Repeat a traced computation | Compile once and reuse the program and configured runtime; see [traced execution](einsum.md#traced-matrix-multiply) |
 | Generate an equation in code | Use `EinsumSubscripts` integer labels; use `EinsumNotation` for unresolved ellipsis |

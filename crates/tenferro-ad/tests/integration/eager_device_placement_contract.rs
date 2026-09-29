@@ -79,13 +79,9 @@ fn eager_generated_constant_and_shape_outputs_are_uploaded_before_backend_ops() 
     assert!(read_path.contains(".with_backend_session(|exec|"));
     assert!(read_path.contains("exec_standard_op_on_tensor_reads_with_session(op, inputs, exec)"));
 
-    let tensor_path = source_section(
-        &eager_exec,
-        "fn exec_standard_op_on_tensors<B: BackendSessionHost>",
-        "pub(crate) fn exec_standard_op_on_tensors_in_session",
-    );
-    assert!(tensor_path.contains(".with_backend_session(|exec|"));
-    assert!(tensor_path.contains("exec_standard_op_on_tensors_with_session(op, inputs, exec)"));
+    // The owned-tensor standard-op path is gone (#1946 F9): owned inputs run
+    // through the borrowed session's `exec_standard_op_on_tensors_with_session`.
+    assert!(!eager_exec.contains("fn exec_standard_op_on_tensors<B: BackendSessionHost>"));
 }
 
 #[test]

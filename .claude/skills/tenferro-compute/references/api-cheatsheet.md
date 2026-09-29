@@ -66,7 +66,7 @@ assert_eq!(
 
 Common import recipes:
 
-- `tenferro_einsum::EagerEinsumExt` for eager einsum.
+- `tenferro_einsum::EagerSessionEinsumExt` for borrowed eager einsum and `tensordot` (`runtime.with_eager_session(|s| s.einsum(&[&a, &b], "ij,jk->ik"))??`).
 - `tenferro_linalg::EagerSessionLinalgExt` for borrowed eager linear algebra (`EagerTensorLinalgExt::solve` remains a calling-thread `no_grad` exception).
 - `tenferro_ad::{EagerRuntime, Tensor}` for eager values and runtime AD.
 

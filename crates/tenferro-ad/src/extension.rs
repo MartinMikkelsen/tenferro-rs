@@ -575,28 +575,3 @@ fn finish_eager_extension_outputs(
     crate::eager::finish_residuals(&op, inputs, &results.iter().collect::<Vec<_>>())?;
     Ok(results)
 }
-
-/// Apply one standard tensor op eagerly and record it for AD when needed.
-///
-/// Extension crates use this when an extension-level eager operation expands
-/// into ordinary `StdTensorOp` nodes instead of a custom extension primitive.
-///
-/// # Errors
-///
-/// Returns [`tenferro_runtime::Error::TensorRuntime`] containing
-/// [`tenferro_tensor::ValidationError::InvalidArgument`] if an extension
-/// op is passed to this standard-op entry point. Returns
-/// [`tenferro_runtime::Error::ContextMismatch`] for tensors from different
-/// eager contexts and propagates typed tensor/backend/runtime-state failures
-/// from the selected eager context.
-pub fn apply_standard_op(op: StdTensorOp, inputs: &[&EagerTensor]) -> Result<EagerTensor> {
-    if matches!(op, StdTensorOp::Extension(_)) {
-        return Err(Error::invalid_argument(
-            "extension::apply_standard_op",
-            ErrorPhase::Execution,
-            "op",
-            "Extension ops must be passed to apply_eager",
-        ));
-    }
-    EagerTensor::nary_op(inputs, op)
-}

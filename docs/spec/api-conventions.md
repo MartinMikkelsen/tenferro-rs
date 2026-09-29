@@ -72,8 +72,8 @@ The default stratum is internal.
    `TensorReadEinsumIntoExt`, and `TypedTensorReadEinsumIntoExt` for
    preallocated-output concrete execution; `ConcreteEinsumPlan` for repeated
    concrete executions with fixed input metadata; `TraceContextEinsumExt` for
-   traced graph construction; and `EagerEinsumExt` for autodiff eager input
-   slices/arrays. Typed preallocated outputs use `TypedTensorWrite` so both
+   traced graph construction; and `EagerSessionEinsumExt` for autodiff eager
+   einsum and `tensordot` on a borrowed `EagerSession`. Typed preallocated outputs use `TypedTensorWrite` so both
    owned typed tensors and mutable typed views are accepted.
 5. Standard operation families are first-class crates, not modules under a
    broad facade.

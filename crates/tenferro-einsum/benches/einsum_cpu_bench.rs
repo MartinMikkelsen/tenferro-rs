@@ -5,7 +5,7 @@ use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criteri
 use num_complex::Complex64;
 use tenferro_ad::{EagerRuntime, EagerTensor};
 use tenferro_cpu::CpuBackend;
-use tenferro_einsum::EagerEinsumExt;
+use tenferro_einsum::EagerSessionEinsumExt;
 use tenferro_runtime::Tensor;
 
 const BATCHES: &[usize] = &[16, 64, 256];
@@ -75,8 +75,11 @@ fn bench_batched_einsum(c: &mut Criterion) {
             let params = format!("n_{n}_batch_{batch}");
             group.bench_function(BenchmarkId::new("f64_ikb_knb_to_inb", params), |bench| {
                 bench.iter(|| {
-                    let out = [black_box(&a), black_box(&b)]
-                        .einsum("ikb,knb->inb")
+                    let out = ctx
+                        .with_eager_session(|s| {
+                            s.einsum(&[black_box(&a), black_box(&b)], "ikb,knb->inb")
+                        })
+                        .expect("eager session entry should succeed")
                         .expect("batched einsum should succeed");
                     consume_f64(&out);
                 });
@@ -97,16 +100,23 @@ fn bench_einsum_patterns(c: &mut Criterion) {
     let c_tensor = eager(&ctx, f64_tensor(vec![64, 64], 3));
     group.bench_function("f64_binary_ij_jk_to_ik", |bench| {
         bench.iter(|| {
-            let out = [black_box(&a), black_box(&b)]
-                .einsum("ij,jk->ik")
+            let out = ctx
+                .with_eager_session(|s| s.einsum(&[black_box(&a), black_box(&b)], "ij,jk->ik"))
+                .expect("eager session entry should succeed")
                 .expect("binary einsum should succeed");
             consume_f64(&out);
         });
     });
     group.bench_function("f64_chain_ij_jk_kl_to_il", |bench| {
         bench.iter(|| {
-            let out = [black_box(&a), black_box(&b), black_box(&c_tensor)]
-                .einsum("ij,jk,kl->il")
+            let out = ctx
+                .with_eager_session(|s| {
+                    s.einsum(
+                        &[black_box(&a), black_box(&b), black_box(&c_tensor)],
+                        "ij,jk,kl->il",
+                    )
+                })
+                .expect("eager session entry should succeed")
                 .expect("chain einsum should succeed");
             consume_f64(&out);
         });
@@ -116,8 +126,9 @@ fn bench_einsum_patterns(c: &mut Criterion) {
     let y = eager(&ctx, f64_tensor(vec![16, 8, 8], 5));
     group.bench_function("f64_multiedge_ijk_jkl_to_il", |bench| {
         bench.iter(|| {
-            let out = [black_box(&x), black_box(&y)]
-                .einsum("ijk,jkl->il")
+            let out = ctx
+                .with_eager_session(|s| s.einsum(&[black_box(&x), black_box(&y)], "ijk,jkl->il"))
+                .expect("eager session entry should succeed")
                 .expect("multi-edge einsum should succeed");
             consume_f64(&out);
         });
@@ -127,8 +138,9 @@ fn bench_einsum_patterns(c: &mut Criterion) {
     let b = eager(&ctx, c64_tensor(vec![32, 32], 7));
     group.bench_function("c64_binary_ij_jk_to_ik", |bench| {
         bench.iter(|| {
-            let out = [black_box(&a), black_box(&b)]
-                .einsum("ij,jk->ik")
+            let out = ctx
+                .with_eager_session(|s| s.einsum(&[black_box(&a), black_box(&b)], "ij,jk->ik"))
+                .expect("eager session entry should succeed")
                 .expect("c64 binary einsum should succeed");
             consume_c64(&out);
         });

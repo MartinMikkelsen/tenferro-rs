@@ -137,7 +137,10 @@ Release APIs should follow these naming and shape rules.
   `TypedTensorEinsumExt`, while borrowed inputs use `TensorReadEinsumExt` and
   `TypedTensorReadEinsumExt`; repeated concrete executions use
   `ConcreteEinsumPlan`; traced graph construction uses
-  `TraceContextEinsumExt`; autodiff eager inputs use `EagerEinsumExt`.
+  `TraceContextEinsumExt`; autodiff eager einsum and `tensordot` run on a
+  borrowed `EagerSession` through `EagerSessionEinsumExt`. (The tensor-side
+  eager traits `EagerEinsumExt` and `EagerTensorEinsumExt`, which opened their
+  own session, were removed by #1946 F5.)
 - Traced tensor methods do not use a `traced_` prefix.
 - User-facing backend features are named for concrete backend families, such as
   `cuda` and `rocm`. Public extension crates should not expose a vague `gpu`

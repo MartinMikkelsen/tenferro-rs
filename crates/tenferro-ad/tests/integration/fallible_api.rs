@@ -107,15 +107,12 @@ fn eager_runtime_lock_scopes_are_bounded_source_contract() {
     );
 
     let exec_outputs = source
-        .split_once("pub(crate) fn exec_outputs(")
-        .and_then(|(_, rest)| {
-            rest.split_once("pub(crate) fn exec_outputs_read")
-                .map(|(body, _)| body)
-        })
-        .expect("missing EagerRuntime::exec_outputs source section");
+        .split_once("pub(crate) fn exec_outputs_read(")
+        .and_then(|(_, rest)| rest.split_once("#[cfg(test)]").map(|(body, _)| body))
+        .expect("missing EagerRuntime::exec_outputs_read source section");
     assert!(
         exec_outputs.contains("exec_outputs_with_runtime("),
-        "exec_outputs should centralize backend/runtime lock ordering and avoid runtime extension access for standard ops"
+        "exec_outputs_read should centralize backend/runtime lock ordering and avoid runtime extension access for standard ops"
     );
 
     let lock_helper = source
