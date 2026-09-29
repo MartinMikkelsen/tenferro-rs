@@ -418,6 +418,11 @@ def check(repo: Path) -> int:
             elif not str(allowed[site]).strip() or str(allowed[site]).startswith("TODO"):
                 print(f"{mechanism}: allowlist entry has no reason: {site}")
                 failed = True
+            elif str(allowed[site]).startswith("PENDING"):
+                # A PENDING reason marks a known-illegitimate entry awaiting
+                # removal; it may not survive into a merged allowlist.
+                print(f"{mechanism}: allowlist entry is pending removal: {site}")
+                failed = True
         for site in sorted(set(allowed) - set(sites)):
             print(f"{mechanism}: allowlist entry is stale: {site}")
             failed = True

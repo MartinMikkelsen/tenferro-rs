@@ -59,7 +59,7 @@ use crate::eager_backend::{
 };
 #[cfg(test)]
 use crate::eager_exec::exec_standard_op_on_tensor_reads_in_session;
-use crate::eager_exec::{eager_input_promotion_plan, exec_op_on_tensor_reads_with_runtime};
+use crate::eager_exec::{eager_input_promotion_plan, exec_extension_op_on_tensor_reads};
 use crate::error::{ContextId, Error, Result};
 use crate::metadata::tensor_meta_from_tensor;
 use crate::semantic_extension::SemanticExtensionRuleSet;
@@ -3913,32 +3913,22 @@ impl EagerRuntime {
         self.lock_backend()?.synchronize().map_err(Error::from)
     }
 
-    fn exec_outputs_with_runtime<R>(
+    /// Owner-context extension fallback used by `extension::apply_eager` when
+    /// the extension has no prepared session executor.
+    pub(crate) fn exec_extension_outputs_read(
         &self,
-        lock_backend_section: &'static str,
-        exec_section: &'static str,
-        op: &StdTensorOp,
-        execute: impl FnOnce(&mut EagerBackend, Option<&Runtime>) -> Result<R>,
-    ) -> Result<R> {
-        // Lock ordering: eager execution holds the backend lock while standard
-        // ops run without runtime extension access; extension ops receive the
-        // runtime so extension cache locks are acquired only from that path.
-        let mut backend = profile_eager_op_section(lock_backend_section, || self.lock_backend())?;
-        let runtime = matches!(op, StdTensorOp::Extension(_)).then_some(&self.runtime);
-        profile_eager_op_section(exec_section, || execute(&mut backend, runtime))
-    }
-
-    pub(crate) fn exec_outputs_read(
-        &self,
-        op: &StdTensorOp,
+        op: &Arc<dyn tenferro_ops::ext_op::ExtensionOp>,
         inputs: &[TensorRead<'_>],
     ) -> Result<Vec<Tensor>> {
-        self.exec_outputs_with_runtime(
-            "exec_outputs_read.lock_backend",
-            "exec_outputs_read.exec_op",
-            op,
-            |backend, runtime| exec_op_on_tensor_reads_with_runtime(op, inputs, backend, runtime),
-        )
+        // Lock ordering: the backend lock is held for the input session; the
+        // runtime's extension cache locks are acquired only after it.
+        let mut backend =
+            profile_eager_op_section("exec_extension_outputs_read.lock_backend", || {
+                self.lock_backend()
+            })?;
+        profile_eager_op_section("exec_extension_outputs_read.exec_op", || {
+            exec_extension_op_on_tensor_reads(op, inputs, &mut *backend, &self.runtime)
+        })
     }
 
     #[cfg(test)]

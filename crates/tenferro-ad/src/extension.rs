@@ -189,7 +189,7 @@ pub fn adopt_untracked_eager_value(
 /// backend, extension, and runtime-state failures retain their typed sources.
 pub fn apply_eager(op: Arc<dyn ExtensionOp>, inputs: &[&EagerTensor]) -> Result<Vec<EagerTensor>> {
     let ctx = validate_eager_extension_inputs(op.as_ref(), inputs)?;
-    let std_op = StdTensorOp::Extension(op);
+    let std_op = StdTensorOp::Extension(Arc::clone(&op));
     let input_reads: Vec<_> = inputs.iter().map(|tensor| tensor.tensor_read()).collect();
     // Native immediate path: resolve the extension engine from the runtime
     // snapshot, prepare the op, and execute through the prepared plan's
@@ -198,7 +198,7 @@ pub fn apply_eager(op: Arc<dyn ExtensionOp>, inputs: &[&EagerTensor]) -> Result<
     if let Some(outputs) = try_prepared_eager_extension(&ctx, &std_op, &input_reads)? {
         return finish_eager_extension_outputs(ctx, std_op, inputs, outputs, None);
     }
-    let outputs = ctx.exec_outputs_read(&std_op, &input_reads)?;
+    let outputs = ctx.exec_extension_outputs_read(&op, &input_reads)?;
     finish_eager_extension_outputs(ctx, std_op, inputs, outputs, None)
 }
 
@@ -225,7 +225,7 @@ pub(crate) fn apply_eager_in_session(
             rhs: ctx.id(),
         });
     }
-    let std_op = StdTensorOp::Extension(op);
+    let std_op = StdTensorOp::Extension(Arc::clone(&op));
     let input_reads: Vec<_> = inputs.iter().map(|tensor| tensor.tensor_read()).collect();
     let target = ctx.eager_extension_target()?;
     let executor = prepared_eager_extension_executor(&ctx, &target, &std_op, &input_reads)?

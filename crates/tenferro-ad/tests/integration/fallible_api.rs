@@ -106,26 +106,23 @@ fn eager_runtime_lock_scopes_are_bounded_source_contract() {
         "clear_grads must not hold the grad-slot map lock while locking each slot"
     );
 
-    let exec_outputs = source
-        .split_once("pub(crate) fn exec_outputs_read(")
+    // Only extension ops reach the owner-context fallback (#1946 F9), so the
+    // runtime's extension locks are never taken for a standard op.
+    let extension_fallback = source
+        .split_once("pub(crate) fn exec_extension_outputs_read(")
         .and_then(|(_, rest)| rest.split_once("#[cfg(test)]").map(|(body, _)| body))
-        .expect("missing EagerRuntime::exec_outputs_read source section");
+        .expect("missing EagerRuntime::exec_extension_outputs_read source section");
     assert!(
-        exec_outputs.contains("exec_outputs_with_runtime("),
-        "exec_outputs_read should centralize backend/runtime lock ordering and avoid runtime extension access for standard ops"
-    );
-
-    let lock_helper = source
-        .split_once("fn exec_outputs_with_runtime")
-        .and_then(|(_, rest)| rest.split_once("#[cfg(test)]").map(|(body, _)| body))
-        .expect("missing eager runtime lock helper source section");
-    assert!(
-        lock_helper.contains("StdTensorOp::Extension"),
-        "extension executor lock should be acquired only for extension ops"
+        extension_fallback.contains("op: &Arc<dyn tenferro_ops::ext_op::ExtensionOp>"),
+        "the owner-context fallback must accept extension ops only"
     );
     assert!(
-        lock_helper.contains("Lock ordering:"),
+        extension_fallback.contains("Lock ordering:"),
         "backend/extension lock ordering must be documented at the helper that co-holds the locks"
+    );
+    assert!(
+        !source.contains("fn exec_outputs_with_runtime"),
+        "the mixed standard/extension owner-context helper is removed"
     );
 }
 
