@@ -1589,3 +1589,63 @@ fn nary_read_into_matches_allocating_execution() {
         .unwrap();
     assert_f64_tensor(&out, &[3, 2], &[1.0, 3.0, 5.0, 2.0, 4.0, 6.0]);
 }
+
+/// `ij,jk->ki` needs the swapped operand order for an exact-output dot, so the
+/// prepared accumulate path must swap the conjugation flags with the operands.
+#[test]
+fn prepared_swapped_binary_dot_accumulates_with_conjugation_on_the_named_inputs() {
+    let lhs_data: Vec<Complex64> = (0..6)
+        .map(|index| Complex64::new(index as f64 + 1.0, 0.5 * index as f64 - 1.0))
+        .collect();
+    let rhs_data: Vec<Complex64> = (0..6)
+        .map(|index| Complex64::new(2.0 - index as f64, 0.25 * index as f64))
+        .collect();
+    let lhs = Tensor::from_vec_col_major(vec![2, 3], lhs_data.clone()).unwrap();
+    let rhs = Tensor::from_vec_col_major(vec![3, 2], rhs_data.clone()).unwrap();
+    let plan = ConcreteEinsumPlan::prepare([&lhs, &rhs], "ij,jk->ki").unwrap();
+    let initial = Complex64::new(0.5, -0.5);
+    let (alpha, beta) = (Complex64::new(2.0, 1.0), Complex64::new(1.0, 0.0));
+
+    for (lhs_conj, rhs_conj) in [(true, false), (false, true)] {
+        let mut out = Tensor::from_vec_col_major(vec![2, 2], vec![initial; 4]).unwrap();
+        let mut accumulation = DotGeneralAccumulation::scaled(
+            ContractionScalar::C64(alpha),
+            ContractionScalar::C64(beta),
+        )
+        .unwrap();
+        accumulation.lhs_conj = lhs_conj;
+        accumulation.rhs_conj = rhs_conj;
+        let mut backend = CpuBackend::new();
+        backend
+            .with_backend_session(|session| {
+                plan.execute_read_into_accum(
+                    [TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs)],
+                    session,
+                    accumulation,
+                    TensorWrite::from_tensor(&mut out),
+                )
+            })
+            .unwrap()
+            .unwrap();
+
+        let values = out.as_slice::<Complex64>().unwrap();
+        for i in 0..2 {
+            for k in 0..2 {
+                let sum: Complex64 = (0..3)
+                    .map(|j| {
+                        let a = lhs_data[i + 2 * j];
+                        let b = rhs_data[j + 3 * k];
+                        (if lhs_conj { a.conj() } else { a })
+                            * (if rhs_conj { b.conj() } else { b })
+                    })
+                    .sum();
+                let expected = alpha * sum + beta * initial;
+                let got = values[k + 2 * i];
+                assert!(
+                    (got - expected).norm() < 1e-12,
+                    "conj=({lhs_conj}, {rhs_conj}) [{k}, {i}]: {got} vs {expected}"
+                );
+            }
+        }
+    }
+}

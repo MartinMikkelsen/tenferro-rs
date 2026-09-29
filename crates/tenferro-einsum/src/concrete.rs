@@ -11,7 +11,7 @@ use crate::eager::{
     binary_dot_config_for_into, binary_dot_plan_for_shapes, eager_einsum_exec,
     eager_einsum_exec_read, eager_einsum_exec_read_into, eager_einsum_exec_read_into_accum,
     eager_einsum_read_subscripts_on_session, eager_einsum_subscripts_on_session,
-    execute_binary_dot_read_into, plan_subscripts,
+    execute_binary_dot_read_into, execute_binary_dot_read_into_accum, plan_subscripts,
 };
 use crate::ellipsis::resolve_einsum_notation;
 use crate::TensorDotAxes;
@@ -1807,6 +1807,16 @@ impl ConcreteEinsumPlan {
         let inputs = inputs.as_ref();
         self.validate_read_inputs(inputs, PLAN_EXECUTE_OP)?;
         self.validate_cached_output(&out, PLAN_EXECUTE_OP)?;
+        if let Some(binary_dot) = &self.binary_dot {
+            return execute_binary_dot_read_into_accum(
+                session,
+                inputs,
+                binary_dot,
+                accumulation,
+                out,
+            )
+            .map_err(Error::from);
+        }
         eager_einsum_exec_read_into_accum(session, inputs, &self.tree, accumulation, out)
             .map_err(Error::from)
     }

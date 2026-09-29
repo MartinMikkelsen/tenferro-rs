@@ -1115,6 +1115,25 @@ pub(crate) fn execute_binary_dot_read_into(
     exec.dot_general_read_into(lhs, rhs, &plan.config, out)
 }
 
+/// Accumulate a prepared exact-output binary dot into `out`. The conjugation
+/// flags name the einsum inputs, so a swapped operand order swaps them too.
+pub(crate) fn execute_binary_dot_read_into_accum(
+    exec: &mut dyn BackendSession,
+    inputs: &[TensorRead<'_>],
+    plan: &BinaryDotPlan,
+    mut accumulation: DotGeneralAccumulation,
+    out: TensorWrite<'_>,
+) -> Result<()> {
+    let (lhs, rhs) = match plan.operand_order {
+        BinaryDotOperandOrder::Original => (inputs[0].clone(), inputs[1].clone()),
+        BinaryDotOperandOrder::Swapped => {
+            std::mem::swap(&mut accumulation.lhs_conj, &mut accumulation.rhs_conj);
+            (inputs[1].clone(), inputs[0].clone())
+        }
+    };
+    exec.dot_general_read_into_accum(lhs, rhs, &plan.config, accumulation, out)
+}
+
 pub(crate) fn eager_einsum_exec_read_into(
     exec: &mut dyn BackendSession,
     inputs: &[TensorRead<'_>],
