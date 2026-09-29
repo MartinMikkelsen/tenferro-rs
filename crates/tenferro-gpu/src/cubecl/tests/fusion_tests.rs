@@ -1,6 +1,6 @@
 // Run with: cargo test --features cuda -- --ignored
 use crate::backend::{ElementwiseFusionInst, ElementwiseFusionOp, ElementwiseFusionPlan};
-use tenferro_tensor::{BackendSessionHost, TensorFusion, TensorRead, TensorView};
+use tenferro_tensor::{BackendSessionHost, TensorRead, TensorView};
 
 use super::{
     assert_tensor_close, assert_validation_kind, cpu_backend, download, gpu_backend, tensor_c32,
@@ -84,14 +84,17 @@ fn broadcast_multiply_consumes_compact_borrowed_views_and_rejects_strided_ones()
     let gpu_rhs = upload(&gpu, &rhs);
 
     let expected = cpu
-        .execute_broadcast_multiply(
-            TensorRead::from_tensor(&lhs),
-            &target,
-            &lhs_dims,
-            TensorRead::from_tensor(&rhs),
-            &target,
-            &rhs_dims,
-        )
+        .with_backend_session(|session| {
+            session.execute_broadcast_multiply(
+                TensorRead::from_tensor(&lhs),
+                &target,
+                &lhs_dims,
+                TensorRead::from_tensor(&rhs),
+                &target,
+                &rhs_dims,
+            )
+        })
+        .unwrap()
         .unwrap()
         .expect("the CPU backend executes broadcast multiply");
 

@@ -148,8 +148,8 @@ fn scoped_materialization_reclaims_successful_temporary_for_immediate_reuse() {
     let source = TypedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap();
     let reversed = [StridedSliceSpec::reverse(), StridedSliceSpec::reverse()];
 
-    backend
-        .with_linalg_pool(move |context, buffers| {
+    with_cpu_linalg(&mut backend, move |cpu| {
+        cpu.with_linalg_pool(move |context, buffers| {
             let seed = Vec::<f64>::with_capacity(4);
             let seed_ptr = seed.as_ptr() as usize;
             <f64 as PoolScalar>::pool_release(buffers, seed);
@@ -170,7 +170,8 @@ fn scoped_materialization_reclaims_successful_temporary_for_immediate_reuse() {
             <f64 as PoolScalar>::pool_release(buffers, reused);
             Ok(())
         })
-        .unwrap();
+    })
+    .unwrap();
 }
 
 #[test]
@@ -179,8 +180,8 @@ fn scoped_materialization_reclaims_temporary_after_numerical_error() {
     let source = TypedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap();
     let reversed = [StridedSliceSpec::reverse(), StridedSliceSpec::reverse()];
 
-    backend
-        .with_linalg_pool(move |context, buffers| {
+    with_cpu_linalg(&mut backend, move |cpu| {
+        cpu.with_linalg_pool(move |context, buffers| {
             let seed = Vec::<f64>::with_capacity(4);
             let seed_ptr = seed.as_ptr() as usize;
             <f64 as PoolScalar>::pool_release(buffers, seed);
@@ -210,7 +211,8 @@ fn scoped_materialization_reclaims_temporary_after_numerical_error() {
             <f64 as PoolScalar>::pool_release(buffers, reused);
             Ok(())
         })
-        .unwrap();
+    })
+    .unwrap();
 }
 
 #[test]
@@ -229,8 +231,8 @@ fn nested_materialization_reclaims_first_when_second_materialization_fails() {
     .unwrap();
     let reversed = [StridedSliceSpec::reverse(), StridedSliceSpec::reverse()];
 
-    backend
-        .with_linalg_pool(move |context, buffers| {
+    with_cpu_linalg(&mut backend, move |cpu| {
+        cpu.with_linalg_pool(move |context, buffers| {
             let seed = Vec::<f64>::with_capacity(4);
             let seed_ptr = seed.as_ptr() as usize;
             <f64 as PoolScalar>::pool_release(buffers, seed);
@@ -261,7 +263,8 @@ fn nested_materialization_reclaims_first_when_second_materialization_fails() {
             <f64 as PoolScalar>::pool_release(buffers, reused);
             Ok(())
         })
-        .unwrap();
+    })
+    .unwrap();
 }
 
 #[test]

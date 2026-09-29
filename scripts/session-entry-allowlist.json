@@ -1,21 +1,8 @@
 {
-  "CPU backend install wrappers": {
-    "crates/tenferro-cpu/src/backend.rs::CpuBackend::install_with_pool": "PENDING #1946 F6: owner-side helper used only by owner canonicalization/fusion impls; removed with them",
-    "crates/tenferro-cpu/src/backend.rs::CpuBackend::install_with_pool_context": "PENDING #1946 F6: owner-side helper used only by owner canonicalization/fusion impls; removed with them",
-    "crates/tenferro-cpu/src/backend.rs::TensorFusion::execute_broadcast_multiply": "PENDING #1946 F6: owner-side fusion execution; CpuExecSession implements TensorFusion",
-    "crates/tenferro-cpu/src/backend.rs::TensorFusion::execute_broadcast_multiply_value": "PENDING #1946 F6: owner-side fusion execution; CpuExecSession implements TensorFusion",
-    "crates/tenferro-cpu/src/backend.rs::TensorFusion::execute_elementwise_fusion": "PENDING #1946 F6: owner-side fusion execution; CpuExecSession implements TensorFusion",
-    "crates/tenferro-cpu/src/backend.rs::TensorViewCanonicalization::copy_into": "PENDING #1946 F6: owner-side canonicalization; the session exposes copy_into",
-    "crates/tenferro-cpu/src/backend.rs::TensorViewCanonicalization::to_contiguous": "PENDING #1946 F6: owner-side canonicalization; the session exposes to_contiguous"
-  },
+  "CPU backend install wrappers": {},
   "CPU execution admission": {
     "crates/tenferro-cpu/src/backend.rs::CpuBackend::install": "public entry for a user-owned closure on the backend's domain (D6: independent user kernels); no library caller",
-    "crates/tenferro-cpu/src/backend.rs::CpuBackend::install_with_pool_context_unmarked": "PENDING #1946 F6: body of the owner-side helpers removed with F6",
-    "crates/tenferro-cpu/src/backend.rs::CpuBackend::install_with_pool_unmarked": "PENDING #1946 F6: body of the owner-side helpers removed with F6",
-    "crates/tenferro-cpu/src/backend.rs::CpuBackend::run_backend_session_cached": "session host definition: builds the backend's execution state for one callback (CPU session construction behind with_backend_session[_cached])",
-    "crates/tenferro-cpu/src/backend.rs::CpuBackend::try_install": "PENDING #1946 F6: owner-side typed copy entry used only by owner canonicalization",
-    "crates/tenferro-cpu/src/backend.rs::CpuBackend::with_linalg_pool": "PENDING #1946 F6: doc(hidden) owner linalg entry with no library caller; operation families use CpuExecSession::with_linalg_pool",
-    "crates/tenferro-cpu/src/backend.rs::TensorBuffer::reclaim_buffer": "PENDING #1946 F6: owner-side reclaim with no caller; reclaim goes through the session"
+    "crates/tenferro-cpu/src/backend.rs::CpuBackend::run_backend_session_cached": "session host definition: builds the backend's execution state for one callback (CPU session construction behind with_backend_session[_cached])"
   },
   "CpuExecSession construction": {
     "crates/tenferro-cpu/src/backend.rs::CpuBackend::run_backend_session_cached": "session host definition: builds the backend's execution state for one callback (CPU session construction behind with_backend_session[_cached])"

@@ -21,25 +21,21 @@ use crate::placement::{
     resolve_placement, resolve_placement_with_affinity, CpuEngineConstructionError,
     ResolvedCpuExecution,
 };
-use crate::provider::{CpuExecutionContext, CpuOperationEntry, ParallelMode};
+use crate::provider::{CpuOperationEntry, ParallelMode};
 use crate::{
     discover_cpu_topology, CpuAdmissionMode, CpuDomainId, CpuDomainOwnership, CpuExecutorAffinity,
     CpuExecutorShutdown, CpuId, CpuPlacement, CpuPlacementError, CpuSet, CpuTopology,
     CpuTopologyError, ExternalCpuDomain, NumaNodeId, ResolvedCpuPlacement,
 };
-use crate::{
-    CacheStats, Tensor, TensorRank, TensorRead, TensorScalar, TensorValue, TensorWrite,
-    TypedTensor, TypedTensorView, TypedTensorViewMut,
-};
-use tenferro_tensor::backend::ElementwiseFusionPlan;
+use crate::{CacheStats, Tensor, TensorRank, TensorRead, TensorScalar, TensorWrite, TypedTensor};
 use tenferro_tensor::{
     AllocationDomainId, BackendRuntimeCache, BackendSession, BackendSessionHost, ElementwiseReadOp,
-    TensorBackend, TensorBuffer, TensorDeviceTransfer, TensorFusion, TensorViewCanonicalization,
+    TensorBackend, TensorDeviceTransfer,
 };
 use tenferro_tensor::{SessionEntryError, SharedTensorAllocationDomain};
 
 use super::exec_session::CpuExecSession;
-use super::{copy_tensor_read_into, elementwise, gemm, structural, CpuContext};
+use super::{copy_tensor_read_into, elementwise, gemm, CpuContext};
 
 pub(crate) fn tag_fresh_output(output: &mut Tensor, domain: CpuDomainId) {
     match output.dtype() {
@@ -2630,128 +2626,6 @@ impl CpuBackend {
             .map_err(|error| crate::Error::backend_source("CpuBackend::install", error))
     }
 
-    fn try_install<R: Send>(
-        &self,
-        op: impl FnOnce() -> crate::Result<R> + Send,
-    ) -> crate::Result<R> {
-        let admission = self.execution_admission()?;
-        let permit = admission.permit();
-        let entry = CpuOperationEntry::new(self.engine.domain(), permit)
-            .with_batch_policy(self.batch_policy);
-        let mode = entry.preferred_engine_mode();
-        entry
-            .enter(mode, |context| context.with_native_parallelism(op))
-            .map_err(|error| crate::Error::backend_source("CPU tensor execution", error))?
-    }
-
-    fn install_with_pool_unmarked<R: Send>(
-        &mut self,
-        op: impl FnOnce(&mut BufferPool) -> crate::Result<R> + Send,
-    ) -> crate::Result<R> {
-        let admission = self.execution_admission()?;
-        let permit = admission.permit();
-        let entry = CpuOperationEntry::new(self.engine.domain(), permit)
-            .with_batch_policy(self.batch_policy);
-        let mode = entry.preferred_engine_mode();
-        entry
-            .enter(mode, |context| {
-                context.with_native_parallelism(|| {
-                    self.with_execution_resources(permit, |resources| {
-                        let mut buffers = BufferPoolLoan::new(&mut resources.buffers);
-                        op(buffers.get_mut())
-                    })
-                })
-            })
-            .map_err(|error| crate::Error::backend_source("CPU tensor execution", error))?
-    }
-
-    fn install_with_pool_context_unmarked<R: Send>(
-        &mut self,
-        op: impl FnOnce(&CpuExecutionContext<'_>, &mut BufferPool) -> crate::Result<R> + Send,
-    ) -> crate::Result<R> {
-        let admission = self.execution_admission()?;
-        let permit = admission.permit();
-        let entry = CpuOperationEntry::new(self.engine.domain(), permit)
-            .with_batch_policy(self.batch_policy);
-        let mode = entry.preferred_engine_mode();
-        entry
-            .enter(mode, |context| {
-                context.with_native_parallelism(|| {
-                    self.with_execution_resources(permit, |resources| {
-                        let mut buffers = BufferPoolLoan::new(&mut resources.buffers);
-                        op(context, buffers.get_mut())
-                    })
-                })
-            })
-            .map_err(|error| crate::Error::backend_source("CPU tensor execution", error))?
-    }
-
-    fn install_with_pool<R: FreshCpuOutput + Send>(
-        &mut self,
-        op: impl FnOnce(&mut BufferPool) -> crate::Result<R> + Send,
-    ) -> crate::Result<R> {
-        let domain = self.engine.domain().id();
-        let mut output = self.install_with_pool_unmarked(op)?;
-        output.tag_fresh(domain);
-        Ok(output)
-    }
-
-    fn install_with_pool_context<R: FreshCpuOutput + Send>(
-        &mut self,
-        op: impl FnOnce(&CpuExecutionContext<'_>, &mut BufferPool) -> crate::Result<R> + Send,
-    ) -> crate::Result<R> {
-        let domain = self.engine.domain().id();
-        let mut output = self.install_with_pool_context_unmarked(op)?;
-        output.tag_fresh(domain);
-        Ok(output)
-    }
-
-    /// Run an external linalg implementation with one borrowed execution
-    /// context and this backend's buffer pool.
-    ///
-    /// This is exposed for operation-family crates that own their backend
-    /// implementation while still sharing the CPU backend's allocation pool.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use tenferro_cpu::CpuBackend;
-    /// let mut backend = CpuBackend::new();
-    /// backend.with_linalg_pool(|context, _pool| {
-    ///     assert!(context.thread_budget().get() >= 1);
-    ///     Ok(())
-    /// })?;
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// ```
-    ///
-    /// # Errors
-    ///
-    /// Returns [`crate::Error::BackendSource`] with a
-    /// [`crate::CpuDomainExecutorError`] source when authoritative executor
-    /// admission fails. Errors returned by the operation-family closure are
-    /// propagated unchanged.
-    #[doc(hidden)]
-    pub fn with_linalg_pool<R: Send>(
-        &mut self,
-        op: impl FnOnce(&CpuExecutionContext<'_>, &mut BufferPool) -> crate::Result<R> + Send,
-    ) -> crate::Result<R> {
-        let admission = self.execution_admission()?;
-        let permit = admission.permit();
-        let entry = CpuOperationEntry::new(self.engine.domain(), permit)
-            .with_batch_policy(self.batch_policy);
-        let mode = entry.preferred_linalg_mode(self.kind());
-        entry
-            .enter(mode, |context| {
-                context.with_native_parallelism(|| {
-                    self.with_execution_resources(permit, |resources| {
-                        let mut buffers = BufferPoolLoan::new(&mut resources.buffers);
-                        op(context, buffers.get_mut())
-                    })
-                })
-            })
-            .map_err(|error| crate::Error::backend_source("CPU linalg execution", error))?
-    }
-
     fn with_execution_resources<R>(
         &self,
         permit: &ResourcePermit,
@@ -3045,109 +2919,6 @@ fn reclaim_tensor_typed<T: tenferro_cpu_basic::PoolScalar>(
 ) {
     if let Ok(typed) = tensor.into_typed::<T>() {
         reclaim_typed(buffers, typed);
-    }
-}
-
-impl TensorBuffer for CpuBackend {
-    fn reclaim_buffer(&mut self, tensor: Tensor) {
-        // Recycling is best effort: when no execution can be admitted (for
-        // example a nested call from inside a session), the tensor is simply
-        // dropped and its allocation freed instead of pooled.
-        let Ok(admission) = self.execution_admission() else {
-            return;
-        };
-        let permit = admission.permit();
-        with_execution_owner(permit.owner(), || {
-            self.with_execution_resources(permit, |resources| {
-                reclaim_tensor(&mut resources.buffers, tensor);
-            })
-        })
-    }
-}
-
-impl<T, R> TensorViewCanonicalization<T, R> for CpuBackend
-where
-    T: TensorScalar + PoolScalar,
-    R: TensorRank,
-    R::Shape: Send + Sync,
-    R::Strides: Send + Sync,
-{
-    fn to_contiguous(
-        &mut self,
-        view: &TypedTensorView<'_, T, R>,
-    ) -> crate::Result<TypedTensor<T, R>> {
-        self.install_with_pool(|buffers| {
-            structural::typed_materialize_view_with_pool(buffers, view, "CpuBackend::to_contiguous")
-        })
-    }
-
-    fn copy_into(
-        &mut self,
-        src: &TypedTensorView<'_, T, R>,
-        dst: &mut TypedTensorViewMut<'_, T, R>,
-    ) -> crate::Result<()> {
-        self.try_install(|| structural::typed_copy_view_into(src, dst, "CpuBackend::copy_into"))
-    }
-}
-
-impl TensorFusion for CpuBackend {
-    fn execute_elementwise_fusion(
-        &mut self,
-        inputs: &[&Tensor],
-        plan: &ElementwiseFusionPlan,
-    ) -> crate::Result<Option<Vec<Tensor>>> {
-        self.install_with_pool_context(|context, buffers| {
-            let exec_context = context.strided_exec_context();
-            tenferro_cpu_fused::elementwise_fusion_with_pool(buffers, &exec_context, inputs, plan)
-        })
-    }
-
-    fn execute_broadcast_multiply(
-        &mut self,
-        lhs: TensorRead<'_>,
-        lhs_shape: &[usize],
-        lhs_dims: &[usize],
-        rhs: TensorRead<'_>,
-        rhs_shape: &[usize],
-        rhs_dims: &[usize],
-    ) -> crate::Result<Option<Tensor>> {
-        self.install_with_pool_context(|context, buffers| {
-            elementwise::broadcast_multiply_read_with_pool(
-                buffers,
-                &context.strided_exec_context(),
-                lhs,
-                lhs_shape,
-                lhs_dims,
-                rhs,
-                rhs_shape,
-                rhs_dims,
-            )
-        })
-    }
-
-    fn execute_broadcast_multiply_value(
-        &mut self,
-        lhs: TensorRead<'_>,
-        lhs_shape: &[usize],
-        lhs_dims: &[usize],
-        rhs: TensorRead<'_>,
-        rhs_shape: &[usize],
-        rhs_dims: &[usize],
-    ) -> crate::Result<Option<TensorValue>> {
-        let domain = self.engine.domain().id();
-        self.install_with_pool_context_unmarked(|context, buffers| {
-            elementwise::broadcast_multiply_value_with_pool_and_tag(
-                buffers,
-                &context.strided_exec_context(),
-                lhs,
-                lhs_shape,
-                lhs_dims,
-                rhs,
-                rhs_shape,
-                rhs_dims,
-                |tensor| tag_fresh_output(tensor, domain),
-            )
-        })
     }
 }
 

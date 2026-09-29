@@ -85,7 +85,7 @@ use tenferro_tensor::{
     ContractionScalar, DType, DotGeneralAccumulation, ElementwiseReadOp, TensorRead, TensorWrite,
 };
 
-use crate::backend::{BackendRuntimeCache, TensorBackend, TensorBuffer, TensorDeviceTransfer};
+use crate::backend::{BackendRuntimeCache, TensorBackend, TensorDeviceTransfer};
 use crate::config::{
     CompareDir, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig,
 };
@@ -96,8 +96,7 @@ use crate::native_permutation::{
 };
 use crate::{
     DeviceId, DeviceKind, GpuBackendKind, MemoryKind, Placement, StorageBuffer, Tensor, TensorRank,
-    TensorScalar, TensorView, TensorViewCanonicalization, TensorViewMut, TypedTensor,
-    TypedTensorView, TypedTensorViewMut,
+    TensorScalar, TensorView, TensorViewMut, TypedTensor, TypedTensorView, TypedTensorViewMut,
 };
 
 /// The Rust scalar type behind a preset variant name a macro received.
@@ -2492,8 +2491,11 @@ impl CudaBackend {
         Ok(output)
     }
 
-    #[doc(hidden)]
-    pub fn tril_typed<T>(&self, input: &TypedTensor<T>, k: i64) -> crate::Result<TypedTensor<T>>
+    pub(crate) fn tril_typed<T>(
+        &self,
+        input: &TypedTensor<T>,
+        k: i64,
+    ) -> crate::Result<TypedTensor<T>>
     where
         T: CubeElement + TensorScalar + CubePrimitive + Clone,
     {
@@ -2540,8 +2542,11 @@ impl CudaBackend {
         )
     }
 
-    #[doc(hidden)]
-    pub fn triu_typed<T>(&self, input: &TypedTensor<T>, k: i64) -> crate::Result<TypedTensor<T>>
+    pub(crate) fn triu_typed<T>(
+        &self,
+        input: &TypedTensor<T>,
+        k: i64,
+    ) -> crate::Result<TypedTensor<T>>
     where
         T: CubeElement + TensorScalar + CubePrimitive + Clone,
     {
@@ -3015,8 +3020,7 @@ impl CudaBackend {
         })
     }
 
-    #[doc(hidden)]
-    pub fn slice_typed<T>(
+    pub(crate) fn slice_typed<T>(
         &self,
         input: &TypedTensor<T>,
         config: &SliceConfig,
@@ -4744,87 +4748,6 @@ impl TensorDeviceTransfer for CudaBackend {
     }
 }
 
-macro_rules! impl_cubecl_view_canonicalization {
-    ($($ty:ty),* $(,)?) => {
-        $(
-            impl<R> TensorViewCanonicalization<$ty, R> for CudaBackend
-            where
-                R: TensorRank,
-            {
-                fn to_contiguous(
-                    &mut self,
-                    view: &TypedTensorView<'_, $ty, R>,
-                ) -> crate::Result<TypedTensor<$ty, R>> {
-                    self.to_contiguous_view_typed(view, "CudaBackend::to_contiguous")
-                }
-
-                fn copy_into(
-                    &mut self,
-                    src: &TypedTensorView<'_, $ty, R>,
-                    dst: &mut TypedTensorViewMut<'_, $ty, R>,
-                ) -> crate::Result<()> {
-                    self.copy_view_to_view_typed(src, dst, "CudaBackend::copy_into")
-                }
-            }
-        )*
-    };
-}
-
-macro_rules! impl_cutensor_view_canonicalization {
-    ($($ty:ty),* $(,)?) => {
-        $(
-            impl<R> TensorViewCanonicalization<$ty, R> for CudaBackend
-            where
-                R: TensorRank,
-            {
-                fn to_contiguous(
-                    &mut self,
-                    view: &TypedTensorView<'_, $ty, R>,
-                ) -> crate::Result<TypedTensor<$ty, R>> {
-                    self.to_contiguous_view_cutensor_or_cubecl(view, "CudaBackend::to_contiguous")
-                }
-
-                fn copy_into(
-                    &mut self,
-                    src: &TypedTensorView<'_, $ty, R>,
-                    dst: &mut TypedTensorViewMut<'_, $ty, R>,
-                ) -> crate::Result<()> {
-                    self.copy_view_to_view_typed(src, dst, "CudaBackend::copy_into")
-                }
-            }
-        )*
-    };
-}
-
-impl_cutensor_view_canonicalization!(f32, f64, Complex32, Complex64);
-impl_cubecl_view_canonicalization!(i32, i64);
-
-impl<R> TensorViewCanonicalization<bool, R> for CudaBackend
-where
-    R: TensorRank,
-{
-    fn to_contiguous(
-        &mut self,
-        _view: &TypedTensorView<'_, bool, R>,
-    ) -> crate::Result<TypedTensor<bool, R>> {
-        Err(unsupported_dtype(
-            "CudaBackend::to_contiguous",
-            crate::DType::Bool,
-        ))
-    }
-
-    fn copy_into(
-        &mut self,
-        _src: &TypedTensorView<'_, bool, R>,
-        _dst: &mut TypedTensorViewMut<'_, bool, R>,
-    ) -> crate::Result<()> {
-        Err(unsupported_dtype(
-            "CudaBackend::copy_into",
-            crate::DType::Bool,
-        ))
-    }
-}
-
 /// Operand of a fused CUDA kernel: an owned tensor or a compact borrowed view.
 ///
 /// The eager einsum path prepares operands as borrowed views over already
@@ -4894,8 +4817,6 @@ fn compact_view(view: TensorView<'_>) -> crate::Result<Option<BroadcastMultiplyV
         TensorView::Bool(_) => None,
     })
 }
-
-impl TensorBuffer for CudaBackend {}
 
 impl TensorBackend for CudaBackend {}
 

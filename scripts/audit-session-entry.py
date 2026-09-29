@@ -9,8 +9,6 @@ Mechanisms tracked (issue #1926 / umbrella #1929, hardened by #1946):
 
   * `CPU execution admission`            - `execution_admission()`: the permit every
                                            CPU entry acquires
-  * `CPU backend install wrappers`       - `try_install` / `install_with_pool*`, the
-                                           owner-side entry helpers built on admission
   * `run_backend_session_cached`         - CPU session construction
   * `with_execution_scope`               - CPU execution-scope entry (holds a permit)
   * `with_session_entry_guard`           - the portable nested-entry guard
@@ -29,6 +27,8 @@ Retired mechanisms must stay absent from library code:
 
   * `default_backend_session`            - the deleted backend-as-session factory
   * `with_evaluation_scope`              - execution-scope hook, not implemented (A2)
+  * `CPU backend install wrappers`       - `try_install` / `install_with_pool*`, the
+                                           deleted owner-side entry helpers (#1946 F6)
 
 Every occurrence must sit inside an allowlisted function; the allowlist is keyed
 by mechanism and maps `repository-relative-path::function` entries to the reason
@@ -89,7 +89,9 @@ MECHANISMS: dict[str, tuple[str, tuple[str, ...]]] = {
 
 # Retired mechanisms: any library occurrence fails, and they are exempt from
 # the "must match at least one site" self-check.
-RETIRED: frozenset[str] = frozenset({"default_backend_session", "with_evaluation_scope"})
+RETIRED: frozenset[str] = frozenset(
+    {"default_backend_session", "with_evaluation_scope", "CPU backend install wrappers"}
+)
 
 # identifier -> mechanism, for every name that can carry a mechanism
 MECHANISM_NAMES: dict[str, str] = {

@@ -869,6 +869,39 @@ impl TensorIndexing for CpuExecSession<'_> {
     }
 }
 
+/// Typed view canonicalization runs on the session, never on the backend
+/// owner: the owner is not an execution surface (#1946 F6).
+impl<T, R> tenferro_tensor::TensorViewCanonicalization<T, R> for CpuExecSession<'_>
+where
+    T: tenferro_tensor::TensorScalar + PoolScalar,
+    R: tenferro_tensor::TensorRank,
+    R::Shape: Send + Sync,
+    R::Strides: Send + Sync,
+{
+    fn to_contiguous(
+        &mut self,
+        view: &tenferro_tensor::TypedTensorView<'_, T, R>,
+    ) -> crate::Result<TypedTensor<T, R>> {
+        self.run_native_fresh(|buffers| {
+            crate::structural::typed_materialize_view_with_pool(
+                buffers,
+                view,
+                "CpuExecSession::to_contiguous",
+            )
+        })
+    }
+
+    fn copy_into(
+        &mut self,
+        src: &tenferro_tensor::TypedTensorView<'_, T, R>,
+        dst: &mut tenferro_tensor::TypedTensorViewMut<'_, T, R>,
+    ) -> crate::Result<()> {
+        self.run_native(|_| {
+            crate::structural::typed_copy_view_into(src, dst, "CpuExecSession::copy_into")
+        })
+    }
+}
+
 impl TensorBuffer for CpuExecSession<'_> {
     fn reclaim_buffer(&mut self, tensor: Tensor) {
         crate::backend::reclaim_tensor(self.buffers, tensor);

@@ -1,7 +1,7 @@
 use super::*;
 use tenferro_tensor::DotGeneralConfig;
 
-use tenferro_tensor::backend::{ElementwiseFusionInst, ElementwiseFusionOp};
+use tenferro_tensor::backend::{ElementwiseFusionInst, ElementwiseFusionOp, ElementwiseFusionPlan};
 use tenferro_tensor::BackendSessionHost;
 use tenferro_tensor::TensorRead;
 use tenferro_tensor::{DType, MemoryKind, Placement};
@@ -83,7 +83,10 @@ fn dot_and_fusion_vec_outputs_use_the_selected_domain() {
         .unwrap()
         .unwrap();
     let outputs = backend
-        .execute_elementwise_fusion(&[&fusion_lhs, &fusion_rhs], &fusion)
+        .with_backend_session(|__s| {
+            __s.execute_elementwise_fusion(&[&fusion_lhs, &fusion_rhs], &fusion)
+        })
+        .unwrap()
         .unwrap()
         .unwrap();
 
@@ -264,14 +267,17 @@ fn lazy_tensor_value_tags_its_fresh_base() {
     let lhs_view = lhs_tensor.as_view().transpose_view([1, 0]).unwrap();
 
     let value = backend
-        .execute_broadcast_multiply_value(
-            TensorRead::from_view(tenferro_tensor::TensorView::F64(lhs_view)),
-            &[2, 3, 4],
-            &[0, 1],
-            TensorRead::from_tensor(&rhs),
-            &[2, 3, 4],
-            &[2],
-        )
+        .with_backend_session(|__s| {
+            __s.execute_broadcast_multiply_value(
+                TensorRead::from_view(tenferro_tensor::TensorView::F64(lhs_view)),
+                &[2, 3, 4],
+                &[0, 1],
+                TensorRead::from_tensor(&rhs),
+                &[2, 3, 4],
+                &[2],
+            )
+        })
+        .unwrap()
         .unwrap()
         .unwrap();
 

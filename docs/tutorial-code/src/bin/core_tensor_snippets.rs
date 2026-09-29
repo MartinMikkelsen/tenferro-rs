@@ -54,19 +54,22 @@ assert_eq!(c.shape(), &[2, 3]);
     fn snippet_eager_operations_3() -> Result<(), Box<dyn std::error::Error>> {
         // snippet-start:eager_operations_3
 use tenferro_cpu::CpuBackend;
-use tenferro_tensor::{TypedTensor};
-use tenferro_tensor::backend::TensorViewCanonicalization;
+use tenferro_tensor::{BackendSessionHost, TypedTensor};
 
 let tensor = TypedTensor::<f64>::from_vec_col_major(
     vec![2, 3],
     vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
 ).unwrap();
 let view = tensor.as_view().transpose_view([1, 0]).unwrap();
+let read = view.into_tensor_read().unwrap();
 let mut backend = CpuBackend::new();
-let compact = backend.to_contiguous(&view).unwrap();
+let compact = backend
+    .with_backend_session(|session| session.to_contiguous_read(read))
+    .unwrap()
+    .unwrap();
 
 assert_eq!(compact.shape(), &[3, 2]);
-assert_eq!(compact.as_slice().unwrap(), &[1.0, 3.0, 5.0, 2.0, 4.0, 6.0]);
+assert_eq!(compact.as_slice::<f64>().unwrap(), &[1.0, 3.0, 5.0, 2.0, 4.0, 6.0]);
         // snippet-end:eager_operations_3
         Ok(())
     }

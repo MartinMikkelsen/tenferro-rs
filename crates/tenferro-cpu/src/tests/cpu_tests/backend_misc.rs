@@ -279,9 +279,13 @@ fn cpu_session_materialization_rejects_bad_placement_without_pool_checkout() {
 #[test]
 fn cpu_runtime_copy_handles_strided_source_and_destination_without_allocation() {
     let mut backend = CpuBackend::with_threads(2).unwrap();
-    backend.reclaim_buffer(Tensor::from_typed::<i32>(
-        TypedTensor::from_vec_col_major(vec![4], vec![0_i32; 4]).unwrap(),
-    ));
+    backend
+        .with_backend_session(|__s| {
+            __s.reclaim_buffer(Tensor::from_typed::<i32>(
+                TypedTensor::from_vec_col_major(vec![4], vec![0_i32; 4]).unwrap(),
+            ))
+        })
+        .unwrap();
     let retained_before = backend.buffer_pool_len().unwrap();
     let src_data = [0_i32, 1, 2, 3, 4, 5, 6, 7];
     let src = TypedTensorView::from_slice(vec![2, 2], vec![2, 4], 1, &src_data).unwrap();
@@ -360,7 +364,7 @@ fn cpu_copy_into_copies_exactly_between_strided_host_views() {
     let mut dst_data = [-1_i32; 8];
     let mut dst = TypedTensorViewMut::from_slice(vec![2, 2], vec![3, 1], 1, &mut dst_data).unwrap();
 
-    backend.copy_into(&src, &mut dst).unwrap();
+    with_cpu_session(&mut backend, |cpu| cpu.copy_into(&src, &mut dst)).unwrap();
 
     assert_eq!(dst_data, [-1, 1, 5, -1, 3, 7, -1, -1]);
 }
@@ -371,14 +375,15 @@ fn cpu_copy_into_reports_shape_mismatch_with_canonical_op_name() {
     let src = TypedTensor::<i32>::from_vec_col_major(vec![2], vec![1, 2]).unwrap();
     let mut dst = TypedTensor::<i32>::from_vec_col_major(vec![3], vec![0, 0, 0]).unwrap();
 
-    let err = backend
-        .copy_into(&src.as_view(), &mut dst.as_view_mut())
-        .unwrap_err();
+    let err = with_cpu_session(&mut backend, |cpu| {
+        cpu.copy_into(&src.as_view(), &mut dst.as_view_mut())
+    })
+    .unwrap_err();
 
     assert!(matches!(
         err,
         Error::Validation {
-            op: "CpuBackend::copy_into",
+            op: "CpuExecSession::copy_into",
             source: tenferro_tensor::ValidationError::ShapeMismatch(_),
         }
     ));
@@ -395,14 +400,15 @@ fn cpu_copy_into_rejects_backend_source_without_download() {
     .unwrap();
     let mut dst = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![0.0, 0.0]).unwrap();
 
-    let err = backend
-        .copy_into(&src.as_view(), &mut dst.as_view_mut())
-        .unwrap_err();
+    let err = with_cpu_session(&mut backend, |cpu| {
+        cpu.copy_into(&src.as_view(), &mut dst.as_view_mut())
+    })
+    .unwrap_err();
 
     assert!(matches!(
         err,
         Error::RuntimeState {
-            op: "CpuBackend::copy_into",
+            op: "CpuExecSession::copy_into",
             ref message,
         } if message.contains("download")
     ));
@@ -419,14 +425,15 @@ fn cpu_copy_into_rejects_backend_destination_without_download() {
     )
     .unwrap();
 
-    let err = backend
-        .copy_into(&src.as_view(), &mut dst.as_view_mut())
-        .unwrap_err();
+    let err = with_cpu_session(&mut backend, |cpu| {
+        cpu.copy_into(&src.as_view(), &mut dst.as_view_mut())
+    })
+    .unwrap_err();
 
     assert!(matches!(
         err,
         Error::RuntimeState {
-            op: "CpuBackend::copy_into",
+            op: "CpuExecSession::copy_into",
             ref message,
         } if message.contains("download")
     ));
@@ -439,14 +446,15 @@ fn cpu_copy_into_rejects_host_source_with_device_placement() {
     src.set_placement(opaque_backend_placement());
     let mut dst = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![0.0, 0.0]).unwrap();
 
-    let err = backend
-        .copy_into(&src.as_view(), &mut dst.as_view_mut())
-        .unwrap_err();
+    let err = with_cpu_session(&mut backend, |cpu| {
+        cpu.copy_into(&src.as_view(), &mut dst.as_view_mut())
+    })
+    .unwrap_err();
 
     assert!(matches!(
         err,
         Error::RuntimeState {
-            op: "CpuBackend::copy_into",
+            op: "CpuExecSession::copy_into",
             ref message,
         } if message.contains("source") && message.contains("host placement")
     ));
@@ -459,14 +467,15 @@ fn cpu_copy_into_rejects_host_destination_with_device_placement() {
     let mut dst = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![0.0, 0.0]).unwrap();
     dst.set_placement(opaque_backend_placement());
 
-    let err = backend
-        .copy_into(&src.as_view(), &mut dst.as_view_mut())
-        .unwrap_err();
+    let err = with_cpu_session(&mut backend, |cpu| {
+        cpu.copy_into(&src.as_view(), &mut dst.as_view_mut())
+    })
+    .unwrap_err();
 
     assert!(matches!(
         err,
         Error::RuntimeState {
-            op: "CpuBackend::copy_into",
+            op: "CpuExecSession::copy_into",
             ref message,
         } if message.contains("destination") && message.contains("host placement")
     ));
@@ -489,16 +498,22 @@ fn test_reclaim_buffer_returns_host_buffer_to_pool() {
         })
         .unwrap()
         .unwrap();
-    backend.reclaim_buffer(t);
+    backend
+        .with_backend_session(|__s| __s.reclaim_buffer(t))
+        .unwrap();
     assert!(backend.buffer_pool_len().unwrap() > 0);
 }
 
 #[test]
 fn test_elementwise_add_acquires_output_from_pool() {
     let mut backend = CpuBackend::new();
-    backend.reclaim_buffer(Tensor::from_typed::<f64>(
-        TypedTensor::from_vec_col_major(vec![4], vec![0.0; 4]).unwrap(),
-    ));
+    backend
+        .with_backend_session(|__s| {
+            __s.reclaim_buffer(Tensor::from_typed::<f64>(
+                TypedTensor::from_vec_col_major(vec![4], vec![0.0; 4]).unwrap(),
+            ))
+        })
+        .unwrap();
     assert_eq!(backend.buffer_pool_len().unwrap(), 1);
 
     let lhs = Tensor::from_typed::<f64>(
@@ -517,7 +532,9 @@ fn test_elementwise_add_acquires_output_from_pool() {
     assert_eq!(backend.buffer_pool_len().unwrap(), 0);
     assert_eq!(get_f64(&out, &[0]), 5.0);
     assert_eq!(get_f64(&out, &[3]), 5.0);
-    backend.reclaim_buffer(out);
+    backend
+        .with_backend_session(|__s| __s.reclaim_buffer(out))
+        .unwrap();
     assert_eq!(backend.buffer_pool_len().unwrap(), 1);
 }
 
@@ -532,14 +549,17 @@ fn test_broadcast_multiply_fusion_computes_outer_product_without_materialized_in
     );
 
     let out = backend
-        .execute_broadcast_multiply(
-            TensorRead::from_tensor(&lhs),
-            &[3, 2],
-            &[0],
-            TensorRead::from_tensor(&rhs),
-            &[3, 2],
-            &[1],
-        )
+        .with_backend_session(|__s| {
+            __s.execute_broadcast_multiply(
+                TensorRead::from_tensor(&lhs),
+                &[3, 2],
+                &[0],
+                TensorRead::from_tensor(&rhs),
+                &[3, 2],
+                &[1],
+            )
+        })
+        .unwrap()
         .unwrap()
         .expect("CPU backend should execute broadcast multiply directly");
 
@@ -577,7 +597,8 @@ fn test_cpu_elementwise_fusion_executes_add_mul_plan() {
     );
 
     let outputs = backend
-        .execute_elementwise_fusion(&[&lhs, &rhs], &fusion_plan)
+        .with_backend_session(|__s| __s.execute_elementwise_fusion(&[&lhs, &rhs], &fusion_plan))
+        .unwrap()
         .unwrap()
         .expect("CPU backend should execute supported elementwise fusion plans");
 
@@ -626,7 +647,8 @@ fn test_cpu_elementwise_fusion_executes_broadcast_chain_plan() {
     );
 
     let outputs = backend
-        .execute_elementwise_fusion(&[&lhs, &rhs], &fusion_plan)
+        .with_backend_session(|__s| __s.execute_elementwise_fusion(&[&lhs, &rhs], &fusion_plan))
+        .unwrap()
         .unwrap()
         .expect("CPU backend should execute broadcast input views in fusion plans");
 
@@ -671,7 +693,8 @@ fn test_cpu_elementwise_fusion_broadcasts_mapped_unit_axes() {
     );
 
     let outputs = backend
-        .execute_elementwise_fusion(&[&lhs, &rhs], &fusion_plan)
+        .with_backend_session(|__s| __s.execute_elementwise_fusion(&[&lhs, &rhs], &fusion_plan))
+        .unwrap()
         .unwrap()
         .expect("CPU backend should broadcast mapped unit axes in fusion plans");
 
@@ -1337,9 +1360,13 @@ fn cpu_view_materialization_rejects_backend_buffer_with_caller_operation_name() 
 #[test]
 fn test_structural_transpose_acquires_output_from_pool() {
     let mut backend = CpuBackend::new();
-    backend.reclaim_buffer(Tensor::from_typed::<f64>(
-        TypedTensor::from_vec_col_major(vec![4], vec![0.0; 4]).unwrap(),
-    ));
+    backend
+        .with_backend_session(|__s| {
+            __s.reclaim_buffer(Tensor::from_typed::<f64>(
+                TypedTensor::from_vec_col_major(vec![4], vec![0.0; 4]).unwrap(),
+            ))
+        })
+        .unwrap();
     assert_eq!(backend.buffer_pool_len().unwrap(), 1);
 
     let input = Tensor::from_typed::<f64>(
@@ -1355,16 +1382,22 @@ fn test_structural_transpose_acquires_output_from_pool() {
     assert_eq!(get_f64(&out, &[1, 0]), 3.0);
     assert_eq!(get_f64(&out, &[0, 1]), 2.0);
     assert_eq!(get_f64(&out, &[1, 1]), 4.0);
-    backend.reclaim_buffer(out);
+    backend
+        .with_backend_session(|__s| __s.reclaim_buffer(out))
+        .unwrap();
     assert_eq!(backend.buffer_pool_len().unwrap(), 1);
 }
 
 #[test]
 fn test_cast_acquires_output_from_dtype_pool() {
     let mut backend = CpuBackend::new();
-    backend.reclaim_buffer(Tensor::from_typed::<f32>(
-        TypedTensor::from_vec_col_major(vec![4], vec![0.0; 4]).unwrap(),
-    ));
+    backend
+        .with_backend_session(|__s| {
+            __s.reclaim_buffer(Tensor::from_typed::<f32>(
+                TypedTensor::from_vec_col_major(vec![4], vec![0.0; 4]).unwrap(),
+            ))
+        })
+        .unwrap();
     assert_eq!(backend.buffer_pool_len().unwrap(), 1);
 
     let input = Tensor::from_typed::<f64>(
@@ -1378,16 +1411,22 @@ fn test_cast_acquires_output_from_dtype_pool() {
     assert_eq!(backend.buffer_pool_len().unwrap(), 0);
     assert_eq!(get_f32(&out, &[0]), 1.25);
     assert_eq!(get_f32(&out, &[3]), 4.0);
-    backend.reclaim_buffer(out);
+    backend
+        .with_backend_session(|__s| __s.reclaim_buffer(out))
+        .unwrap();
     assert_eq!(backend.buffer_pool_len().unwrap(), 1);
 }
 
 #[test]
 fn test_slice_acquires_output_from_pool() {
     let mut backend = CpuBackend::new();
-    backend.reclaim_buffer(Tensor::from_typed::<f64>(
-        TypedTensor::from_vec_col_major(vec![2], vec![0.0; 2]).unwrap(),
-    ));
+    backend
+        .with_backend_session(|__s| {
+            __s.reclaim_buffer(Tensor::from_typed::<f64>(
+                TypedTensor::from_vec_col_major(vec![2], vec![0.0; 2]).unwrap(),
+            ))
+        })
+        .unwrap();
     assert_eq!(backend.buffer_pool_len().unwrap(), 1);
 
     let input = Tensor::from_typed::<f64>(
@@ -1406,16 +1445,22 @@ fn test_slice_acquires_output_from_pool() {
     assert_eq!(backend.buffer_pool_len().unwrap(), 0);
     assert_eq!(get_f64(&out, &[0]), 2.0);
     assert_eq!(get_f64(&out, &[1]), 3.0);
-    backend.reclaim_buffer(out);
+    backend
+        .with_backend_session(|__s| __s.reclaim_buffer(out))
+        .unwrap();
     assert_eq!(backend.buffer_pool_len().unwrap(), 1);
 }
 
 #[test]
 fn test_pad_acquires_and_zeroes_output_from_pool() {
     let mut backend = CpuBackend::new();
-    backend.reclaim_buffer(Tensor::from_typed::<f64>(
-        TypedTensor::from_vec_col_major(vec![4], vec![9.0; 4]).unwrap(),
-    ));
+    backend
+        .with_backend_session(|__s| {
+            __s.reclaim_buffer(Tensor::from_typed::<f64>(
+                TypedTensor::from_vec_col_major(vec![4], vec![9.0; 4]).unwrap(),
+            ))
+        })
+        .unwrap();
     assert_eq!(backend.buffer_pool_len().unwrap(), 1);
 
     let input = Tensor::from_typed::<f64>(
@@ -1436,16 +1481,22 @@ fn test_pad_acquires_and_zeroes_output_from_pool() {
     assert_eq!(get_f64(&out, &[1]), 1.0);
     assert_eq!(get_f64(&out, &[2]), 2.0);
     assert_eq!(get_f64(&out, &[3]), 0.0);
-    backend.reclaim_buffer(out);
+    backend
+        .with_backend_session(|__s| __s.reclaim_buffer(out))
+        .unwrap();
     assert_eq!(backend.buffer_pool_len().unwrap(), 1);
 }
 
 #[test]
 fn test_dynamic_update_slice_acquires_clone_from_pool() {
     let mut backend = CpuBackend::new();
-    backend.reclaim_buffer(Tensor::from_typed::<f64>(
-        TypedTensor::from_vec_col_major(vec![4], vec![9.0; 4]).unwrap(),
-    ));
+    backend
+        .with_backend_session(|__s| {
+            __s.reclaim_buffer(Tensor::from_typed::<f64>(
+                TypedTensor::from_vec_col_major(vec![4], vec![9.0; 4]).unwrap(),
+            ))
+        })
+        .unwrap();
     assert_eq!(backend.buffer_pool_len().unwrap(), 1);
 
     let operand = Tensor::from_typed::<f64>(
@@ -1466,7 +1517,9 @@ fn test_dynamic_update_slice_acquires_clone_from_pool() {
     assert_eq!(get_f64(&out, &[1]), 7.0);
     assert_eq!(get_f64(&out, &[2]), 8.0);
     assert_eq!(get_f64(&out, &[3]), 3.0);
-    backend.reclaim_buffer(out);
+    backend
+        .with_backend_session(|__s| __s.reclaim_buffer(out))
+        .unwrap();
     assert_eq!(backend.buffer_pool_len().unwrap(), 1);
 }
 
@@ -1476,20 +1529,26 @@ fn test_reclaim_buffer_covers_all_dtypes() {
     let f32_t = Tensor::from_typed::<f32>(
         TypedTensor::from_vec_col_major(vec![2], vec![1.0f32, 2.0]).unwrap(),
     );
-    backend.reclaim_buffer(f32_t);
+    backend
+        .with_backend_session(|__s| __s.reclaim_buffer(f32_t))
+        .unwrap();
     let c32_t = Tensor::from_typed::<tenferro_tensor::Complex32>(
         TypedTensor::from_vec_col_major(vec![1], vec![Complex32::new(1.0, 0.0)]).unwrap(),
     );
-    backend.reclaim_buffer(c32_t);
+    backend
+        .with_backend_session(|__s| __s.reclaim_buffer(c32_t))
+        .unwrap();
     let c64_t = Tensor::from_typed::<tenferro_tensor::Complex64>(
         TypedTensor::from_vec_col_major(vec![1], vec![Complex64::new(1.0, 0.0)]).unwrap(),
     );
-    backend.reclaim_buffer(c64_t);
+    backend
+        .with_backend_session(|__s| __s.reclaim_buffer(c64_t))
+        .unwrap();
     assert!(backend.buffer_pool_len().unwrap() >= 3);
 }
 
 #[test]
-fn test_install_with_pool_preserves_buffers() {
+fn test_session_linalg_pool_preserves_buffers() {
     let mut backend = CpuBackend::with_threads(1).unwrap();
     let t = backend
         .with_backend_session(|__s| {
@@ -1512,13 +1571,19 @@ fn test_install_with_pool_preserves_buffers() {
 #[test]
 fn test_with_linalg_pool_reports_poison_after_panic() {
     let mut backend = CpuBackend::with_threads(1).unwrap();
-    backend.reclaim_buffer(Tensor::from_typed::<f64>(
-        TypedTensor::from_vec_col_major(vec![2], vec![1.0, 2.0]).unwrap(),
-    ));
+    backend
+        .with_backend_session(|__s| {
+            __s.reclaim_buffer(Tensor::from_typed::<f64>(
+                TypedTensor::from_vec_col_major(vec![2], vec![1.0, 2.0]).unwrap(),
+            ))
+        })
+        .unwrap();
     assert_eq!(backend.buffer_pool_len().unwrap(), 1);
 
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let _ = backend.with_linalg_pool::<()>(|_, _| panic!("forced linalg panic"));
+        let _ = with_cpu_session(&mut backend, |cpu| {
+            cpu.with_linalg_pool::<()>(|_, _| panic!("forced linalg panic"))
+        });
     }));
 
     assert!(result.is_err());
@@ -1531,9 +1596,13 @@ fn test_with_linalg_pool_reports_poison_after_panic() {
 #[test]
 fn test_backend_session_reports_poison_after_panic() {
     let mut backend = CpuBackend::with_threads(1).unwrap();
-    backend.reclaim_buffer(Tensor::from_typed::<f64>(
-        TypedTensor::from_vec_col_major(vec![2], vec![1.0, 2.0]).unwrap(),
-    ));
+    backend
+        .with_backend_session(|__s| {
+            __s.reclaim_buffer(Tensor::from_typed::<f64>(
+                TypedTensor::from_vec_col_major(vec![2], vec![1.0, 2.0]).unwrap(),
+            ))
+        })
+        .unwrap();
     assert_eq!(backend.buffer_pool_len().unwrap(), 1);
 
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -2870,7 +2939,8 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
     let fusion_plan =
         tenferro_tensor::backend::ElementwiseFusionPlan::new(DType::F64, 0, vec![], vec![]);
     assert!(backend
-        .execute_elementwise_fusion(&[], &fusion_plan)
+        .with_backend_session(|__s| __s.execute_elementwise_fusion(&[], &fusion_plan))
+        .unwrap()
         .unwrap()
         .is_none());
 

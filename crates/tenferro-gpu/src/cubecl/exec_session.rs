@@ -12,7 +12,8 @@ use tenferro_tensor::config::{
 };
 use tenferro_tensor::DType;
 use tenferro_tensor::{
-    with_session_entry_guard, TensorRank, TensorScalar, TensorViewCanonicalization, TypedTensorView,
+    with_session_entry_guard, TensorRank, TensorScalar, TensorViewCanonicalization,
+    TypedTensorView, TypedTensorViewMut,
 };
 use tenferro_tensor::{DotGeneralAccumulation, Tensor, TensorRead, TensorWrite, TypedTensor};
 
@@ -394,18 +395,66 @@ impl CudaExecSession<'_> {
     {
         self.backend.triu_typed(input, k)
     }
+}
 
-    #[doc(hidden)]
-    pub fn to_contiguous<T, R>(
+// Typed view canonicalization runs on the session, never on the backend
+// owner: the owner is not an execution surface (#1946 F6).
+macro_rules! impl_session_view_canonicalization {
+    ($to_contiguous:ident; $($ty:ty),* $(,)?) => {
+        $(
+            impl<R> TensorViewCanonicalization<$ty, R> for CudaExecSession<'_>
+            where
+                R: TensorRank,
+            {
+                fn to_contiguous(
+                    &mut self,
+                    view: &TypedTensorView<'_, $ty, R>,
+                ) -> crate::Result<TypedTensor<$ty, R>> {
+                    self.backend
+                        .$to_contiguous(view, "CudaExecSession::to_contiguous")
+                }
+
+                fn copy_into(
+                    &mut self,
+                    src: &TypedTensorView<'_, $ty, R>,
+                    dst: &mut TypedTensorViewMut<'_, $ty, R>,
+                ) -> crate::Result<()> {
+                    self.backend
+                        .copy_view_to_view_typed(src, dst, "CudaExecSession::copy_into")
+                }
+            }
+        )*
+    };
+}
+
+impl_session_view_canonicalization!(
+    to_contiguous_view_cutensor_or_cubecl; f32, f64, Complex32, Complex64
+);
+impl_session_view_canonicalization!(to_contiguous_view_typed; i32, i64);
+
+impl<R> TensorViewCanonicalization<bool, R> for CudaExecSession<'_>
+where
+    R: TensorRank,
+{
+    fn to_contiguous(
         &mut self,
-        view: &TypedTensorView<'_, T, R>,
-    ) -> crate::Result<TypedTensor<T, R>>
-    where
-        T: TensorScalar,
-        R: TensorRank,
-        CudaBackend: TensorViewCanonicalization<T, R>,
-    {
-        self.backend.to_contiguous(view)
+        _view: &TypedTensorView<'_, bool, R>,
+    ) -> crate::Result<TypedTensor<bool, R>> {
+        Err(super::error::unsupported_dtype(
+            "CudaExecSession::to_contiguous",
+            crate::DType::Bool,
+        ))
+    }
+
+    fn copy_into(
+        &mut self,
+        _src: &TypedTensorView<'_, bool, R>,
+        _dst: &mut TypedTensorViewMut<'_, bool, R>,
+    ) -> crate::Result<()> {
+        Err(super::error::unsupported_dtype(
+            "CudaExecSession::copy_into",
+            crate::DType::Bool,
+        ))
     }
 }
 
@@ -617,9 +666,9 @@ delegate_ops!(TensorFusion {
     ) -> crate::Result<Option<Tensor>>;
 });
 
-delegate!(TensorBuffer {
-    fn reclaim_buffer(tensor: Tensor) -> ();
-});
+// CUDA device buffers return to the runtime allocator on drop, so the
+// session keeps the trait's no-op reclaim; the owner is not a buffer surface.
+impl TensorBuffer for CudaExecSession<'_> {}
 
 delegate!(TensorDeviceTransfer {
     fn download_to_host(tensor: TensorRead<'_>) -> crate::Result<Tensor>;

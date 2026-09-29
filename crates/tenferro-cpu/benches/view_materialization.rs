@@ -1,6 +1,8 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion, Throughput};
 use tenferro_cpu::CpuBackend;
-use tenferro_tensor::{BackendSessionHost, TensorViewCanonicalization, TypedTensorView};
+use tenferro_tensor::{
+    BackendSessionHost, TensorViewCanonicalization, TypedTensor, TypedTensorView,
+};
 
 const TN_24D_PERM: [usize; 24] = [
     0, 1, 2, 3, 22, 4, 23, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21,
@@ -176,14 +178,27 @@ fn verify_exact_output(case: &MaterializationCase, output: &[f64]) {
     }
 }
 
+/// Materialize `view` through one CPU session entry; the backend owner is not
+/// an execution surface (#1946 F6), so each call enters its own session.
+fn to_contiguous_in_session(
+    backend: &mut CpuBackend,
+    view: &TypedTensorView<'_, f64>,
+) -> tenferro_tensor::Result<TypedTensor<f64>> {
+    backend
+        .with_backend_session(|session| {
+            tenferro_cpu::with_cpu_exec_session(session, |cpu| cpu.to_contiguous(view))
+                .expect("CPU backend session exposes its CPU execution session")
+        })
+        .expect("CPU session entry is admitted")
+}
+
 fn verify_case_once(
     backend: &mut CpuBackend,
     view: &TypedTensorView<'_, f64>,
     case: &MaterializationCase,
 ) {
-    let checked = backend
-        .to_contiguous(view)
-        .expect("pre-timing materialization succeeds");
+    let checked =
+        to_contiguous_in_session(backend, view).expect("pre-timing materialization succeeds");
     verify_exact_output(
         case,
         checked
@@ -219,8 +234,7 @@ fn bench_view_materialization(c: &mut Criterion) {
             ));
             group.bench_function(case.name, |b| {
                 b.iter(|| {
-                    let materialized = backend
-                        .to_contiguous(black_box(&view))
+                    let materialized = to_contiguous_in_session(&mut backend, black_box(&view))
                         .expect("timed materialization succeeds");
                     black_box(materialized);
                 });

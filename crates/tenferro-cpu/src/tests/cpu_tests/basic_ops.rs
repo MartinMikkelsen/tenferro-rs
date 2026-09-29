@@ -1123,7 +1123,9 @@ fn tensor_index_select_reuses_reclaimed_cpu_buffer() {
     let mut backend = CpuBackend::new();
     let reusable = Tensor::from_vec_col_major(vec![2, 3], vec![0.0_f64; 6]).unwrap();
     let expected_ptr = reusable.as_slice::<f64>().unwrap().as_ptr();
-    backend.reclaim_buffer(reusable);
+    backend
+        .with_backend_session(|__s| __s.reclaim_buffer(reusable))
+        .unwrap();
 
     let input =
         Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap();
@@ -1140,7 +1142,9 @@ fn tensor_stack_reuses_reclaimed_cpu_buffer() {
     let mut backend = CpuBackend::new();
     let reusable = Tensor::from_vec_col_major(vec![2, 2], vec![0.0_f64; 4]).unwrap();
     let expected_ptr = reusable.as_slice::<f64>().unwrap().as_ptr();
-    backend.reclaim_buffer(reusable);
+    backend
+        .with_backend_session(|__s| __s.reclaim_buffer(reusable))
+        .unwrap();
 
     let x0 = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
     let x1 = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]).unwrap();

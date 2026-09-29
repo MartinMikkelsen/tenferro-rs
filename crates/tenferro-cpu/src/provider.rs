@@ -220,11 +220,16 @@ impl<'a> CpuExecutionContext<'a> {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_cpu::{CpuBackend, CpuBatchStrategy};
+    /// use tenferro_cpu::{with_cpu_exec_session, CpuBackend, CpuBatchStrategy};
+    /// use tenferro_tensor::BackendSessionHost;
     ///
     /// let mut backend = CpuBackend::with_threads(1)?;
-    /// let strategy =
-    ///     backend.with_linalg_pool(|context, _| Ok(context.batch_policy().strategy()))?;
+    /// let strategy = backend.with_backend_session(|session| {
+    ///     with_cpu_exec_session(session, |cpu| {
+    ///         cpu.with_linalg_pool(|context, _| Ok(context.batch_policy().strategy()))
+    ///     })
+    ///     .expect("a CPU backend session")
+    /// })??;
     /// assert_eq!(strategy, CpuBatchStrategy::Auto);
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
@@ -244,10 +249,16 @@ impl<'a> CpuExecutionContext<'a> {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_cpu::CpuBackend;
+    /// use tenferro_cpu::{with_cpu_exec_session, CpuBackend};
+    /// use tenferro_tensor::BackendSessionHost;
     ///
     /// let mut backend = CpuBackend::with_threads(1)?;
-    /// let fans_out = backend.with_linalg_pool(|context, _| Ok(context.can_fan_out_lanes()))?;
+    /// let fans_out = backend.with_backend_session(|session| {
+    ///     with_cpu_exec_session(session, |cpu| {
+    ///         cpu.with_linalg_pool(|context, _| Ok(context.can_fan_out_lanes()))
+    ///     })
+    ///     .expect("a CPU backend session")
+    /// })??;
     /// assert!(!fans_out);
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
@@ -269,10 +280,16 @@ impl<'a> CpuExecutionContext<'a> {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_cpu::CpuBackend;
+    /// use tenferro_cpu::{with_cpu_exec_session, CpuBackend};
+    /// use tenferro_tensor::BackendSessionHost;
     ///
     /// let mut backend = CpuBackend::with_threads(1)?;
-    /// let lane = backend.with_linalg_pool(|context, _| Ok(context.is_outer_fan_out_lane()))?;
+    /// let lane = backend.with_backend_session(|session| {
+    ///     with_cpu_exec_session(session, |cpu| {
+    ///         cpu.with_linalg_pool(|context, _| Ok(context.is_outer_fan_out_lane()))
+    ///     })
+    ///     .expect("a CPU backend session")
+    /// })??;
     /// assert!(!lane);
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
@@ -296,17 +313,23 @@ impl<'a> CpuExecutionContext<'a> {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_cpu::CpuBackend;
+    /// use tenferro_cpu::{with_cpu_exec_session, CpuBackend};
+    /// use tenferro_tensor::BackendSessionHost;
     ///
     /// let mut backend = CpuBackend::with_threads(2)?;
     /// let mut data = vec![1.0_f64; 8];
-    /// backend.with_linalg_pool(|context, _| {
-    ///     context.with_outer_lanes(data.chunks_mut(3), |chunk, lane| {
-    ///         assert!(lane.is_outer_fan_out_lane());
-    ///         chunk.iter_mut().for_each(|value| *value *= 2.0);
-    ///     });
-    ///     Ok(())
-    /// })?;
+    /// backend.with_backend_session(|session| {
+    ///     with_cpu_exec_session(session, |cpu| {
+    ///         cpu.with_linalg_pool(|context, _| {
+    ///             context.with_outer_lanes(data.chunks_mut(3), |chunk, lane| {
+    ///                 assert!(lane.is_outer_fan_out_lane());
+    ///                 chunk.iter_mut().for_each(|value| *value *= 2.0);
+    ///             });
+    ///             Ok(())
+    ///         })
+    ///     })
+    ///     .expect("a CPU backend session")
+    /// })??;
     /// assert_eq!(data, [2.0; 8]);
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
@@ -430,25 +453,32 @@ impl<'a> CpuExecutionContext<'a> {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_cpu::CpuBackend;
-    /// use tenferro_tensor::{StridedSliceSpec, TensorRead, TensorView, TypedTensor};
+    /// use tenferro_cpu::{with_cpu_exec_session, CpuBackend};
+    /// use tenferro_tensor::{
+    ///     BackendSessionHost, StridedSliceSpec, TensorRead, TensorView, TypedTensor,
+    /// };
     ///
     /// let mut backend = CpuBackend::with_threads(1)?;
     /// let input = TypedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?;
-    /// backend.with_linalg_pool(|context, buffers| {
-    ///     let view = input
-    ///         .as_view()
-    ///         .try_slice(&[StridedSliceSpec::reverse()])?;
-    ///     context.with_materialized_tensor_read(
-    ///         buffers,
-    ///         "example",
-    ///         TensorRead::from_view(TensorView::F64(view)),
-    ///         |materialized, _| {
-    ///             assert_eq!(materialized.as_slice::<f64>().unwrap(), &[2.0, 1.0]);
-    ///             Ok(())
-    ///         },
-    ///     )
-    /// })?;
+    /// backend.with_backend_session(|session| {
+    ///     with_cpu_exec_session(session, |cpu| {
+    ///         cpu.with_linalg_pool(|context, buffers| {
+    ///             let view = input
+    ///                 .as_view()
+    ///                 .try_slice(&[StridedSliceSpec::reverse()])?;
+    ///             context.with_materialized_tensor_read(
+    ///                 buffers,
+    ///                 "example",
+    ///                 TensorRead::from_view(TensorView::F64(view)),
+    ///                 |materialized, _| {
+    ///                     assert_eq!(materialized.as_slice::<f64>().unwrap(), &[2.0, 1.0]);
+    ///                     Ok(())
+    ///                 },
+    ///             )
+    ///         })
+    ///     })
+    ///     .expect("a CPU backend session")
+    /// })??;
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     #[doc(hidden)]
@@ -485,16 +515,21 @@ impl<'a> CpuExecutionContext<'a> {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_cpu::CpuBackend;
-    /// use tenferro_tensor::Tensor;
+    /// use tenferro_cpu::{with_cpu_exec_session, CpuBackend};
+    /// use tenferro_tensor::{BackendSessionHost, Tensor};
     ///
     /// let mut backend = CpuBackend::with_threads(1)?;
     /// let input = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?;
-    /// backend.with_linalg_pool(|context, _| {
-    ///     let output = context.reshape_tensor(&input, &[2, 1])?;
-    ///     assert_eq!(output.shape(), &[2, 1]);
-    ///     Ok(())
-    /// })?;
+    /// backend.with_backend_session(|session| {
+    ///     with_cpu_exec_session(session, |cpu| {
+    ///         cpu.with_linalg_pool(|context, _| {
+    ///             let output = context.reshape_tensor(&input, &[2, 1])?;
+    ///             assert_eq!(output.shape(), &[2, 1]);
+    ///             Ok(())
+    ///         })
+    ///     })
+    ///     .expect("a CPU backend session")
+    /// })??;
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     #[doc(hidden)]
@@ -540,9 +575,15 @@ impl<'a> CpuExecutionContext<'a> {
     ///
     /// # Examples
     /// ```
-    /// use tenferro_cpu::CpuBackend;
+    /// use tenferro_cpu::{with_cpu_exec_session, CpuBackend};
+    /// use tenferro_tensor::BackendSessionHost;
     /// let mut backend = CpuBackend::with_threads(1)?;
-    /// let threads = backend.with_linalg_pool(|context, _| Ok(context.native_thread_count()))?;
+    /// let threads = backend.with_backend_session(|session| {
+    ///     with_cpu_exec_session(session, |cpu| {
+    ///         cpu.with_linalg_pool(|context, _| Ok(context.native_thread_count()))
+    ///     })
+    ///     .expect("a CPU backend session")
+    /// })??;
     /// assert_eq!(threads, 1);
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
@@ -868,19 +909,6 @@ impl<'a> CpuOperationEntry<'a> {
         Err(crate::CpuProviderDomainError::ParallelModeNotSupported {
             mode: ParallelMode::Inner,
         })
-    }
-
-    pub(crate) fn preferred_linalg_mode(self, kind: CpuBackendKind) -> ParallelMode {
-        if self.domain.thread_budget().get() == 1 {
-            return ParallelMode::Sequential;
-        }
-        match kind {
-            CpuBackendKind::Faer => self.preferred_engine_mode(),
-            // The linalg operation-family provider has not yet moved onto the
-            // provider capability traits. Preserve its existing ownership
-            // policy until that trait boundary is introduced.
-            CpuBackendKind::Blas => ParallelMode::Inner,
-        }
     }
 
     pub(crate) fn provider_default_compatibility_mode(self) -> ParallelMode {

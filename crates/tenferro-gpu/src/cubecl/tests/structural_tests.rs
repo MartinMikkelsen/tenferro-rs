@@ -16,6 +16,18 @@ use super::{
     tensor_c32, tensor_c64, tensor_f32, tensor_f64, tensor_i32, tensor_i64, upload,
 };
 
+/// Run `f` on a CUDA execution session of `gpu`: typed view canonicalization
+/// lives on the session, not the backend owner (#1946 F6).
+fn in_cuda_session<R: Send>(
+    gpu: &mut CudaBackend,
+    f: impl for<'a> FnOnce(&'a mut crate::cuda::CudaExecSession<'a>) -> R + Send,
+) -> R {
+    gpu.with_backend_session(|session| {
+        crate::cuda::with_cuda_exec_session(session, f).expect("CUDA backend session")
+    })
+    .expect("CUDA session entry")
+}
+
 fn with_cuda_ordinal<T>(mut tensor: TypedTensor<T>, ordinal: usize) -> TypedTensor<T> {
     tensor.set_placement(Placement {
         memory_kind: MemoryKind::Device,
@@ -1021,7 +1033,7 @@ fn cuda_to_contiguous_keeps_tensor_on_cuda() {
     };
     let view = gpu_tensor.as_view().transpose_view([1, 0]).unwrap();
 
-    let compact = gpu.to_contiguous(&view).unwrap();
+    let compact = in_cuda_session(&mut gpu, |s| s.to_contiguous(&view)).unwrap();
 
     assert_eq!(compact.shape(), &[3, 2]);
     assert_eq!(compact.placement().memory_kind, MemoryKind::Device);
@@ -1124,7 +1136,7 @@ fn cuda_cutensor_permutation_transpose_and_to_contiguous_match_cpu() {
         .unwrap()
         .transpose_view([1, 0])
         .unwrap();
-    let compact = gpu.to_contiguous(&view).unwrap();
+    let compact = in_cuda_session(&mut gpu, |s| s.to_contiguous(&view)).unwrap();
     let actual = download(&gpu, &Tensor::from_typed::<f64>(compact));
     assert_eq!(
         actual.as_slice::<f64>().unwrap(),
@@ -1215,8 +1227,10 @@ fn cuda_runtime_copy_into_cutensor_matches_destination_reuse_and_survives_source
     let Some(src_mut) = gpu_src.as_typed_mut::<f64>() else {
         panic!("expected mutable f64 source");
     };
-    gpu.copy_into(&replacement.as_view(), &mut src_mut.as_view_mut())
-        .unwrap();
+    in_cuda_session(&mut gpu, |s| {
+        s.copy_into(&replacement.as_view(), &mut src_mut.as_view_mut())
+    })
+    .unwrap();
 
     let after_source_mutation = download(&gpu, &gpu_dst);
     assert_eq!(
@@ -1762,7 +1776,7 @@ fn cuda_to_contiguous_preserves_negative_stride_view() {
         .try_slice_axis(0, StridedSliceSpec::reverse())
         .unwrap();
 
-    let compact = gpu.to_contiguous(&view).unwrap();
+    let compact = in_cuda_session(&mut gpu, |s| s.to_contiguous(&view)).unwrap();
 
     let actual = download(&gpu, &Tensor::from_typed::<i32>(compact));
     assert_eq!(actual.as_slice::<i32>().unwrap(), &[4, 3, 2, 1]);
@@ -1778,7 +1792,7 @@ fn cuda_to_contiguous_rank_zero_scalar_stays_on_cuda() {
         panic!("expected i32 tensor");
     };
 
-    let compact = gpu.to_contiguous(&gpu_tensor.as_view()).unwrap();
+    let compact = in_cuda_session(&mut gpu, |s| s.to_contiguous(&gpu_tensor.as_view())).unwrap();
 
     assert_eq!(compact.shape(), &[] as &[usize]);
     assert_eq!(compact.placement().memory_kind, MemoryKind::Device);
@@ -1796,7 +1810,7 @@ fn cuda_to_contiguous_empty_view_stays_on_cuda() {
         panic!("expected i32 tensor");
     };
 
-    let compact = gpu.to_contiguous(&gpu_tensor.as_view()).unwrap();
+    let compact = in_cuda_session(&mut gpu, |s| s.to_contiguous(&gpu_tensor.as_view())).unwrap();
 
     assert_eq!(compact.shape(), &[0, 3]);
     assert_eq!(compact.placement().memory_kind, MemoryKind::Device);
@@ -1815,9 +1829,9 @@ fn cuda_to_contiguous_bool_view_returns_unsupported_dtype() {
         panic!("expected bool tensor");
     };
 
-    let err = gpu.to_contiguous(&gpu_tensor.as_view()).unwrap_err();
+    let err = in_cuda_session(&mut gpu, |s| s.to_contiguous(&gpu_tensor.as_view())).unwrap_err();
 
-    assert_cuda_unsupported_dtype(&err, "CudaBackend::to_contiguous", DType::Bool);
+    assert_cuda_unsupported_dtype(&err, "CudaExecSession::to_contiguous", DType::Bool);
 }
 
 #[test]
@@ -1826,11 +1840,11 @@ fn cuda_to_contiguous_host_view_returns_upload_hint() {
     let mut gpu = gpu_backend();
     let host = TypedTensor::<i32>::from_vec_col_major(vec![2], vec![1, 2]).unwrap();
 
-    let err = gpu.to_contiguous(&host.as_view()).unwrap_err();
+    let err = in_cuda_session(&mut gpu, |s| s.to_contiguous(&host.as_view())).unwrap_err();
 
     assert_runtime_state(
         &err,
-        "CudaBackend::to_contiguous",
+        "CudaExecSession::to_contiguous",
         "expected CubeCL GPU tensor view, got host tensor. Use upload_tensor() to transfer to GPU before calling GPU ops.",
     );
 }
@@ -1846,13 +1860,14 @@ fn cuda_copy_into_host_source_returns_upload_hint() {
         panic!("expected i32 tensor");
     };
 
-    let err = gpu
-        .copy_into(&src.as_view(), &mut dst.as_view_mut())
-        .unwrap_err();
+    let err = in_cuda_session(&mut gpu, |s| {
+        s.copy_into(&src.as_view(), &mut dst.as_view_mut())
+    })
+    .unwrap_err();
 
     assert_runtime_state(
         &err,
-        "CudaBackend::copy_into",
+        "CudaExecSession::copy_into",
         "expected CubeCL GPU tensor view, got host tensor. Use upload_tensor() to transfer to GPU before calling GPU ops.",
     );
 }
@@ -1868,13 +1883,14 @@ fn cuda_copy_into_host_destination_returns_upload_hint() {
     };
     let mut dst = TypedTensor::<i32>::from_vec_col_major(vec![2], vec![0, 0]).unwrap();
 
-    let err = gpu
-        .copy_into(&src.as_view(), &mut dst.as_view_mut())
-        .unwrap_err();
+    let err = in_cuda_session(&mut gpu, |s| {
+        s.copy_into(&src.as_view(), &mut dst.as_view_mut())
+    })
+    .unwrap_err();
 
     assert_runtime_state(
         &err,
-        "CudaBackend::copy_into",
+        "CudaExecSession::copy_into",
         "expected CubeCL GPU tensor view, got host tensor. Use upload_tensor() to transfer to GPU before calling GPU ops.",
     );
 }
@@ -1893,7 +1909,7 @@ fn cuda_copy_into_updates_strided_view_on_cuda() {
     };
     let mut dst_view = dst.as_view_mut().transpose_view([1, 0]).unwrap();
 
-    gpu.copy_into(&src.as_view(), &mut dst_view).unwrap();
+    in_cuda_session(&mut gpu, |s| s.copy_into(&src.as_view(), &mut dst_view)).unwrap();
 
     let actual = download(&gpu, &gpu_dst);
     assert_eq!(actual.as_slice::<i32>().unwrap(), &[1, 3, 2, 4]);
@@ -1914,7 +1930,7 @@ fn cuda_copy_into_consumes_arbitrary_stride_source() {
     };
     let src_view = src.as_view().transpose_view([1, 0]).unwrap();
 
-    gpu.copy_into(&src_view, &mut dst.as_view_mut()).unwrap();
+    in_cuda_session(&mut gpu, |s| s.copy_into(&src_view, &mut dst.as_view_mut())).unwrap();
 
     let actual = download(&gpu, &gpu_dst);
     assert_eq!(actual.as_slice::<i32>().unwrap(), &[1, 3, 2, 4]);
@@ -1945,7 +1961,7 @@ macro_rules! region_copy_case {
             let mut dst_view = dst
                 .backend_region_view_mut(vec![2, 3], vec![3, 1], 1)
                 .unwrap();
-            gpu.copy_into(&src_view, &mut dst_view).unwrap();
+            in_cuda_session(&mut gpu, |s| s.copy_into(&src_view, &mut dst_view)).unwrap();
 
             let mut expected = vec![$value(99); 20];
             for row in 0..2usize {
@@ -2053,14 +2069,15 @@ fn cuda_copy_into_rejects_source_on_wrong_device() {
     };
     let wrong_src = with_cuda_ordinal(src, 1);
 
-    let err = gpu
-        .copy_into(&wrong_src.as_view(), &mut dst.as_view_mut())
-        .unwrap_err();
+    let err = in_cuda_session(&mut gpu, |s| {
+        s.copy_into(&wrong_src.as_view(), &mut dst.as_view_mut())
+    })
+    .unwrap_err();
 
     assert!(matches!(
         err,
         Error::RuntimeState {
-            op: "CudaBackend::copy_into",
+            op: "CudaExecSession::copy_into",
             ref message,
         } if message.contains("cuda:0") && message.contains("Cuda):1")
     ));
@@ -2079,14 +2096,15 @@ fn cuda_copy_into_rejects_destination_on_wrong_device() {
     };
     let mut wrong_dst = with_cuda_ordinal(dst, 1);
 
-    let err = gpu
-        .copy_into(&src.as_view(), &mut wrong_dst.as_view_mut())
-        .unwrap_err();
+    let err = in_cuda_session(&mut gpu, |s| {
+        s.copy_into(&src.as_view(), &mut wrong_dst.as_view_mut())
+    })
+    .unwrap_err();
 
     assert!(matches!(
         err,
         Error::RuntimeState {
-            op: "CudaBackend::copy_into",
+            op: "CudaExecSession::copy_into",
             ref message,
         } if message.contains("cuda:0") && message.contains("Cuda):1")
     ));
@@ -2102,11 +2120,12 @@ fn cuda_copy_into_reports_typed_shape_mismatch() {
         panic!("expected i32 tensors");
     };
 
-    let err = gpu
-        .copy_into(&src.as_view(), &mut dst.as_view_mut())
-        .unwrap_err();
+    let err = in_cuda_session(&mut gpu, |s| {
+        s.copy_into(&src.as_view(), &mut dst.as_view_mut())
+    })
+    .unwrap_err();
 
-    assert_shape_mismatch(&err, "CudaBackend::copy_into", &[2], &[3]);
+    assert_shape_mismatch(&err, "CudaExecSession::copy_into", &[2], &[3]);
 }
 
 /// Issue #1832: materializing an offset strided device region reads the region
