@@ -217,7 +217,7 @@ fn every_write_binding_helper_invalidates_the_memoized_address() {
 #[test]
 #[ignore = "requires CUDA"]
 fn view_reads_share_the_root_memo_and_observe_queued_writes() {
-    use tenferro_tensor::{BackendSessionHost, TensorDot as _, TensorRead, TensorView};
+    use tenferro_tensor::{BackendSessionHost, TensorRead, TensorView};
 
     assert!(gpu_available(), "requires a CUDA device");
     let mut backend = CudaBackend::new(CudaDeviceId::from_ordinal(0)).unwrap();
