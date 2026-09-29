@@ -212,8 +212,10 @@ impl DefaultScalars {
     ///
     /// # Errors
     ///
-    /// Returns [`crate::Error::Validation`] when the shape product differs from
-    /// `data.len()` or validating the shape overflows.
+    /// Returns a validation error carrying
+    /// [`tenferro_tensor_core::ValidationError::ShapeDataLengthMismatch`] when the shape product
+    /// differs from `data.len()`, or [`tenferro_tensor_core::ValidationError::IntegerOverflow`]
+    /// when validating the shape overflows.
     pub fn from_vec_col_major<T: TensorScalar>(
         shape: impl Into<Vec<usize>>,
         data: Vec<T>,
@@ -542,9 +544,11 @@ impl<'a> DefaultScalarsView<'a> {
     ///
     /// # Errors
     ///
-    /// Returns [`crate::Error::Validation`] when the element counts differ, the
-    /// view's strides cannot express the new shape, or shape arithmetic
-    /// overflows.
+    /// Returns a validation error carrying [`tenferro_tensor_core::ValidationError::ShapeMismatch`]
+    /// when the element counts differ,
+    /// [`tenferro_tensor_core::ValidationError::NonContiguousViewAsSlice`] when the view's strides
+    /// cannot express the new shape, or [`tenferro_tensor_core::ValidationError::IntegerOverflow`]
+    /// when shape arithmetic overflows.
     pub fn reshape_view(&self, shape: impl AsRef<[usize]>) -> crate::Result<Self> {
         let shape = shape.as_ref();
         Ok(impl_dynamic_view!(self, reshape_view(shape) => view))
@@ -564,7 +568,10 @@ impl<'a> DefaultScalarsView<'a> {
     ///
     /// # Errors
     ///
-    /// Returns [`crate::Error::Validation`] when `axes` is not a permutation of
+    /// Returns a validation error carrying
+    /// [`tenferro_tensor_core::ValidationError::InvalidPermutationLength`],
+    /// [`tenferro_tensor_core::ValidationError::AxisOutOfBounds`] or
+    /// [`tenferro_tensor_core::ValidationError::DuplicateAxis`] when `axes` is not a permutation of
     /// the view rank.
     pub fn transpose_view(&self, axes: &[usize]) -> crate::Result<Self> {
         Ok(impl_dynamic_view!(self, transpose_view(axes) => view))

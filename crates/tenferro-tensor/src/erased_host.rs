@@ -388,8 +388,10 @@ impl ErasedHostTensor {
     ///
     /// # Errors
     ///
-    /// Returns [`crate::Error::Validation`] when `axes` does not have one entry
-    /// per axis, names an axis out of range, or repeats an axis.
+    /// Returns a validation error carrying
+    /// [`tenferro_tensor_core::ValidationError::InvalidPermutationLength`] when `axes` does not have
+    /// one entry per axis, [`tenferro_tensor_core::ValidationError::AxisOutOfBounds`] when an axis is
+    /// out of range, or [`tenferro_tensor_core::ValidationError::DuplicateAxis`] when an axis repeats.
     ///
     /// # Examples
     ///
@@ -424,8 +426,9 @@ impl ErasedHostTensor {
     ///
     /// # Errors
     ///
-    /// Returns [`crate::Error::Validation`] when the view names storage the
-    /// payload does not have.
+    /// Returns a validation error carrying
+    /// [`tenferro_tensor_core::ValidationError::ShapeDataLengthMismatch`] when the view names storage
+    /// the payload does not have.
     ///
     /// # Examples
     ///

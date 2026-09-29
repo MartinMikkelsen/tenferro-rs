@@ -5296,8 +5296,10 @@ pub trait TensorScalar: Copy + Clone + Send + Sync + 'static + private::Sealed {
     ///
     /// # Errors
     ///
-    /// Returns [`crate::Error::Validation`] when the shape product differs from
-    /// `data.len()` or shape arithmetic overflows.
+    /// Returns a validation error carrying
+    /// [`tenferro_tensor_core::ValidationError::ShapeDataLengthMismatch`] when the shape product
+    /// differs from `data.len()`, or [`tenferro_tensor_core::ValidationError::IntegerOverflow`]
+    /// when shape arithmetic overflows.
     fn into_default_scalars(
         shape: Vec<usize>,
         data: Vec<Self>,

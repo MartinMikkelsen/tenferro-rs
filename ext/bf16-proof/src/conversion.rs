@@ -12,8 +12,10 @@ use tenferro_tensor::{DynRank, Host, TypedTensor};
 ///
 /// # Errors
 ///
-/// Returns [`tenferro_tensor::Error::Validation`] when the output shape cannot be built, which cannot happen for a
-/// shape that already exists.
+/// Returns a validation error carrying
+/// [`tenferro_tensor_core::ValidationError::ShapeDataLengthMismatch`] when the
+/// output shape cannot be built, which cannot happen for a shape that already
+/// exists.
 ///
 /// # Examples
 ///
@@ -43,8 +45,10 @@ pub fn widen(
 ///
 /// # Errors
 ///
-/// Returns [`tenferro_tensor::Error::Validation`] when the output shape cannot be built, which cannot happen for a
-/// shape that already exists.
+/// Returns a validation error carrying
+/// [`tenferro_tensor_core::ValidationError::ShapeDataLengthMismatch`] when the
+/// output shape cannot be built, which cannot happen for a shape that already
+/// exists.
 ///
 /// # Examples
 ///
