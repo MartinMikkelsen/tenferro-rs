@@ -578,6 +578,24 @@ product (with conjugation and alpha/beta) before GEMM lowering. Forced routes
 that conflict with a provider's declaration (for example `Sequential` with the
 built-in BLAS) are typed errors, not overrides.
 
+**`Auto` inside an entered session (#1898 follow-up).** A multi-threaded
+session no longer runs every `Auto` batch serially. When the entered Inner
+context owns more than one Rayon thread and the provider may run inside a lane
+(faer; BLAS is excluded by its declared scheduling), `Auto` fans a strided batch
+or a grouped job list out over the context's own lanes, each lane Sequential.
+The gate is a cost model, not the item-count thresholds alone: one GEMM item
+costs about 50 ns plus one nanosecond per 16 multiply-adds, and a lane needs at
+least 8 us of estimated work, so short batches keep one provider call.
+Strided batches split into one contiguous batch chunk per lane over disjoint
+output storage. Grouped jobs run one contiguous chunk per lane in one provider
+call when the nonempty jobs' output starts increase (which, with the
+validator's pairwise disjointness, makes chunk ranges disjoint), and otherwise
+one call per job. Outside a session the existing executor fan-out and its
+thresholds are unchanged. Independently, faer runs products below 2^20 real
+multiply-adds (complex elements weigh four) sequentially inside any parallel
+context, so a multi-threaded backend is not slower than one thread on small
+GEMMs.
+
 ### D10. Crate placement: one public tensor family, no reverse edge
 
 | Crate | Target responsibility |
