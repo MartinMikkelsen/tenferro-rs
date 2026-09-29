@@ -183,8 +183,8 @@ impl EnteredRuntimeScope {
         }
     }
 
-    fn is_entered(id: ContextId) -> bool {
-        EAGER_ENTERED_RUNTIMES.with(|entered| entered.borrow().contains(&id))
+    fn any_entered() -> bool {
+        EAGER_ENTERED_RUNTIMES.with(|entered| !entered.borrow().is_empty())
     }
 }
 
@@ -2928,18 +2928,40 @@ impl fmt::Debug for EagerRuntime {
 
 impl EagerRuntime {
     pub(crate) fn lock_backend(&self) -> Result<MutexGuard<'_, EagerBackend>> {
-        // A callback of this runtime's session holds the owner lock, so waiting
-        // on it here would never return: report the reentry instead. Other
-        // threads still wait for the lock and are served in turn.
-        if EnteredRuntimeScope::is_entered(self.id) {
+        // A thread inside a session must not wait on an owner lock: a callback
+        // of this runtime holds it (the wait never returns), or another thread
+        // may hold it while waiting for the permit this thread holds (#1946
+        // F1). Report the reentry before blocking instead.
+        if EnteredRuntimeScope::any_entered()
+            || tenferro_tensor::has_active_backend_session()
+            || tenferro_cpu::current_cpu_execution() == tenferro_cpu::CpuThreadExecution::Active
+        {
             return Err(tenferro_tensor::SessionEntryError::Reentered {
                 backend: "EagerRuntime",
             }
             .into());
         }
-        self.backend.lock().map_err(|_| {
-            Error::runtime_state("eager_backend", ErrorPhase::Execution, "lock poisoned")
-        })
+        let poisoned =
+            || Error::runtime_state("eager_backend", ErrorPhase::Execution, "lock poisoned");
+        // A shared execution scope already holds the CPU permit, so waiting for
+        // the owner could deadlock the same way. Take it only when it is free.
+        if tenferro_cpu::current_cpu_execution() == tenferro_cpu::CpuThreadExecution::SharedScope {
+            return match self.backend.try_lock() {
+                Ok(backend) => Ok(backend),
+                Err(std::sync::TryLockError::Poisoned(_)) => Err(poisoned()),
+                Err(std::sync::TryLockError::WouldBlock) => {
+                    Err(tenferro_tensor::SessionEntryError::Contended {
+                        backend: "EagerRuntime",
+                        message: "the runtime is in use by another thread while this thread's \
+                                  CPU execution scope holds the permit; waiting could deadlock"
+                            .to_owned(),
+                    }
+                    .into())
+                }
+            };
+        }
+        // Independent top-level callers wait for the owner and are served in turn.
+        self.backend.lock().map_err(|_| poisoned())
     }
 
     fn lock_extension_caches(&self) -> Result<MutexGuard<'_, ExtensionCacheStore>> {

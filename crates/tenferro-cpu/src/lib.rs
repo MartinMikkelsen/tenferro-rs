@@ -225,11 +225,13 @@ pub use affinity_policy::{
     CpuAffinityInputError, CpuAffinityPolicy, CpuAffinityResolutionError, CpuAffinitySelection,
     CpuAffinitySelectionReason,
 };
+pub use backend::execution_scope::{current_cpu_execution, CpuThreadExecution};
 pub use backend::{
     CpuBackend, CpuBackendError, CpuBackendKind, CpuExecutionInfo, CpuExecutionMode,
     CpuRuntimeIdentity, ExternalCpuDomainRegistryError,
 };
 pub use batch_policy::{with_batch_policy, CpuBatchPolicy, CpuBatchStrategy, CpuBatchThresholds};
+
 pub use buffer_pool::BufferPoolStats;
 pub use capability::cpu_capabilities;
 pub use context::{CpuContext, CpuContextError, DEFAULT_WORKER_STACK_BYTES};
