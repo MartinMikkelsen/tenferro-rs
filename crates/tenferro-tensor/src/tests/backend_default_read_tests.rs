@@ -13,6 +13,8 @@ use crate::{
 };
 use num_complex::{Complex32, Complex64};
 
+mod cached_dot_defaults;
+
 pub(crate) struct DefaultReadBackend {
     calls: Vec<&'static str>,
     dot_result: Option<Tensor>,

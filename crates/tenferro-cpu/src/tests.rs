@@ -69,8 +69,8 @@ fn faer_parallelism_capability_runs_inside_a_cpu_session() {
         .unwrap();
 
     // A session that is not a CPU execution session is rejected with
-    // `Unsupported`; this crate can only build CPU sessions, so that half is
-    // asserted where a foreign session exists (the GPU and extension crates).
+    // `Unsupported`; `test_default_backend_session_methods_cover_cache_fallbacks`
+    // asserts that half through its foreign test session.
 }
 
 fn get_f64(t: &Tensor, idx: &[usize]) -> f64 {
@@ -735,6 +735,8 @@ mod elementwise_reduction_helpers;
 mod indexing;
 #[path = "tests/cpu_indexing_coverage_tests.rs"]
 mod indexing_coverage;
+#[path = "tests/cpu_tests/managed_copy_boundaries.rs"]
+mod managed_copy_boundaries;
 #[cfg(feature = "cpu-faer")]
 #[path = "tests/cpu_tests/uninit_dot_output.rs"]
 mod uninit_dot_output;

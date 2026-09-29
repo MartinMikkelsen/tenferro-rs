@@ -2916,6 +2916,33 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
     let exec_both_conj =
         TensorDot::dot_general_with_conj(&mut exec, &lhs, &rhs, &config, true, true).unwrap();
     assert_eq!(exec_both_conj.as_slice::<f64>().unwrap(), &[6.0]);
+
+    // A foreign session has no faer pool to lend, so the capability refuses
+    // without running the callback.
+    #[cfg(feature = "cpu-faer")]
+    {
+        use crate::FaerParallelismExt;
+        let mut ran = false;
+        let error = BackendSessionHost::with_backend_session(&mut backend, |session| {
+            session.with_faer_parallelism(|_| {
+                ran = true;
+                Ok(())
+            })
+        })
+        .unwrap()
+        .unwrap_err();
+        assert!(!ran);
+        match error {
+            crate::Error::Unsupported { op, message } => {
+                assert_eq!(op, "with_faer_parallelism");
+                assert_eq!(
+                    message,
+                    "selected session is not a CPU/faer execution session"
+                );
+            }
+            other => panic!("expected Unsupported, got {other:?}"),
+        }
+    }
 }
 
 #[test]
