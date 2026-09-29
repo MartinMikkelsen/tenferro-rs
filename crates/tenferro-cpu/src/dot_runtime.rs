@@ -1148,13 +1148,25 @@ impl DotGeneralRuntime {
             CpuBatchStrategy::Auto
         };
         let fan_out = match strategy {
-            CpuBatchStrategy::Auto => (entered.is_none()
-                && self.grouped_scheduling == GroupedGemmScheduling::EngineOuter
-                && entry.supports_outer()
-                && policy
-                    .thresholds()
-                    .fans_out(jobs, jobs.min(entry.thread_budget().get())))
-            .then_some(crate::provider::CpuOuterFanOut::Executor(*entry)),
+            CpuBatchStrategy::Auto
+                if self.grouped_scheduling == GroupedGemmScheduling::EngineOuter =>
+            {
+                match entered {
+                    None => (entry.supports_outer()
+                        && policy
+                            .thresholds()
+                            .fans_out(jobs, jobs.min(entry.thread_budget().get())))
+                    .then_some(crate::provider::CpuOuterFanOut::Executor(*entry)),
+                    // Inside a session the lanes share the entered pool, so
+                    // only enough estimated work per lane pays for the split.
+                    Some(context) if context.can_fan_out_lanes() => {
+                        auto_grouped_lane_count(config.jobs(), context.thread_budget().get())
+                            .filter(|&lanes| policy.thresholds().fans_out(jobs, lanes))
+                            .map(|_| crate::provider::CpuOuterFanOut::Lanes(*context))
+                    }
+                    Some(_) => None,
+                }
+            }
             CpuBatchStrategy::OuterParallel => Some(match entered {
                 None if entry.supports_outer() => crate::provider::CpuOuterFanOut::Executor(*entry),
                 Some(context) if context.can_fan_out_lanes() => {
@@ -1177,12 +1189,24 @@ impl DotGeneralRuntime {
             // The outer-scheduled grouped path only carries the four floating and complex
             // presets; the table is kept in one macro so its per-dtype invocation is one line
             // rather than the full argument list, and the definition is covered once.
+            // Lanes of an entered context run one contiguous job chunk each:
+            // one task per job made 1024 4^3 jobs 4x slower at 4 threads than
+            // one thread. The executor keeps one index per job and schedules
+            // them itself.
+            let chunks = match fan_out {
+                crate::provider::CpuOuterFanOut::Lanes(context) => {
+                    auto_grouped_lane_count(config.jobs(), context.thread_budget().get())
+                        .unwrap_or_else(|| jobs.min(context.thread_budget().get()))
+                }
+                crate::provider::CpuOuterFanOut::Executor(_) => jobs,
+            };
             macro_rules! outer_typed {
                 ($variant:ident, $storage:expr, $base:expr) => {
                     execute_grouped_outer_typed(
                         self.gemm.as_ref(),
                         checked,
                         fan_out,
+                        chunks,
                         &lhs,
                         &rhs,
                         config,
@@ -1333,13 +1357,30 @@ const AUTO_LANE_MIN_NS: usize = 8_000;
 /// fewer than two lanes would each receive enough work.
 fn auto_lane_count(plan: crate::gemm::ProviderGemmPlan, threads: usize) -> Option<usize> {
     let batch = plan.batch_count();
-    let item_muladds = plan
-        .rows()
-        .checked_mul(plan.columns())?
-        .checked_mul(plan.contracted())?;
-    let item_ns = LANE_ITEM_OVERHEAD_NS.saturating_add(item_muladds / LANE_MULADDS_PER_NS);
-    let min_items_per_lane = AUTO_LANE_MIN_NS.div_ceil(item_ns.max(1)).max(1);
+    let item_ns = lane_item_ns(plan.rows(), plan.columns(), plan.contracted());
+    let min_items_per_lane = AUTO_LANE_MIN_NS.div_ceil(item_ns).max(1);
     let lanes = threads.min(batch / min_items_per_lane);
+    (lanes >= 2).then_some(lanes)
+}
+
+/// Estimated cost of one `m x n x k` GEMM item under the lane cost model.
+fn lane_item_ns(m: usize, n: usize, k: usize) -> usize {
+    let muladds = m.saturating_mul(n).saturating_mul(k);
+    LANE_ITEM_OVERHEAD_NS.saturating_add(muladds / LANE_MULADDS_PER_NS)
+}
+
+/// The number of outer lanes `Auto` uses for grouped jobs inside an entered
+/// context, or `None` when fewer than two lanes would each receive
+/// [`AUTO_LANE_MIN_NS`] of estimated work. Each lane runs a contiguous chunk
+/// of at least one job, so lanes never exceed the job count.
+fn auto_grouped_lane_count(
+    jobs: &[tenferro_tensor::backend::GroupedGemmJob],
+    threads: usize,
+) -> Option<usize> {
+    let total_ns = jobs.iter().fold(0usize, |total, job| {
+        total.saturating_add(lane_item_ns(job.rows(), job.cols(), job.contracted()))
+    });
+    let lanes = threads.min(jobs.len()).min(total_ns / AUTO_LANE_MIN_NS);
     (lanes >= 2).then_some(lanes)
 }
 
@@ -1805,6 +1846,73 @@ fn checked_grouped_output_range(
     Ok(start..end)
 }
 
+/// Check every job's output range against the storage and report whether the
+/// nonempty jobs start at strictly increasing offsets.
+///
+/// With increasing starts, the grouped validator's pairwise disjointness makes
+/// every contiguous run of jobs end before the next run starts: a job `i`
+/// before a nonempty job `b` has `start_i < start_b`, so disjointness forces
+/// `end_i <= start_b`. Contiguous job chunks then own disjoint storage ranges.
+fn grouped_output_starts_increase(
+    jobs: &[tenferro_tensor::backend::GroupedGemmJob],
+    output_base: usize,
+    output_len: usize,
+) -> Result<bool> {
+    let mut previous = None;
+    let mut increasing = true;
+    for job in jobs {
+        let range = checked_grouped_output_range(output_base, output_len, job)?;
+        if !range.is_empty() {
+            increasing &= previous.is_none_or(|start| start < range.start);
+            previous = Some(range.start);
+        }
+    }
+    Ok(increasing)
+}
+
+/// The storage range a contiguous run of validated jobs writes, and the jobs
+/// with their output offsets rebased to that range.
+fn grouped_chunk(
+    jobs: &[tenferro_tensor::backend::GroupedGemmJob],
+    output_base: usize,
+    output_len: usize,
+) -> Result<(
+    std::ops::Range<usize>,
+    SmallVec<[tenferro_tensor::backend::GroupedGemmJob; 1]>,
+)> {
+    let mut union: Option<std::ops::Range<usize>> = None;
+    for job in jobs {
+        let range = checked_grouped_output_range(output_base, output_len, job)?;
+        if !range.is_empty() {
+            union = Some(union.map_or(range.clone(), |union| {
+                union.start.min(range.start)..union.end.max(range.end)
+            }));
+        }
+    }
+    let union = union.unwrap_or(0..0);
+    let rebased = jobs
+        .iter()
+        .map(|job| {
+            let start = output_base + job.out_offset();
+            // An empty job writes nothing; any in-range offset serves.
+            let out_offset = if job.rows() == 0 || job.cols() == 0 {
+                0
+            } else {
+                start - union.start
+            };
+            tenferro_tensor::backend::GroupedGemmJob::new(
+                out_offset,
+                job.lhs_offset(),
+                job.rhs_offset(),
+                job.rows(),
+                job.contracted(),
+                job.cols(),
+            )
+        })
+        .collect();
+    Ok((union, rebased))
+}
+
 // INVARIANT: provider, context, tensor views, grouped metadata, and output
 // storage are independent borrowed parts of one already-validated request.
 #[allow(clippy::too_many_arguments)]
@@ -1812,6 +1920,7 @@ fn execute_grouped_outer_typed<T>(
     provider: &dyn CpuGemmProvider,
     checked: crate::provider::OuterFanOutChecked,
     fan_out: crate::provider::CpuOuterFanOut<'_>,
+    chunks: usize,
     lhs: &TensorRead<'_>,
     rhs: &TensorRead<'_>,
     config: &tenferro_tensor::backend::GroupedGemmConfig<'_>,
@@ -1832,17 +1941,36 @@ where
         )
     })?;
     let output_storage_len = output_storage.len();
-    for job in config.jobs() {
-        checked_grouped_output_range(output_base, output_storage_len, job)?;
-    }
+    // Every unit is one provider call: a call per job cost about 0.4 us of
+    // request setup against 0.1 us per job inside one call, so lanes of an
+    // entered context take contiguous chunks of jobs. Chunks need increasing
+    // output starts to own disjoint ranges; otherwise every job is a unit.
+    // Only this O(jobs) scan runs before the fan-out: ranges and rebased jobs
+    // are built inside each unit, because serial per-job setup cost as much as
+    // 4^3 GEMMs themselves.
+    let jobs = config.jobs();
+    let job_count = jobs.len();
+    let unit_count = if chunks < job_count
+        && grouped_output_starts_increase(jobs, output_base, output_storage_len)?
+    {
+        chunks.max(1)
+    } else {
+        for job in jobs {
+            checked_grouped_output_range(output_base, output_storage_len, job)?;
+        }
+        job_count
+    };
+    let unit_jobs =
+        |unit: usize| unit * job_count / unit_count..(unit + 1) * job_count / unit_count;
 
     let output_address = output_storage.as_mut_ptr() as usize;
     let operation_error = std::sync::Mutex::new(None);
-    let job_states = PackedJobStates::new(config.jobs().len());
+    let failed = std::sync::atomic::AtomicBool::new(false);
+    let unit_states = PackedJobStates::new(unit_count);
     let duplicate_index = AtomicUsize::new(NO_DUPLICATE);
     fan_out
-        .submit(checked, config.jobs().len(), |index, provider_context| {
-        if job_states.try_claim(index).is_err() {
+        .submit(checked, unit_count, |index, provider_context| {
+        if unit_states.try_claim(index).is_err() {
             let _ = duplicate_index.compare_exchange(
                 NO_DUPLICATE,
                 index,
@@ -1856,48 +1984,36 @@ where
             });
         }
 
-        let already_failed = operation_error
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .is_some();
-        if !already_failed {
-            let job = &config.jobs()[index];
+        // A relaxed flag read keeps the error mutex off the per-unit path,
+        // so concurrent lanes do not bounce its cache line.
+        if !failed.load(Ordering::Relaxed) {
             let result = (|| -> Result<()> {
-                let range = checked_grouped_output_range(output_base, output_storage_len, job)?;
-                let len = range.len();
+                let (range, rebased) =
+                    grouped_chunk(&jobs[unit_jobs(index)], output_base, output_storage_len)?;
                 let start = range.start;
-                // INVARIANT: the immutable job, output base, and allocation
-                // length are identical to preflight. The shared checked helper
-                // therefore reconstructs the same in-bounds range inside this
-                // worker; the common grouped validator also proved distinct
-                // job ranges disjoint. Before reaching this point, the
-                // packed atomic claim changed this job from UNCLAIMED to
-                // RUNNING without clobbering neighboring states, so even a
-                // contract-violating safe executor cannot send a second
-                // invocation of this index to the provider.
-                // SAFETY: `start..start + len` is in this allocation. Distinct
-                // jobs have disjoint validated ranges, and the atomic claim
-                // permits exactly one invocation of each job to construct its
-                // mutable slice.
+                let len = range.len();
+                // INVARIANT: `grouped_chunk` built this unit range from the
+                // checked in-bounds job ranges of this allocation, and unit
+                // ranges are pairwise disjoint: single-job units by the common
+                // grouped validator, chunks of several jobs by increasing
+                // output starts (`grouped_output_starts_increase`). The packed atomic claim changed this unit
+                // from UNCLAIMED to RUNNING without clobbering neighboring
+                // states, so even a contract-violating safe executor cannot
+                // send a second invocation of this index to the provider.
+                // SAFETY: `start..start + len` is in this allocation, and the
+                // atomic claim permits exactly one invocation of each unit to
+                // construct its mutable slice over a range no other unit uses.
                 let output_slice = unsafe {
                     std::slice::from_raw_parts_mut((output_address as *mut T).add(start), len)
                 };
                 let output_view =
                     tenferro_tensor::TypedTensorViewMut::from_slice([len], [1], 0, output_slice)?;
                 let mut output = TensorWrite::from_view(wrap_output(output_view));
-                let job = tenferro_tensor::backend::GroupedGemmJob::new(
-                    0,
-                    job.lhs_offset(),
-                    job.rhs_offset(),
-                    job.rows(),
-                    job.contracted(),
-                    job.cols(),
-                );
                 let request = CpuGroupedGemmRequest::new(
                     lhs,
                     rhs,
                     &mut output,
-                    std::slice::from_ref(&job),
+                    &rebased,
                     config.accumulation(),
                 );
                 match provider.grouped_gemm(provider_context, request)? {
@@ -1908,12 +2024,13 @@ where
                 }
             })();
             if let Err(error) = result {
+                failed.store(true, Ordering::Relaxed);
                 *operation_error
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(error);
             }
         }
-        let _ = job_states.complete(index);
+        let _ = unit_states.complete(index);
         Ok(())
     })
         .map_err(|error| Error::backend_source("grouped_gemm", error))?;
@@ -1928,7 +2045,7 @@ where
             },
         ));
     }
-    if let Some((index, state)) = job_states.first_incomplete() {
+    if let Some((index, state)) = unit_states.first_incomplete() {
         let detail = if state == GroupedJobState::Unclaimed {
             format!("executor omitted grouped-GEMM missing index {index}")
         } else {

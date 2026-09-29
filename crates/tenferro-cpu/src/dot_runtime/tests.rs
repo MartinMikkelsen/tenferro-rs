@@ -2756,11 +2756,12 @@ fn forced_outer_parallel_grouped_fans_out_over_entered_session_lanes() {
         .unwrap()
         .unwrap();
 
-    assert_eq!(*gemm.grouped_calls.lock().unwrap(), 6);
-    assert_eq!(gemm.grouped_job_counts.lock().unwrap().as_slice(), &[1; 6]);
+    // Two lanes each run one contiguous chunk of three jobs in one call.
+    assert_eq!(*gemm.grouped_calls.lock().unwrap(), 2);
+    assert_eq!(gemm.grouped_job_counts.lock().unwrap().as_slice(), &[3; 2]);
     assert_eq!(
         gemm.parallelism.lock().unwrap().as_slice(),
-        &[ParallelMode::Sequential; 6]
+        &[ParallelMode::Sequential; 2]
     );
 }
 
@@ -3128,4 +3129,135 @@ fn output_item_span_rejects_overlapping_or_negative_batches() {
     assert_eq!(plan([2, 2, 3], [1, 2, 4]), Some(Some(4)));
     // Padded batches are still disjoint.
     assert_eq!(plan([2, 2, 3], [1, 2, 6]), Some(Some(4)));
+}
+
+#[test]
+fn auto_grouped_lane_count_needs_enough_work_per_lane() {
+    let jobs = |count: usize, dim: usize| {
+        (0..count)
+            .map(|_| GroupedGemmJob::new(0, 0, 0, dim, dim, dim))
+            .collect::<Vec<_>>()
+    };
+    // Unit jobs cost the 50 ns overhead each: 400 fill two 8 us lanes.
+    assert_eq!(super::auto_grouped_lane_count(&jobs(6, 1), 4), None);
+    assert_eq!(super::auto_grouped_lane_count(&jobs(400, 1), 4), Some(2));
+    // Four 32^3 jobs (about 2.1 us each) are one lane of work; four 64^3
+    // jobs fill every lane, capped by the job count.
+    assert_eq!(super::auto_grouped_lane_count(&jobs(4, 32), 4), None);
+    assert_eq!(super::auto_grouped_lane_count(&jobs(4, 64), 16), Some(4));
+}
+
+#[test]
+fn auto_grouped_fans_out_over_entered_lanes_only_with_enough_work() {
+    for (job_count, expect_lanes) in [(6_usize, false), (400, true)] {
+        let gemm = Arc::new(GemmSpy::new(CpuProviderOutcome::Executed));
+        let bundle = route_bundle(gemm.clone(), None);
+        let fixture = execution_context_fixture(4);
+        let entry = fixture.entry();
+        let lhs = Tensor::from_vec_col_major(vec![job_count], vec![2.0_f64; job_count]).unwrap();
+        let rhs = Tensor::from_vec_col_major(vec![job_count], vec![4.0_f64; job_count]).unwrap();
+        let mut output =
+            Tensor::from_vec_col_major(vec![job_count], vec![0.0_f64; job_count]).unwrap();
+        let jobs = (0..job_count)
+            .map(|index| GroupedGemmJob::new(index, index, index, 1, 1, 1))
+            .collect::<Vec<_>>();
+
+        entry
+            .enter(ParallelMode::Inner, |entered| {
+                bundle.execute_grouped_gemm_scoped(
+                    &entry,
+                    Some(entered),
+                    TensorRead::from_tensor(&lhs),
+                    TensorRead::from_tensor(&rhs),
+                    &GroupedGemmConfig::new(
+                        &jobs,
+                        DotGeneralAccumulation::overwrite(DType::F64).unwrap(),
+                    ),
+                    TensorWrite::from_tensor(&mut output),
+                )
+            })
+            .unwrap()
+            .unwrap();
+
+        let calls = *gemm.grouped_calls.lock().unwrap();
+        let modes = gemm.parallelism.lock().unwrap().clone();
+        if expect_lanes {
+            // 400 unit jobs are two lanes of work: one chunk call per lane.
+            assert_eq!(calls, 2, "one provider call per lane chunk");
+            assert_eq!(
+                gemm.grouped_job_counts.lock().unwrap().as_slice(),
+                &[200; 2]
+            );
+            assert!(modes.iter().all(|mode| *mode == ParallelMode::Sequential));
+        } else {
+            assert_eq!(calls, 1, "a short group stays one provider call");
+            assert_eq!(modes, vec![ParallelMode::Inner]);
+        }
+    }
+}
+
+#[test]
+fn grouped_output_starts_increase_ignores_empty_jobs() {
+    let job = |out: usize, rows: usize| GroupedGemmJob::new(out, 0, 0, rows, 1, 1);
+    assert!(super::grouped_output_starts_increase(&[job(0, 2), job(2, 2)], 0, 4).unwrap());
+    // An empty job may sit anywhere without breaking the order.
+    assert!(
+        super::grouped_output_starts_increase(&[job(0, 2), job(0, 0), job(2, 2)], 0, 4).unwrap()
+    );
+    assert!(!super::grouped_output_starts_increase(&[job(2, 2), job(0, 2)], 0, 4).unwrap());
+    // Out-of-range jobs are rejected before any order is reported.
+    assert!(super::grouped_output_starts_increase(&[job(3, 2)], 0, 4).is_err());
+}
+
+#[test]
+fn grouped_chunk_rebases_jobs_to_their_output_union() {
+    let jobs = [
+        GroupedGemmJob::new(6, 1, 2, 2, 1, 1),
+        GroupedGemmJob::new(3, 0, 0, 0, 1, 4),
+        GroupedGemmJob::new(9, 3, 4, 1, 1, 2),
+    ];
+    let (range, rebased) = super::grouped_chunk(&jobs, 1, 16).unwrap();
+    assert_eq!(range, 7..12);
+    assert_eq!(rebased[0], GroupedGemmJob::new(0, 1, 2, 2, 1, 1));
+    // The empty job writes nothing and is parked at offset 0.
+    assert_eq!(rebased[1], GroupedGemmJob::new(0, 0, 0, 0, 1, 4));
+    assert_eq!(rebased[2], GroupedGemmJob::new(3, 3, 4, 1, 1, 2));
+    assert_eq!(super::grouped_chunk(&[], 0, 4).unwrap().0, 0..0);
+}
+
+#[test]
+fn forced_outer_parallel_grouped_with_decreasing_outputs_runs_one_call_per_job() {
+    let gemm = Arc::new(GemmSpy::new(CpuProviderOutcome::Executed));
+    let bundle = route_bundle(gemm.clone(), None);
+    let fixture = execution_context_fixture(2);
+    let entry = fixture
+        .entry()
+        .with_batch_policy(policy(crate::CpuBatchStrategy::OuterParallel));
+    let mut output = Tensor::from_vec_col_major(vec![6], vec![0.0_f64; 6]).unwrap();
+    let lhs = Tensor::from_vec_col_major(vec![6], vec![2.0_f64; 6]).unwrap();
+    let rhs = Tensor::from_vec_col_major(vec![6], vec![4.0_f64; 6]).unwrap();
+    // Reversed output order: contiguous chunks would interleave in storage.
+    let jobs = (0..6)
+        .map(|index| GroupedGemmJob::new(5 - index, index, index, 1, 1, 1))
+        .collect::<Vec<_>>();
+
+    entry
+        .enter(ParallelMode::Inner, |entered| {
+            bundle.execute_grouped_gemm_scoped(
+                &entry,
+                Some(entered),
+                TensorRead::from_tensor(&lhs),
+                TensorRead::from_tensor(&rhs),
+                &GroupedGemmConfig::new(
+                    &jobs,
+                    DotGeneralAccumulation::overwrite(DType::F64).unwrap(),
+                ),
+                TensorWrite::from_tensor(&mut output),
+            )
+        })
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(*gemm.grouped_calls.lock().unwrap(), 6);
+    assert_eq!(gemm.grouped_job_counts.lock().unwrap().as_slice(), &[1; 6]);
 }
