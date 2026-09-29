@@ -45,10 +45,13 @@ and the "Backend Session Entry" section of `REPOSITORY_RULES.md`.
 - Each F item has a focused regression test that fails on the pre-fix code
   (F1 watchdog tests, F2 route parity, F3 threshold boundaries, F4 trace
   capture, F7 compile-level marker annotations).
-- The removed owner BLAS linalg mode differs from the session engine mode only
-  for a BLAS backend on an executor without Rayon inner parallelism, where
-  linalg runs sequentially instead of with BLAS inner threading. This predates
-  #1946 on `main` and is recorded, not re-tuned.
+- The removed owner BLAS linalg mode (`Inner`) and the session engine mode
+  (`Sequential`) differ only on an executor without Rayon inner parallelism.
+  There every tenferro consumer of the mode already requires Rayon, and the
+  LAPACK path reads no mode (BLAS library threads are the library's own
+  setting either way), so no built-in behavior changes. Only a custom provider
+  reading `CpuExecutionContext::parallel_mode()` on such an executor can see
+  the value differ.
 - Pre-existing and out of scope: several linalg doctests fail under
   `--features cuda`; the memo fast path has an owner-destination WAR hazard;
   `to_contiguous_read`'s default rejects strided views.

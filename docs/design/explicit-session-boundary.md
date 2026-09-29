@@ -50,10 +50,12 @@ execution, canonicalization, fusion or buffer trait, so `CpuBackend`,
 extension ops only (F9). Nested entry from inside any session is rejected with
 a typed `SessionEntryError` instead of blocking (F1). The audit allowlist
 carries no pending entries and `--check` rejects one. The owner-only BLAS
-linalg mode helper was deleted with the owner entry points; production linalg
-already ran through the session's engine mode, which differs from that helper
-only for a BLAS backend on an executor without Rayon inner parallelism
-(recorded, not re-tuned, in #1946).
+linalg mode helper was deleted with the owner entry points. Production linalg
+already ran through the session's engine mode; the two select different
+`ParallelMode` values only on an executor without Rayon inner parallelism,
+where every tenferro consumer of the mode (faer parallelism, native thread
+count, strided context, lane fan-out) already requires Rayon and the LAPACK
+path reads no mode, so no built-in behavior differs.
 
 A2 (`with_evaluation_scope` plus AD wiring) is **deferred**, not blocked: the
 2026-09-27 contract leaves its backend ownership decision and performance
