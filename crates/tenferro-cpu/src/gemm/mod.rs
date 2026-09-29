@@ -1040,6 +1040,58 @@ impl ProviderGemmPlan {
         self.batch_count
     }
 
+    pub(crate) fn rows(self) -> usize {
+        self.rows
+    }
+
+    pub(crate) fn columns(self) -> usize {
+        self.columns
+    }
+
+    pub(crate) fn contracted(self) -> usize {
+        self.contracted
+    }
+
+    pub(crate) fn output_layout(self) -> crate::provider::CpuBatchedMatrixLayout {
+        self.output_layout
+    }
+
+    /// The plan for batch items `start..start + len`, with the output offset
+    /// replaced by `output_offset` (the chunk's position inside its own output
+    /// slice). Returns `None` if an operand offset overflows.
+    pub(crate) fn batch_chunk(
+        self,
+        start: usize,
+        len: usize,
+        output_offset: isize,
+    ) -> Option<Self> {
+        let start = isize::try_from(start).ok()?;
+        let shift = |layout: crate::provider::CpuBatchedMatrixLayout| {
+            let offset = layout
+                .offset()
+                .checked_add(start.checked_mul(layout.batch_stride())?)?;
+            Some(crate::provider::CpuBatchedMatrixLayout::new(
+                offset,
+                layout.row_stride(),
+                layout.column_stride(),
+                layout.batch_stride(),
+            ))
+        };
+        let output = self.output_layout;
+        Some(Self {
+            batch_count: len,
+            lhs_layout: shift(self.lhs_layout)?,
+            rhs_layout: shift(self.rhs_layout)?,
+            output_layout: crate::provider::CpuBatchedMatrixLayout::new(
+                output_offset,
+                output.row_stride(),
+                output.column_stride(),
+                output.batch_stride(),
+            ),
+            ..self
+        })
+    }
+
     pub(crate) fn request<'request, 'input, 'output>(
         self,
         lhs: &'request TensorRead<'input>,

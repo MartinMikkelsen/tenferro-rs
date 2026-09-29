@@ -696,3 +696,28 @@ fn faer_singleton_strides_are_normalized_before_raw_gemm() {
     assert_eq!(super::normalize_singleton_stride(0, 1, 4), 4);
     assert_eq!(super::normalize_singleton_stride(0, 3, 4), 0);
 }
+
+#[test]
+fn small_gemms_stay_sequential_inside_parallel_contexts() {
+    use num_complex::Complex64;
+    let par = faer::Par::rayon(4);
+    // Below the threshold: sequential, whatever the context allowed.
+    assert!(matches!(
+        super::faer_gemm::small_gemm_parallelism::<f64>(par, 64, 64, 64),
+        faer::Par::Seq
+    ));
+    // At the threshold for reals, but complex elements weigh four times.
+    assert!(matches!(
+        super::faer_gemm::small_gemm_parallelism::<f64>(par, 128, 128, 64),
+        faer::Par::Rayon(_)
+    ));
+    assert!(matches!(
+        super::faer_gemm::small_gemm_parallelism::<Complex64>(par, 64, 64, 64),
+        faer::Par::Rayon(_)
+    ));
+    // A sequential context is never upgraded.
+    assert!(matches!(
+        super::faer_gemm::small_gemm_parallelism::<f64>(faer::Par::Seq, 512, 512, 512),
+        faer::Par::Seq
+    ));
+}

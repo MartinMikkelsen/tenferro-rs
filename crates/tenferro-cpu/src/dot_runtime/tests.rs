@@ -3019,3 +3019,113 @@ fn canonical_fallback_borrows_an_operand_that_is_already_canonical() {
     assert_eq!(*layout_calls.lock().unwrap(), 1, "only lhs is packed");
     assert_eq!(*gemm.gemm_calls.lock().unwrap(), 1);
 }
+
+#[test]
+fn auto_lane_count_needs_enough_work_per_lane() {
+    let batch_plan = |item: usize, batch: usize| {
+        let lhs =
+            Tensor::from_vec_col_major(vec![item, item, batch], vec![0.0_f64; item * item * batch])
+                .unwrap();
+        let rhs =
+            Tensor::from_vec_col_major(vec![item, item, batch], vec![0.0_f64; item * item * batch])
+                .unwrap();
+        let mut output =
+            Tensor::from_vec_col_major(vec![item, item, batch], vec![0.0_f64; item * item * batch])
+                .unwrap();
+        crate::gemm::prepare_provider_gemm(
+            &mut GemmAnalysisCache::default(),
+            None,
+            &TensorRead::from_tensor(&lhs),
+            &TensorRead::from_tensor(&rhs),
+            &TensorWrite::from_tensor(&mut output),
+            &config(&[1], &[0], &[2], &[2]),
+        )
+        .unwrap()
+        .expect("a compact strided batch has a direct plan")
+    };
+    // Tiny items: per-call overhead dominates, so many items fill a lane.
+    assert_eq!(super::auto_lane_count(batch_plan(4, 1024), 4), Some(4));
+    assert_eq!(super::auto_lane_count(batch_plan(4, 64), 4), None);
+    // Larger items need fewer per lane (16^3: 306 ns, so 27 per lane);
+    // lanes never exceed the threads.
+    assert_eq!(super::auto_lane_count(batch_plan(32, 8), 16), Some(2));
+    assert_eq!(super::auto_lane_count(batch_plan(16, 128), 8), Some(4));
+    // One lane of work is no fan-out.
+    assert_eq!(super::auto_lane_count(batch_plan(16, 32), 8), None);
+}
+
+#[test]
+fn auto_strided_batch_fans_out_one_chunk_per_lane() {
+    let gemm = Arc::new(GemmSpy::new(CpuProviderOutcome::Executed));
+    let bundle = provider_owned_bundle(gemm.clone());
+    let fixture = execution_context_fixture(4);
+    let lhs = Tensor::from_vec_col_major(vec![4, 4, 1024], vec![1.0_f64; 16 * 1024]).unwrap();
+    let rhs = Tensor::from_vec_col_major(vec![4, 4, 1024], vec![1.0_f64; 16 * 1024]).unwrap();
+    let mut output =
+        Tensor::from_vec_col_major(vec![4, 4, 1024], vec![0.0_f64; 16 * 1024]).unwrap();
+
+    bundle
+        .execute_dot_general_into(
+            &fixture.entry(),
+            &mut BufferPool::new(),
+            &mut GemmAnalysisCache::default(),
+            None,
+            TensorRead::from_tensor(&lhs),
+            TensorRead::from_tensor(&rhs),
+            &config(&[1], &[0], &[2], &[2]),
+            DotGeneralAccumulation::overwrite(DType::F64).unwrap(),
+            TensorWrite::from_tensor(&mut output),
+        )
+        .unwrap();
+
+    // Four lanes, each one sequential strided-batch call with vendor batching
+    // forbidden.
+    assert_eq!(*gemm.strided_calls.lock().unwrap(), 4);
+    assert!(gemm
+        .parallelism
+        .lock()
+        .unwrap()
+        .iter()
+        .all(|&mode| mode == ParallelMode::Sequential));
+    assert!(gemm
+        .vendor_batches
+        .lock()
+        .unwrap()
+        .iter()
+        .all(|&vendor| vendor == crate::provider::CpuVendorBatch::Forbidden));
+}
+
+#[test]
+fn output_item_span_rejects_overlapping_or_negative_batches() {
+    let plan = |shape: [usize; 3], strides: [isize; 3]| {
+        let storage = vec![0.0_f64; 64];
+        let lhs = Tensor::from_vec_col_major(
+            vec![shape[0], 1, shape[2]],
+            vec![0.0_f64; shape[0] * shape[2]],
+        )
+        .unwrap();
+        let rhs = Tensor::from_vec_col_major(
+            vec![1, shape[1], shape[2]],
+            vec![0.0_f64; shape[1] * shape[2]],
+        )
+        .unwrap();
+        let mut storage = storage;
+        let view = tenferro_tensor::TypedTensorViewMut::from_slice(shape, strides, 0, &mut storage)
+            .unwrap();
+        let output = TensorWrite::from_view(TensorViewMut::F64(view));
+        crate::gemm::prepare_provider_gemm(
+            &mut GemmAnalysisCache::default(),
+            None,
+            &TensorRead::from_tensor(&lhs),
+            &TensorRead::from_tensor(&rhs),
+            &output,
+            &config(&[1], &[0], &[2], &[2]),
+        )
+        .unwrap()
+        .map(super::output_item_span)
+    };
+    // Compact [2, 2, 3]: each item spans 4 elements and the batch stride is 4.
+    assert_eq!(plan([2, 2, 3], [1, 2, 4]), Some(Some(4)));
+    // Padded batches are still disjoint.
+    assert_eq!(plan([2, 2, 3], [1, 2, 6]), Some(Some(4)));
+}

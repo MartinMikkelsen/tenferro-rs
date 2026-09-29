@@ -1300,6 +1300,13 @@ fn execute_gemm_plan(
         CpuBatchStrategy::Auto if batch_count > 1 => crate::provider::CpuVendorBatch::Forbidden,
         _ => vendor_batch_for(policy, strategy),
     };
+    if strategy == CpuBatchStrategy::Auto && batch_count > 1 {
+        if let Some(outcome) =
+            try_execute_gemm_plan_on_lanes(provider, context, plan, lhs, rhs, accumulation, output)?
+        {
+            return Ok(outcome);
+        }
+    }
     let request = plan
         .request(lhs, rhs, output, accumulation)
         .with_vendor_batch(vendor_batch);
@@ -1309,6 +1316,226 @@ fn execute_gemm_plan(
         provider.strided_batched_gemm(context, request)?
     };
     Ok(outcome)
+}
+
+// Cost model for splitting a strided batch across outer lanes under `Auto`,
+// fitted on an AMD EPYC host (1..16 threads, faer, f64): one item costs about
+// `LANE_ITEM_OVERHEAD_NS` of per-call work plus one nanosecond per
+// `LANE_MULADDS_PER_NS` multiply-adds, and a lane pays off only with at least
+// `AUTO_LANE_MIN_NS` of estimated work. Too many short lanes made 16 threads
+// slower than one; a pure multiply-add threshold missed large batches of tiny
+// items, whose cost is per-call overhead.
+const LANE_ITEM_OVERHEAD_NS: usize = 50;
+const LANE_MULADDS_PER_NS: usize = 16;
+const AUTO_LANE_MIN_NS: usize = 8_000;
+
+/// The number of outer lanes `Auto` uses for a strided batch, or `None` when
+/// fewer than two lanes would each receive enough work.
+fn auto_lane_count(plan: crate::gemm::ProviderGemmPlan, threads: usize) -> Option<usize> {
+    let batch = plan.batch_count();
+    let item_muladds = plan
+        .rows()
+        .checked_mul(plan.columns())?
+        .checked_mul(plan.contracted())?;
+    let item_ns = LANE_ITEM_OVERHEAD_NS.saturating_add(item_muladds / LANE_MULADDS_PER_NS);
+    let min_items_per_lane = AUTO_LANE_MIN_NS.div_ceil(item_ns.max(1)).max(1);
+    let lanes = threads.min(batch / min_items_per_lane);
+    (lanes >= 2).then_some(lanes)
+}
+
+/// Run a strided batch as one contiguous chunk of items per outer lane when
+/// `Auto` may fan out: the context owns more than one Rayon thread, the lane
+/// cost model ([`auto_lane_count`]) and the policy thresholds allow it, the provider
+/// may run inside a lane, and the output items occupy disjoint increasing
+/// ranges. Returns `None` to keep the single provider call.
+fn try_execute_gemm_plan_on_lanes(
+    provider: &dyn CpuGemmProvider,
+    context: &CpuExecutionContext<'_>,
+    plan: crate::gemm::ProviderGemmPlan,
+    lhs: &TensorRead<'_>,
+    rhs: &TensorRead<'_>,
+    accumulation: DotGeneralAccumulation,
+    output: &mut TensorWrite<'_>,
+) -> Result<Option<CpuProviderOutcome>> {
+    let batch = plan.batch_count();
+    if !context.can_fan_out_lanes() {
+        return Ok(None);
+    }
+    let Some(lanes) = auto_lane_count(plan, context.thread_budget().get()) else {
+        return Ok(None);
+    };
+    if !context.batch_policy().thresholds().fans_out(batch, lanes)
+        || crate::provider::check_outer_fan_out_delegates([&provider.execution_capabilities()])
+            .is_err()
+    {
+        return Ok(None);
+    }
+    let Some(item_span) = output_item_span(plan) else {
+        return Ok(None);
+    };
+    macro_rules! typed {
+        ($ty:ty, $variant:ident, $storage:expr) => {
+            execute_gemm_chunks_on_lanes::<$ty>(
+                provider,
+                context,
+                plan,
+                lhs,
+                rhs,
+                accumulation,
+                $storage,
+                item_span,
+                lanes,
+                |view| TensorViewMut::$variant(view),
+            )
+        };
+    }
+    match output {
+        TensorWrite::Tensor(tensor) => match tensor.dtype() {
+            DType::F32 => typed!(f32, F32, dot_write_operand::<f32>(tensor)?.host_data_mut()?),
+            DType::F64 => typed!(f64, F64, dot_write_operand::<f64>(tensor)?.host_data_mut()?),
+            DType::C32 => typed!(
+                Complex32,
+                C32,
+                dot_write_operand::<Complex32>(tensor)?.host_data_mut()?
+            ),
+            DType::C64 => typed!(
+                Complex64,
+                C64,
+                dot_write_operand::<Complex64>(tensor)?.host_data_mut()?
+            ),
+            _ => Ok(None),
+        },
+        TensorWrite::View(TensorViewMut::F32(view)) => typed!(f32, F32, view.host_storage_mut()?),
+        TensorWrite::View(TensorViewMut::F64(view)) => typed!(f64, F64, view.host_storage_mut()?),
+        TensorWrite::View(TensorViewMut::C32(view)) => {
+            typed!(Complex32, C32, view.host_storage_mut()?)
+        }
+        TensorWrite::View(TensorViewMut::C64(view)) => {
+            typed!(Complex64, C64, view.host_storage_mut()?)
+        }
+        TensorWrite::View(_) => Ok(None),
+    }
+}
+
+/// The element span of one output item, when consecutive items occupy
+/// disjoint increasing ranges (positive strides and `span <= batch stride`).
+fn output_item_span(plan: crate::gemm::ProviderGemmPlan) -> Option<usize> {
+    let layout = plan.output_layout();
+    let positive = |stride: isize| usize::try_from(stride).ok().filter(|&stride| stride > 0);
+    let (row, column, batch) = (
+        positive(layout.row_stride())?,
+        positive(layout.column_stride())?,
+        positive(layout.batch_stride())?,
+    );
+    let span = plan
+        .rows()
+        .checked_sub(1)?
+        .checked_mul(row)?
+        .checked_add(plan.columns().checked_sub(1)?.checked_mul(column)?)?
+        .checked_add(1)?;
+    (span <= batch).then_some(span)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn execute_gemm_chunks_on_lanes<T>(
+    provider: &dyn CpuGemmProvider,
+    context: &CpuExecutionContext<'_>,
+    plan: crate::gemm::ProviderGemmPlan,
+    lhs: &TensorRead<'_>,
+    rhs: &TensorRead<'_>,
+    accumulation: DotGeneralAccumulation,
+    storage: &mut [T],
+    item_span: usize,
+    lanes: usize,
+    wrap: for<'a> fn(tenferro_tensor::TypedTensorViewMut<'a, T>) -> TensorViewMut<'a>,
+) -> Result<Option<CpuProviderOutcome>>
+where
+    T: Send + Sync + 'static,
+{
+    let batch = plan.batch_count();
+    let layout = plan.output_layout();
+    let (Ok(first), Ok(batch_stride)) = (
+        usize::try_from(layout.offset()),
+        usize::try_from(layout.batch_stride()),
+    ) else {
+        return Ok(None);
+    };
+    // Split the output storage into one disjoint slice per chunk of items.
+    let mut chunks = Vec::with_capacity(lanes);
+    let mut rest = storage;
+    let mut cursor = 0usize;
+    let mut start = 0usize;
+    for lane in 0..lanes {
+        let len = batch / lanes + usize::from(lane < batch % lanes);
+        let (Some(begin), Some(end)) = (
+            start
+                .checked_mul(batch_stride)
+                .and_then(|value| value.checked_add(first)),
+            (start + len - 1)
+                .checked_mul(batch_stride)
+                .and_then(|value| value.checked_add(first))
+                .and_then(|value| value.checked_add(item_span)),
+        ) else {
+            return Ok(None);
+        };
+        if end - cursor > rest.len() {
+            return Ok(None);
+        }
+        let (_, tail) = std::mem::take(&mut rest).split_at_mut(begin - cursor);
+        let (chunk, tail) = tail.split_at_mut(end - begin);
+        rest = tail;
+        cursor = end;
+        let Some(chunk_plan) = plan.batch_chunk(start, len, 0) else {
+            return Ok(None);
+        };
+        let shape = [plan.rows(), plan.columns(), len];
+        let strides = [
+            layout.row_stride(),
+            layout.column_stride(),
+            layout.batch_stride(),
+        ];
+        let view = tenferro_tensor::TypedTensorViewMut::from_slice(shape, strides, 0, chunk)?;
+        chunks.push((chunk_plan, view));
+        start += len;
+    }
+
+    let outcomes = std::sync::Mutex::new(Vec::with_capacity(lanes));
+    context.with_outer_lanes(chunks, |(chunk_plan, view), lane| {
+        let mut chunk_output = TensorWrite::from_view(wrap(view));
+        let request = chunk_plan
+            .request(lhs, rhs, &mut chunk_output, accumulation)
+            .with_vendor_batch(crate::provider::CpuVendorBatch::Forbidden);
+        let outcome = provider.strided_batched_gemm(lane, request);
+        outcomes
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(outcome);
+    });
+    let outcomes = outcomes
+        .into_inner()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut unsupported = None;
+    for outcome in outcomes {
+        match outcome? {
+            CpuProviderOutcome::Executed => {}
+            CpuProviderOutcome::Unsupported(reason) => unsupported = Some(reason),
+        }
+    }
+    match unsupported {
+        None => Ok(Some(CpuProviderOutcome::Executed)),
+        // A declining lane wrote nothing, but its siblings may have: an
+        // overwrite is redone in full by the caller's fallback, while an
+        // accumulation cannot be retried without double counting.
+        Some(reason) if accumulation_is_overwrite(accumulation)? => {
+            Ok(Some(CpuProviderOutcome::Unsupported(reason)))
+        }
+        Some(reason) => Err(unsupported_provider_error("GEMM", reason)),
+    }
+}
+
+fn accumulation_is_overwrite(accumulation: DotGeneralAccumulation) -> Result<bool> {
+    let overwrite = DotGeneralAccumulation::overwrite(accumulation.alpha.dtype())?;
+    Ok(accumulation.alpha == overwrite.alpha && accumulation.beta == overwrite.beta)
 }
 
 fn execute_gemm_plan_into_uninit(

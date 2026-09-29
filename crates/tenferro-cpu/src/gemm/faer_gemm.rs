@@ -96,6 +96,36 @@ pub(crate) trait FaerGemm: Sized {
     );
 }
 
+/// Real multiply-adds below which faer's parallel matmul is slower than a
+/// sequential one. Measured on an AMD EPYC host with faer 0.24: at 64^3 the
+/// parallel call took 19.6/21.3/31.0 us at 4/8/16 threads against 14.0 us
+/// sequential, while at 128^3 it won (55.7 us at 4 threads against 96.4 us).
+/// Complex elements count four real multiply-adds each.
+const FAER_PARALLEL_MIN_MULADDS: usize = 1 << 20;
+
+/// Keep a small GEMM on the calling thread even inside a multi-threaded
+/// context, so a multi-threaded backend is never slower than a single-threaded
+/// one on small products (PERFORMANCE_TIPS CPU threading contract).
+pub(super) fn small_gemm_parallelism<T: 'static>(
+    par: faer::Par,
+    m: usize,
+    n: usize,
+    k: usize,
+) -> faer::Par {
+    if matches!(par, faer::Par::Seq) {
+        return par;
+    }
+    let complex = std::any::TypeId::of::<T>() == std::any::TypeId::of::<Complex64>()
+        || std::any::TypeId::of::<T>() == std::any::TypeId::of::<Complex32>();
+    let weight = if complex { 4 } else { 1 };
+    let muladds = m.saturating_mul(n).saturating_mul(k).saturating_mul(weight);
+    if muladds < FAER_PARALLEL_MIN_MULADDS {
+        faer::Par::Seq
+    } else {
+        par
+    }
+}
+
 macro_rules! impl_faer_gemm {
     ($ty:ty) => {
         impl FaerGemm for $ty {
@@ -156,6 +186,7 @@ macro_rules! impl_faer_gemm {
                 let mut c_mat = MatMut::<$ty>::from_raw_parts_mut(c_ptr, m, n, c_rs, c_cs);
                 let conj_a = if conj_a { Conj::Yes } else { Conj::No };
                 let conj_b = if conj_b { Conj::Yes } else { Conj::No };
+                let par = small_gemm_parallelism::<$ty>(par, m, n, k);
                 faer::linalg::matmul::matmul_with_conj(
                     &mut c_mat, accum, &a_mat, conj_a, &b_mat, conj_b, alpha, par,
                 );
