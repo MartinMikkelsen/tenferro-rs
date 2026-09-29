@@ -16,6 +16,10 @@ and session-owned execution. Historical worklogs are not API documentation.
 | `tenferro_einsum::einsum` | Use the current trait method, for example `TraceContextEinsumExt::einsum` or `TracedTensorEinsumExt::einsum`, for the receiver you have. |
 | `tenferro_einsum::einsum_subscripts_with` | Import the owning einsum extension trait and call its session/context method. |
 | `tenferro_linalg::svd`, `qr`, `eigh`, `solve` | Import `TensorLinalgExt`, `TypedTensorLinalgExt`, or `TensorReadLinalgExt` and call `.svd(...)`, `.qr(...)`, `.eigh(...)`, or `.solve(...)` on the input. |
+| `tenferro_tensor::HostTensor<T>` / `HostTensorView<'a, T>` | `TypedTensor<T, DynRank, Host>` (`from_host_vec_col_major`, `as_slice`, `host_data_mut`) and `TypedTensorView<'a, T, DynRank, Host>` (`from_host_slice`, `as_host_slice`). Scalar-set members and `ErasedHostTensor` payloads use the same types. |
+| `tenferro_tensor::core::{DefaultScalars, HostTensor, ...}` | `tenferro_tensor::core` re-exports metadata only; import tensor types, including `DefaultScalars`, from the `tenferro_tensor` root. |
+| `TypedTensorView::try_slice`, `try_slice_axis`, `try_reshape` (and the `TypedTensorViewMut` forms) | `slice_view`, `slice_axis_view`, `reshape_view`. |
+| Owner-side execution on a backend: `CpuBackend::to_contiguous` / `copy_into` (`TensorViewCanonicalization`), `TensorFusion`, `reclaim_buffer`, `with_linalg_pool`, and the CUDA/WebGPU owner equivalents | Enter once and call the method on the session: `backend.with_backend_session(\|s\| s.to_contiguous_read(read))??`. |
 
 The owning crate's `prelude` re-exports the public operation traits. For a
 first direct CPU program, the usual imports are:

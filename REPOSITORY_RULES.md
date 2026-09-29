@@ -160,20 +160,22 @@ diff-scoped review bot must be listed in that script's `ALWAYS_SECTIONS` or
 Session entry — creating backend execution state — is owned by backend entry
 mechanisms, not by exported names. The audited set lives in
 [`scripts/audit-session-entry.py`](scripts/audit-session-entry.py): CPU
-execution admission and the owner-side install helpers built on it, CPU/CUDA/
-WebGPU session construction, `run_backend_session_cached`,
-`with_execution_scope`, the portable `with_session_entry_guard`, and every
-library call of `with_backend_session[_cached]`, `with_eager_session`,
+execution admission, CPU/CUDA/WebGPU session construction,
+`run_backend_session_cached`, `with_execution_scope`, the portable
+`with_session_entry_guard`, and every library call of
+`with_backend_session[_cached]`, `with_eager_session`,
 `with_execution_session` and the eager extension-context entries
-(`with_extension_*_context`, `erased_context`). `default_backend_session` and
-`with_evaluation_scope` are retired: any library use fails.
+(`with_extension_*_context`, `erased_context`). `default_backend_session`,
+`with_evaluation_scope` and the deleted CPU owner install helpers
+(`try_install`, `install_with_pool*`) are retired: any library use fails.
 
 - Every occurrence in library code must sit inside a function listed in
   [`scripts/session-entry-allowlist.json`](scripts/session-entry-allowlist.json),
   which is keyed by mechanism and maps each function-level source location to
   the reason it is a legitimate boundary (a session host, a named top-level
   entry point, a documented exception or a native-context region). An entry
-  without a reason fails. The allowlist may only shrink; `--bless` is for
+  without a reason fails, and so does a `PENDING` reason: a known-illegitimate
+  entry may be tracked on a branch but not merged. The allowlist may only shrink; `--bless` is for
   recording a removal. Every tracked mechanism must still match a library
   definition or site, so a rename cannot silently shrink coverage.
 - An execution scope creates execution state too: it holds an execution permit and
@@ -184,6 +186,11 @@ library call of `with_backend_session[_cached]`, `with_eager_session`,
   as an eager runtime's backend owner: nested entry is rejected before the wait,
   and inside a shared execution scope a busy owner is reported as contended
   (#1946 F1).
+- Backend owner types (`CpuBackend`, `CudaBackend`, `WebGpuBackend`) are session
+  hosts, not execution surfaces: they implement no operation, canonicalization,
+  fusion or buffer trait. Those capabilities live on the session types. The
+  owner keeps `BackendSessionHost`, runtime-cache ownership and the explicit
+  `TensorDeviceTransfer` boundary (#1946 F6).
 - Operation implementations reach a session through `with_backend_session` and
   must not create execution state themselves. Entry is fallible: admission
   failures (reentry, a busy caller-managed domain, a scope mismatch, poisoned

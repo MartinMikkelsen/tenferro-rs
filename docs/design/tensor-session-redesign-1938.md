@@ -377,6 +377,14 @@ arbiter state and executor-entry failure. Request-id exhaustion stays a wait
 (ids restart once every permit drains). The design council recorded
 nonblocking `Busy` as one valid policy, not the only safe one.
 
+**Lock-order enforcement (#1946 F1).** The rule above was stated but not
+checked: a thread could hold a session of one eager runtime (or a CPU execution
+scope) and block on another runtime's owner lock. The eager owner lock is now
+taken only when this thread holds no session, portable session guard or CPU
+permit; otherwise entry fails with `Reentered` before any wait. Inside a shared
+execution scope the owner lock is tried, not awaited, and a busy owner is
+`Contended`. Cross-thread permit waits keep the FIFO policy above.
+
 **Unwind reuse.** The engine-resources lock is still recovered after a callback
 unwinds: `BufferPoolLoan` restores in-flight pool accounting on unwind, so the
 next session sees a consistent pool, while pool introspection keeps reporting the
@@ -620,6 +628,11 @@ would need a reverse dependency. Core scalar traits that currently mention
 HostTensor or core Tensor must lose those storage-conversion methods; equivalent
 storage-facing methods belong in `tenferro-tensor`. Keep pure scalar tags and
 validation below it. External erased storage/adapters are migrated, not removed.
+
+#1946 F8 completes this: `HostTensor` / `HostTensorView` are removed with no
+alias, `define_scalar_set!` members, `DefaultScalars` and `ErasedHostTensor`
+carry `TypedTensor<T, DynRank, Host>`, and `tenferro_tensor::core` re-exports
+metadata only.
 
 No new crate, no blanket ban on legitimate existing dependencies between
 operation families/runtime. The table assigns ownership, not a fictitious linear
