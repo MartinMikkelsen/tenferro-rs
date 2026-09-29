@@ -1128,6 +1128,7 @@ gpu	tenferro-linalg::integration	gpu_linalg::test_cubecl_eig_f32_returns_unsuppo
 gpu	tenferro-linalg::integration	gpu_linalg::test_cubecl_eigh_auto_batched_matches_the_per_matrix_spectrum
 gpu	tenferro-linalg::integration	gpu_linalg::test_cubecl_eigh_auto_driver_matches_default_eigh
 gpu	tenferro-linalg::integration	gpu_linalg::test_cubecl_eigh_c64_reconstructs_input
+gpu	tenferro-linalg::integration	gpu_linalg::test_cubecl_eigh_complex_batches_run_through_xsyev_batched
 gpu	tenferro-linalg::integration	gpu_linalg::test_cubecl_eigh_forced_syevd_matches_reference
 gpu	tenferro-linalg::integration	gpu_linalg::test_cubecl_eigh_forced_syevj_matches_reference
 gpu	tenferro-linalg::integration	gpu_linalg::test_cubecl_eigh_values_c64_matches_cpu

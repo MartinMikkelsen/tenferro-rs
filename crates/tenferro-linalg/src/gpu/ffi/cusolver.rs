@@ -2225,7 +2225,9 @@ impl CusolverDnHandle {
             CudaDataType::F32 | CudaDataType::Complex32 => CudaDataType::F32,
             CudaDataType::F64 | CudaDataType::Complex64 => CudaDataType::F64,
         };
-        let compute = cuda_data_type_abi(real);
+        // cuSOLVER computes in the type of A: a Hermitian input takes a
+        // complex computeType even though the spectrum W is real (#1923).
+        let compute = cuda_data_type_abi(dtype);
         let real = cuda_data_type_abi(real);
         let dtype = cuda_data_type_abi(dtype);
         let mut device_bytes = 0;
@@ -2290,7 +2292,9 @@ impl CusolverDnHandle {
             CudaDataType::F32 | CudaDataType::Complex32 => CudaDataType::F32,
             CudaDataType::F64 | CudaDataType::Complex64 => CudaDataType::F64,
         };
-        let compute = cuda_data_type_abi(real);
+        // cuSOLVER computes in the type of A: a Hermitian input takes a
+        // complex computeType even though the spectrum W is real (#1923).
+        let compute = cuda_data_type_abi(dtype);
         let real = cuda_data_type_abi(real);
         let dtype = cuda_data_type_abi(dtype);
         let status = (self.lib.vtable.xsyev_batched)(

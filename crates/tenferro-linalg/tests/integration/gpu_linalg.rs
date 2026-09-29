@@ -1438,6 +1438,84 @@ fn test_cubecl_eigh_auto_batched_matches_the_per_matrix_spectrum() {
     }
 }
 
+/// Hermitian `n x n` blocks with a well-separated real spectrum and complex
+/// off-diagonal entries, repeated over `batch` matrices.
+fn patterned_hermitian_c64(n: usize, batch: usize) -> Vec<Complex64> {
+    let mut data = Vec::with_capacity(n * n * batch);
+    for b in 0..batch {
+        for col in 0..n {
+            for row in 0..n {
+                let (lo, hi) = if row <= col { (row, col) } else { (col, row) };
+                let re = ((lo * 13 + hi * 17 + 3) % 31) as f64 / 31.0 - 0.5;
+                let im = ((lo * 7 + hi * 11 + 5) % 23) as f64 / 23.0 - 0.5;
+                let value = if row == col {
+                    Complex64::new(2.0 * (row + 1) as f64 + b as f64 + re, 0.0)
+                } else if row < col {
+                    Complex64::new(re, im)
+                } else {
+                    Complex64::new(re, -im)
+                };
+                data.push(value);
+            }
+        }
+    }
+    data
+}
+
+#[test]
+#[ignore = "requires a CUDA GPU"]
+fn test_cubecl_eigh_complex_batches_run_through_xsyev_batched() {
+    // Complex batches above the order 32 take `cusolverDnXsyevBatched`, whose
+    // computeType must be the complex type of A, not the real type of W
+    // (#1923). Both precisions must reconstruct every matrix and agree with
+    // the CPU per-matrix spectrum.
+    let (n, batch) = (44, 16);
+    let data = patterned_hermitian_c64(n, batch);
+    let mut gpu = gpu_backend();
+    let mut cpu = cpu_backend();
+
+    let input = tensor_c64(vec![n, n, batch], data.clone());
+    let device = upload(&gpu, &input);
+    let outputs = with_cuda_linalg_session(&mut gpu, |session| session.eigh(&device)).unwrap();
+    let values = download(&gpu, &outputs[0]);
+    let vectors = download(&gpu, &outputs[1]);
+    assert_eq!(values.shape(), &[n, batch]);
+    let values_data = values.as_slice::<f64>().unwrap();
+    let vectors_data = vectors.as_slice::<Complex64>().unwrap();
+    for b in 0..batch {
+        let v = &vectors_data[b * n * n..(b + 1) * n * n];
+        let w = values_data[b * n..(b + 1) * n]
+            .iter()
+            .map(|&value| Complex64::new(value, 0.0))
+            .collect::<Vec<_>>();
+        let reconstruction = matmul_c64(
+            &matmul_c64(v, &diag_c64(&w), n, n, n),
+            &conj_transpose_c64(v, n, n),
+            n,
+            n,
+            n,
+        );
+        assert_relative_error_c64(&reconstruction, &data[b * n * n..(b + 1) * n * n], 1e-9);
+    }
+    let expected =
+        with_cpu_linalg_session(&mut cpu, |session| session.eigh_values(&input)).unwrap();
+    assert_tensor_close(&values, &expected, 1e-8);
+
+    let input32 = tensor_c32(
+        vec![n, n, batch],
+        data.iter()
+            .map(|value| Complex32::new(value.re as f32, value.im as f32))
+            .collect(),
+    );
+    let device32 = upload(&gpu, &input32);
+    let values32 = with_cuda_linalg_session(&mut gpu, |session| session.eigh_values(&device32))
+        .map(|values| download(&gpu, &values))
+        .unwrap();
+    let expected32 =
+        with_cpu_linalg_session(&mut cpu, |session| session.eigh_values(&input32)).unwrap();
+    assert_tensor_close(&values32, &expected32, 1e-3);
+}
+
 #[test]
 #[ignore = "requires a CUDA GPU"]
 fn test_cubecl_eigh_auto_driver_matches_default_eigh() {
