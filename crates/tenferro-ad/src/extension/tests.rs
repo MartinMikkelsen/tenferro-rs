@@ -1038,7 +1038,7 @@ fn adopt_untracked_eager_value_registers_value() {
 fn apply_eager_falls_back_to_compiled_on_unsupported_prepare() {
     // An engine whose prepare returns Unsupported makes the native immediate
     // path decline; apply_eager then falls back to the compiled-program path
-    // (exec_outputs_read). The compiled path shares the same engine, so the
+    // (exec_extension_outputs_read). The compiled path shares the same engine, so the
     // fallback surfaces the engine's unsupported error rather than panicking.
     let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
     let input = input(&ctx);

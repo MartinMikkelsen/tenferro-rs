@@ -91,25 +91,24 @@ pool, or Rayon's ambient global pool would create a second memory and threading
 policy. Memory reuse and thread policy are execution resources, not tensor
 metadata.
 
-Use the backend-owned canonicalization operation when a metadata-only view must
+Use the session canonicalization operation when a metadata-only view must
 become compact:
 
 <!-- snippet-source: docs/tutorial-code/src/bin/execution_snippets.rs#parallelism_and_caching_2 -->
 ```rust
 use tenferro_cpu::CpuBackend;
-use tenferro_tensor::{TypedTensor};
-use tenferro_tensor::backend::TensorViewCanonicalization;
+use tenferro_tensor::{BackendSessionHost, TypedTensor};
 
 let tensor = TypedTensor::<f64>::from_vec_col_major(
     vec![2, 3],
     vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
 )?;
-let transposed = tensor.as_view().transpose_view([1, 0])?;
+let transposed = tensor.as_view().transpose_view([1, 0])?.into_tensor_read()?;
 let mut backend = CpuBackend::with_threads(4)?;
-let compact = backend.to_contiguous(&transposed)?;
+let compact = backend.with_backend_session(|session| session.to_contiguous_read(transposed))??;
 
 assert_eq!(compact.shape(), &[3, 2]);
-assert_eq!(compact.as_slice()?, &[1.0, 3.0, 5.0, 2.0, 4.0, 6.0]);
+assert_eq!(compact.as_slice::<f64>()?, &[1.0, 3.0, 5.0, 2.0, 4.0, 6.0]);
 ```
 <!-- end-snippet-source -->
 

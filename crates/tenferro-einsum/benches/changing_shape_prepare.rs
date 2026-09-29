@@ -4,7 +4,7 @@ use std::sync::Arc;
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use tenferro_ad::{EagerRuntime, EagerTensor};
 use tenferro_cpu::CpuBackend;
-use tenferro_einsum::EagerEinsumExt;
+use tenferro_einsum::EagerSessionEinsumExt;
 use tenferro_runtime::Tensor;
 
 const SHAPE_COUNT: usize = 129;
@@ -68,13 +68,18 @@ fn shape_cases(ctx: &Arc<EagerRuntime>) -> Vec<ShapeCase> {
 
 fn run_shape_sequence(cases: &[ShapeCase]) {
     for case in cases {
-        let out = [
+        let inputs = [
             black_box(&case.lhs),
             black_box(&case.mid),
             black_box(&case.rhs),
-        ]
-        .einsum("abc,cde,ef->abdf")
-        .unwrap();
+        ];
+        // One eager session per call, as before the borrowed-session API.
+        let out = case
+            .lhs
+            .runtime()
+            .with_eager_session(|s| s.einsum(&inputs, "abc,cde,ef->abdf"))
+            .unwrap()
+            .unwrap();
         consume_f64(&out);
     }
 }

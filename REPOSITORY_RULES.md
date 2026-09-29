@@ -159,23 +159,38 @@ diff-scoped review bot must be listed in that script's `ALWAYS_SECTIONS` or
 
 Session entry — creating backend execution state — is owned by backend entry
 mechanisms, not by exported names. The audited set lives in
-[`scripts/audit-session-entry.py`](scripts/audit-session-entry.py):
-`default_backend_session`, `with_session_entry_guard`,
-`install_with_pool_context[_fresh]`, `install_with_indexed_pool_context[_unmarked]`,
-`run_backend_session_cached`, `with_execution_scope`, `with_evaluation_scope`, and
-`CpuExecSession` / `CudaExecSession` / `WebGpuExecSession` construction.
+[`scripts/audit-session-entry.py`](scripts/audit-session-entry.py): CPU
+execution admission, CPU/CUDA/WebGPU session construction,
+`run_backend_session_cached`, `with_execution_scope`, the portable
+`with_session_entry_guard`, and every library call of
+`with_backend_session[_cached]`, `with_eager_session`,
+`with_execution_session` and the eager extension-context entries
+(`with_extension_*_context`, `erased_context`). `default_backend_session`,
+`with_evaluation_scope` and the deleted CPU owner install helpers
+(`try_install`, `install_with_pool*`) are retired: any library use fails.
 
 - Every occurrence in library code must sit inside a function listed in
   [`scripts/session-entry-allowlist.json`](scripts/session-entry-allowlist.json),
-  which is keyed by mechanism and holds function-level source locations. The
-  allowlist may only shrink; `--bless` is for recording a removal.
+  which is keyed by mechanism and maps each function-level source location to
+  the reason it is a legitimate boundary (a session host, a named top-level
+  entry point, a documented exception or a native-context region). An entry
+  without a reason fails, and so does a `PENDING` reason: a known-illegitimate
+  entry may be tracked on a branch but not merged. The allowlist may only shrink; `--bless` is for
+  recording a removal. Every tracked mechanism must still match a library
+  definition or site, so a rename cannot silently shrink coverage.
 - An execution scope creates execution state too: it holds an execution permit and
-the resource set that permit keys, and sessions opened inside it reuse them. Scope
-entry points therefore belong to the audited set. `with_execution_scope` has exactly
-one allowlisted entry — the API definition in `tenferro-cpu` — and
-`with_evaluation_scope`, the hook that lets an evaluation open one scope of its own,
-is tracked with **zero** entries: the day library code calls it, the gate fails until
-a reviewer allowlists that call site.
+  the resource set that permit keys, and sessions opened inside it reuse them. Scope
+  entry points therefore belong to the audited set. `with_evaluation_scope` (an
+  evaluation-wide scope hook, A2) is not implemented and stays retired.
+- A thread that holds a session or a CPU permit never waits on an owner lock such
+  as an eager runtime's backend owner: nested entry is rejected before the wait,
+  and inside a shared execution scope a busy owner is reported as contended
+  (#1946 F1).
+- Backend owner types (`CpuBackend`, `CudaBackend`, `WebGpuBackend`) are session
+  hosts, not execution surfaces: they implement no operation, canonicalization,
+  fusion or buffer trait. Those capabilities live on the session types. The
+  owner keeps `BackendSessionHost`, runtime-cache ownership and the explicit
+  `TensorDeviceTransfer` boundary (#1946 F6).
 - Operation implementations reach a session through `with_backend_session` and
   must not create execution state themselves. Entry is fallible: admission
   failures (reentry, a busy caller-managed domain, a scope mismatch, poisoned
@@ -186,10 +201,11 @@ a reviewer allowlists that call site.
   constructor, used only by the leaf that owns the marker.
 - A renamed import is not an exemption: the audit resolves `use ... as alias`
   and fails on an aliased entry, and its own negative tests run on every check.
-- Test, benchmark and example code is out of scope; moving that code into the
-  library brings it back into scope.
-- `python3 scripts/audit-session-entry.py --check` runs as part of
-  `scripts/check-pr-fast.sh`.
+- Test, benchmark and example code is out of scope (`tests/`, `benches/`,
+  `examples/`, `tests.rs`, `*_tests.rs` and `#[cfg(test)]` items); moving that
+  code into the library brings it back into scope.
+- `python3 scripts/audit-session-entry.py --check` runs in hosted CI (the
+  `ci-config` profile) and in `scripts/check-pr-fast.sh`.
 
 ## Invariant Markers
 
@@ -482,8 +498,9 @@ checking where it lives.
 - **Count it correctly.** Plain `grep -c unsafe` over-counts ~30%+ (comments,
   docs, string literals, tests, `target/`). Use
   `python3 scripts/count-unsafe.py` for the production figure with a
-  per-crate / per-category breakdown. As of this writing the real total is
-  ~460, essentially all FFI/backend: cuSOLVER/cuTENSOR/cuBLAS and LAPACK
+  per-crate / per-category breakdown. As of 2026-09 the real total is about
+  1050 (tenferro-linalg ~420, tenferro-gpu ~260, tenferro-cpu ~160,
+  tenferro-tensor ~80), essentially all FFI/backend: cuSOLVER/cuTENSOR/cuBLAS and LAPACK
   bindings, the batched raw-pointer setup feeding them, SIMD elementwise
   kernels, thread affinity, and buffer pools (`tenferro-linalg`,
   `tenferro-cpu`, `tenferro-gpu`).
@@ -850,10 +867,14 @@ Tests follow implementation ownership.
   operations instead use a runtime-bound, explicitly borrowed `EagerSession`
   (`ctx.with_eager_session(|s| s.exp(&x))`, `s.where_select(&cond, &x, &y)`);
   `EagerTensor` remains the value/trace handle, not an implicit per-operation
-  backend entry point. Do not add operator overloads that hide eager entry.
-  The existing tensor-owned linalg `solve` preserves calling-thread `no_grad`
-  behavior, and consuming in-place FFT preserves exclusive ownership; neither
-  is a precedent for new implicit eager operation methods.
+  backend entry point. This holds for every eager operation surface, including
+  extension crates (einsum, linalg, FFT, ...): a tensor-, slice- or
+  typed-owned eager operation must not open a session internally; it is
+  offered on the borrowed session instead. Do not add operator overloads that
+  hide eager entry. The only exceptions are the tensor-owned linalg `solve`,
+  which preserves calling-thread `no_grad` behavior, and consuming in-place
+  FFT, which preserves exclusive ownership; neither is a precedent for new
+  implicit eager operation methods. The session-entry audit enforces this.
 - **Non-AD concrete ops**: `Tensor` and dynamic-rank `TypedTensor<T>` use
   crate-root session extension traits (`TensorSessionOpsExt`,
   `TypedTensorSessionOpsExt`, and `TypedTensorMaskSessionOpsExt`) whose
@@ -866,7 +887,7 @@ Tests follow implementation ownership.
   release API.
 - **Extension families**: extension crates cannot add inherent methods to
   external tensor types, so their canonical tensor-facing surface is extension
-  traits (`TracedTensorLinalgExt`, `EagerEinsumExt`, `EagerSessionLinalgExt`,
+  traits (`TracedTensorLinalgExt`, `EagerSessionEinsumExt`, `EagerSessionLinalgExt`,
   `EagerSessionFftExt`, `TraceContextEinsumExt`, `TracedTensorEinsumExt`,
   `TracedTensorFftExt`) re-exported at the crate root. Do not expose public
   `traced_tensor` / `eager_tensor` module free functions for standard

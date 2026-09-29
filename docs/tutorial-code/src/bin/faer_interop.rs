@@ -19,7 +19,7 @@ use faer::{Accum, Mat, MatMut, MatRef, Par};
 use tenferro_cpu::{CpuBackend, FaerParallelismExt};
 use tenferro_tensor::{
     BackendSessionHost, BackendStorage, BackendStorageHandle, DeviceId, DeviceKind, MemoryKind,
-    Placement, StorageBuffer, TensorViewCanonicalization, TypedTensor, TypedTensorView,
+    Placement, StorageBuffer, TypedTensor, TypedTensorView,
 };
 
 fn assert_close(actual: f64, expected: f64, context: &str) {
@@ -172,9 +172,13 @@ fn faer_rejects_non_contiguous_without_materializing() -> tenferro_tensor::Resul
         "unexpected error: {error}"
     );
 
-    // The caller decides to materialize through an explicit backend call.
+    // The caller decides to materialize through an explicit backend session.
     let mut backend = CpuBackend::new();
-    let compact = backend.to_contiguous(&transposed)?;
+    let read = transposed.into_tensor_read()?;
+    let compact = backend.with_backend_session(|session| session.to_contiguous_read(read))??;
+    let compact = compact
+        .as_typed::<f64>()
+        .expect("materialized an f64 tensor");
     assert!(compact.is_col_major_contiguous()?);
     // 3x2 column-major copy of the transposed matrix [[1,4],[2,5],[3,6]]:
     // column 0 = [1,2,3], column 1 = [4,5,6].

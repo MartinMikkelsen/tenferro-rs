@@ -26,7 +26,7 @@ use tenferro_runtime::extension::apply;
 use tenferro_runtime::{EngineId, Error, ErrorPhase, GraphCompiler, Runtime, TracedTensor};
 use tenferro_scalar_consumer_algorithm::{factor_norm_gradient, ScalarSupport};
 use tenferro_tensor::{DType, Tensor};
-use tenferro_tensor::{ErasedHostTensor, HostTensor};
+use tenferro_tensor::{DynRank, ErasedHostTensor, Host, TypedTensor};
 
 /// Canonical standard support.
 struct Standard;
@@ -94,7 +94,7 @@ fn standard_input() -> TracedTensor {
 fn extended_input() -> TracedTensor {
     TracedTensor::from_tensor_concrete_shape_declaring_scalar(
         Tensor::external(ErasedHostTensor::new(
-            HostTensor::from_vec_col_major(
+            TypedTensor::<_, DynRank, Host>::from_host_vec_col_major(
                 vec![2, 1],
                 vec![Df64::from_f64(3.0), Df64::from_f64(4.0)],
             )

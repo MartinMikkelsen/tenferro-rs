@@ -14,7 +14,7 @@ use tenferro_tensor::{
     BackendSessionHost, MemoryKind, Placement, Tensor, TensorRead, TensorView, TypedTensor,
     TypedTensorView,
 };
-use tenferro_tensor::{ErasedHostTensor, HostTensor};
+use tenferro_tensor::{DynRank, ErasedHostTensor, Host};
 
 use super::super::EagerTensor;
 
@@ -917,7 +917,8 @@ fn host_leaf_materialization_matches_the_cpu_backend_acceptance() -> Result<(), 
 
     // Declined: a caller-owned external scalar keeps the session path.
     let payload =
-        HostTensor::from_vec_col_major(vec![1], vec![7.0_f64]).expect("valid host tensor");
+        TypedTensor::<f64, DynRank, Host>::from_host_vec_col_major(vec![1], vec![7.0_f64])
+            .expect("valid host tensor");
     let external = Tensor::external(ErasedHostTensor::new(payload));
     assert!(backend
         .to_contiguous_host_read(&TensorRead::from_tensor(&external))
@@ -1110,4 +1111,168 @@ fn nested_entry_into_the_same_runtime_is_rejected_without_deadlock() -> Result<(
     let y = ctx.with_eager_session(|s| s.neg(&x))??;
     assert_eq!(y.value()?.as_slice::<f64>()?, &[-2.0]);
     Ok(())
+}
+
+fn assert_reentered<T: std::fmt::Debug>(result: Result<T, Error>) {
+    assert!(
+        matches!(
+            result,
+            Err(Error::SessionEntry(
+                tenferro_tensor::SessionEntryError::Reentered { .. }
+            ))
+        ),
+        "expected a typed reentry rejection, got {result:?}"
+    );
+}
+
+/// #1946 F1: entering a *different* runtime from a session callback must be
+/// rejected before waiting on its owner lock. Otherwise this order deadlocks:
+/// runtime A's callback holds the CPU permit; another thread holds runtime B's
+/// owner lock and waits for that permit; A's callback waits for B's owner lock.
+/// The scenario runs on a helper thread so a regression fails the test through
+/// the watchdog instead of hanging the suite.
+#[test]
+fn nested_entry_into_another_runtime_is_rejected_before_its_owner_lock() {
+    let (done_tx, done_rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let first = EagerRuntime::with_cpu_backend(CpuBackend::with_threads(1).unwrap()).unwrap();
+        let second = EagerRuntime::with_cpu_backend(CpuBackend::with_threads(1).unwrap()).unwrap();
+        let (locked_tx, locked_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+        let other = second.clone();
+        let nested_target = second.clone();
+        let nested = first
+            .with_execution_session(move |_| {
+                // Another thread takes runtime B's owner lock and then needs the
+                // CPU permit that this callback holds.
+                let worker = std::thread::spawn(move || {
+                    let mut backend = other.lock_backend().unwrap();
+                    locked_tx.send(()).unwrap();
+                    let _ = release_rx.recv();
+                    backend.with_backend_session(|_| ()).unwrap();
+                });
+                locked_rx.recv().unwrap();
+                let nested = nested_target.with_execution_session(|_| ());
+                release_tx.send(()).unwrap();
+                (nested, worker)
+            })
+            .unwrap();
+        let (nested, worker) = nested;
+        // The worker gets the permit once the outer callback has returned.
+        worker.join().unwrap();
+        // Both runtimes recover for independent top-level calls.
+        first.with_execution_session(|_| ()).unwrap();
+        second.with_execution_session(|_| ()).unwrap();
+        done_tx.send(nested.map(|_| ())).unwrap();
+    });
+    let nested = done_rx
+        .recv_timeout(std::time::Duration::from_secs(30))
+        .expect("nested cross-runtime entry deadlocked (#1946 F1)");
+    assert_reentered(nested);
+}
+
+/// #1946 F1: an eager runtime entered from inside a plain CPU backend session
+/// must reject before its owner lock too. The deadlocking order: this thread's
+/// CPU session holds the permit; another thread holds the runtime's owner lock
+/// and waits for the permit; this thread waits for the owner lock.
+#[test]
+fn eager_entry_from_a_cpu_backend_session_is_rejected_before_its_owner_lock() {
+    let (done_tx, done_rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let ctx = EagerRuntime::with_cpu_backend(CpuBackend::with_threads(1).unwrap()).unwrap();
+        let x = ctx
+            .variable_from(Tensor::from_vec_col_major(vec![1], vec![3.0_f64]).unwrap())
+            .unwrap();
+        let (locked_tx, locked_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+        let owner = ctx.clone();
+        let nested_ctx = ctx.clone();
+        let nested_x = x.clone();
+        let mut backend = CpuBackend::with_threads(1).unwrap();
+        let (nested, worker) = backend
+            .with_backend_session(move |_| {
+                let worker = std::thread::spawn(move || {
+                    let mut locked = owner.lock_backend().unwrap();
+                    locked_tx.send(()).unwrap();
+                    let _ = release_rx.recv();
+                    locked.with_backend_session(|_| ()).unwrap();
+                });
+                locked_rx.recv().unwrap();
+                let nested = nested_ctx
+                    .with_eager_session(|s| s.neg(&nested_x))
+                    .map(|_| ());
+                release_tx.send(()).unwrap();
+                (nested, worker)
+            })
+            .unwrap();
+        worker.join().unwrap();
+        // The runtime recovers for an independent top-level call.
+        let y = ctx.with_eager_session(|s| s.neg(&x)).unwrap().unwrap();
+        assert_eq!(y.value().unwrap().as_slice::<f64>().unwrap(), &[-3.0]);
+        done_tx.send(nested).unwrap();
+    });
+    let nested = done_rx
+        .recv_timeout(std::time::Duration::from_secs(30))
+        .expect("eager entry from a CPU session deadlocked (#1946 F1)");
+    assert_reentered(nested);
+}
+
+/// #1946 F1: inside a shared CPU execution scope the permit is already held, so
+/// a busy runtime owner is reported as contended instead of waited for; a free
+/// owner is taken and the operation runs under the scope.
+#[test]
+fn eager_entry_in_an_execution_scope_does_not_wait_on_a_busy_owner() {
+    let (done_tx, done_rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let backend = CpuBackend::with_threads(1).unwrap();
+        let ctx = EagerRuntime::with_cpu_backend(backend.clone()).unwrap();
+        let x = ctx
+            .variable_from(Tensor::from_vec_col_major(vec![1], vec![5.0_f64]).unwrap())
+            .unwrap();
+        let (locked_tx, locked_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+        let owner = ctx.clone();
+        let scoped_ctx = ctx.clone();
+        let scoped_x = x.clone();
+        let (free, busy, worker) = backend
+            .with_execution_scope(move || {
+                let free = scoped_ctx
+                    .with_eager_session(|s| s.neg(&scoped_x))
+                    .unwrap()
+                    .unwrap();
+                let worker = std::thread::spawn(move || {
+                    let locked = owner.lock_backend().unwrap();
+                    locked_tx.send(()).unwrap();
+                    let _ = release_rx.recv();
+                    drop(locked);
+                });
+                locked_rx.recv().unwrap();
+                let busy = scoped_ctx
+                    .with_eager_session(|s| s.neg(&scoped_x))
+                    .map(|_| ());
+                release_tx.send(()).unwrap();
+                (free, busy, worker)
+            })
+            .unwrap();
+        worker.join().unwrap();
+        done_tx
+            .send((
+                free.value().unwrap().as_slice::<f64>().unwrap().to_vec(),
+                busy,
+            ))
+            .unwrap();
+    });
+    let (free, busy) = done_rx
+        .recv_timeout(std::time::Duration::from_secs(30))
+        .expect("eager entry in an execution scope waited on a busy owner (#1946 F1)");
+    assert_eq!(free, vec![-5.0]);
+    assert!(
+        matches!(
+            busy,
+            Err(Error::SessionEntry(
+                tenferro_tensor::SessionEntryError::Contended { .. }
+            ))
+        ),
+        "expected a typed contention, got {busy:?}"
+    );
 }

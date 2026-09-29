@@ -4189,6 +4189,29 @@ impl Drop for InSessionGuard {
     }
 }
 
+/// Whether a portable backend-session closure is running on the current thread.
+///
+/// Hosts that enter through [`with_session_entry_guard`] (CUDA, WebGPU and
+/// backends keeping the default entry) set this flag for the duration of their
+/// session closure. An owner that serializes callers with a blocking lock must
+/// check it, together with its backend's own admission state, *before* waiting
+/// on that lock: a thread holding a session must not wait on an owner another
+/// thread holds while that thread waits for the same session's resources.
+///
+/// # Examples
+///
+/// ```
+/// assert!(!tenferro_tensor::has_active_backend_session());
+/// tenferro_tensor::with_session_entry_guard("doc", || {
+///     assert!(tenferro_tensor::has_active_backend_session());
+/// })?;
+/// assert!(!tenferro_tensor::has_active_backend_session());
+/// # Ok::<(), tenferro_tensor::SessionEntryError>(())
+/// ```
+pub fn has_active_backend_session() -> bool {
+    IN_SESSION.get()
+}
+
 /// Run `f` with the thread-local in-session flag set, restoring it on exit
 /// including on panic.
 ///

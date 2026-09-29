@@ -6,9 +6,10 @@ extension traits: `TensorEinsumExt` and `TypedTensorEinsumExt` for owned
 concrete inputs, `TensorReadEinsumExt` and `TypedTensorReadEinsumExt` for
 borrowed inputs, and their `*IntoExt` counterparts for preallocated output
 execution,
-`TraceContextEinsumExt` for traced graph construction, `EagerEinsumExt` for
-autodiff eager execution, and tensor extension traits for `tensordot`
-contraction sugar. `ConcreteEinsumPlan` owns repeated concrete executions with
+`TraceContextEinsumExt` for traced graph construction, `EagerSessionEinsumExt`
+for autodiff eager execution on a borrowed `EagerSession`, and
+`TracedTensorEinsumExt` for traced `tensordot` contraction sugar (eager
+`tensordot` is an `EagerSessionEinsumExt` method). `ConcreteEinsumPlan` owns repeated concrete executions with
 fixed input dtype and shape metadata. `tensordot` is not a `tenferro-linalg`
 API.
 
@@ -135,28 +136,36 @@ contraction pairs when accepted for concrete inputs.
 
 ## Eager Tensor API
 
-`EagerEinsumExt` exposes immediate execution over `EagerTensor` input
-slices/arrays:
+`EagerSessionEinsumExt` exposes immediate execution over `EagerTensor` inputs
+on a borrowed `EagerSession`, so eager einsum composes with other eager
+operations inside one `with_eager_session` callback and never opens a session
+of its own:
 
 ```rust
 use tenferro_ad::{EagerRuntime, Tensor};
-use tenferro_einsum::EagerEinsumExt;
+use tenferro_einsum::EagerSessionEinsumExt;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
 let ctx = EagerRuntime::new()?;
-let a = Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
-let b = Tensor::from_vec_col_major(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
-let a = ctx.constant_from(a).unwrap();
-let b = ctx.constant_from(b).unwrap();
-let c = [&a, &b].einsum("ij,jk->ik").unwrap();
+let a = Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0])?;
+let b = Tensor::from_vec_col_major(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0])?;
+let a = ctx.constant_from(a)?;
+let b = ctx.constant_from(b)?;
+let c = ctx.with_eager_session(|s| s.einsum(&[&a, &b], "ij,jk->ik"))??;
 
 assert_eq!(c.shape(), &[2, 2]);
 Ok(())
 }
 ```
 
+The trait also provides `einsum_notation`, `einsum_subscripts`, and
+`tensordot`. The former tensor-side eager traits (`EagerEinsumExt` on input
+slices/arrays and `EagerTensorEinsumExt::tensordot`), which each opened their
+own eager session, were removed by #1946 F5.
+
 Autodiff eager execution remains separate from concrete `Tensor` execution:
-`EagerEinsumExt` is available only when the `autodiff` feature is enabled.
+`EagerSessionEinsumExt` is available only when the `autodiff` feature is
+enabled.
 
 ## Subscripts And Repeated Labels
 

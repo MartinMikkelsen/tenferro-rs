@@ -64,10 +64,10 @@ Views may be non-contiguous. `as_slice()` succeeds only when the view is
 slice-contiguous for the borrowed storage. `TensorLayout` metadata slicing
 supports signed strides and negative steps when reachable-range validation
 proves every logical element maps inside the backing allocation. Zero step
-remains invalid. The host-container views `HostTensorView::slice_view` and the
-erased host view are a narrower positive-step surface; runtime views
-(`TypedTensorView`, `TypedTensorViewMut`) use the general reachable-range
-contract.
+remains invalid. Host views are `TypedTensorView<'a, T, R, Host>` and use the
+same general reachable-range contract as every runtime view; the erased
+external value `ErasedHostTensor` exposes only metadata permutation and
+materialization.
 
 ---
 
@@ -294,8 +294,9 @@ Current implementation ownership:
 
 - `crates/tenferro-tensor-core/src/lib.rs` for dtype, scalar and layout
   metadata
-- `crates/tenferro-tensor/src/host_container.rs`, `scalar_set.rs` and
-  `erased_host.rs` for the host container family
+- `crates/tenferro-tensor/src/default_scalars.rs`, `scalar_set.rs` and
+  `erased_host.rs` for the scalar-set layer and the erased external value,
+  all built on `TypedTensor<T, DynRank, Host>`
 - `crates/tenferro-tensor/src/types.rs` for runtime dense tensor storage and
   placement metadata
 - `crates/tenferro-tensor/src/backend.rs` for backend traits

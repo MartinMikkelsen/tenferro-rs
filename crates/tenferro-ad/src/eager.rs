@@ -59,10 +59,7 @@ use crate::eager_backend::{
 };
 #[cfg(test)]
 use crate::eager_exec::exec_standard_op_on_tensor_reads_in_session;
-use crate::eager_exec::{
-    eager_input_promotion_plan, exec_op_on_tensor_reads_with_runtime,
-    exec_op_on_tensors_with_runtime,
-};
+use crate::eager_exec::{eager_input_promotion_plan, exec_extension_op_on_tensor_reads};
 use crate::error::{ContextId, Error, Result};
 use crate::metadata::tensor_meta_from_tensor;
 use crate::semantic_extension::SemanticExtensionRuleSet;
@@ -183,8 +180,8 @@ impl EnteredRuntimeScope {
         }
     }
 
-    fn is_entered(id: ContextId) -> bool {
-        EAGER_ENTERED_RUNTIMES.with(|entered| entered.borrow().contains(&id))
+    fn any_entered() -> bool {
+        EAGER_ENTERED_RUNTIMES.with(|entered| !entered.borrow().is_empty())
     }
 }
 
@@ -2742,10 +2739,9 @@ impl EagerSession<'_> {
     /// Apply one standard tensor op in this borrowed session and record it
     /// for AD when needed.
     ///
-    /// This is the session-borrowing form of
-    /// [`crate::extension::apply_standard_op`]: an extension that expands into
-    /// several ordinary `StdTensorOp` nodes runs them all in one backend
-    /// session instead of entering one per node.
+    /// Extension crates use this when an extension-level eager operation
+    /// expands into ordinary `StdTensorOp` nodes instead of a custom extension
+    /// primitive: all of them run in this one backend session.
     ///
     /// # Examples
     ///
@@ -2844,6 +2840,38 @@ impl EagerSession<'_> {
         self.runtime
     }
 
+    /// Run `f` on this runtime's extension cache store from inside the
+    /// session.
+    ///
+    /// Operation families use this for their own prepared-plan caches without
+    /// reopening the runtime: the eager owner is already locked, and the cache
+    /// lock is taken second, as in every extension execution region.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_ad::EagerRuntime;
+    ///
+    /// let ctx = EagerRuntime::new()?;
+    /// let entries = ctx.with_eager_session(|session| {
+    ///     session.with_extension_caches(|caches| caches.len())
+    /// })??;
+    /// assert_eq!(entries, 0);
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns a runtime-state error when the extension cache lock is
+    /// poisoned.
+    pub fn with_extension_caches<R>(
+        &mut self,
+        f: impl FnOnce(&mut tenferro_runtime::ExtensionCacheStore) -> R,
+    ) -> Result<R> {
+        let mut caches = self.runtime.lock_extension_caches()?;
+        Ok(f(&mut caches))
+    }
+
     pub(crate) fn execute_prepared_extension(
         &mut self,
         executor: &dyn tenferro_runtime::PreparedOperationExecutor,
@@ -2928,18 +2956,40 @@ impl fmt::Debug for EagerRuntime {
 
 impl EagerRuntime {
     pub(crate) fn lock_backend(&self) -> Result<MutexGuard<'_, EagerBackend>> {
-        // A callback of this runtime's session holds the owner lock, so waiting
-        // on it here would never return: report the reentry instead. Other
-        // threads still wait for the lock and are served in turn.
-        if EnteredRuntimeScope::is_entered(self.id) {
+        // A thread inside a session must not wait on an owner lock: a callback
+        // of this runtime holds it (the wait never returns), or another thread
+        // may hold it while waiting for the permit this thread holds (#1946
+        // F1). Report the reentry before blocking instead.
+        if EnteredRuntimeScope::any_entered()
+            || tenferro_tensor::has_active_backend_session()
+            || tenferro_cpu::current_cpu_execution() == tenferro_cpu::CpuThreadExecution::Active
+        {
             return Err(tenferro_tensor::SessionEntryError::Reentered {
                 backend: "EagerRuntime",
             }
             .into());
         }
-        self.backend.lock().map_err(|_| {
-            Error::runtime_state("eager_backend", ErrorPhase::Execution, "lock poisoned")
-        })
+        let poisoned =
+            || Error::runtime_state("eager_backend", ErrorPhase::Execution, "lock poisoned");
+        // A shared execution scope already holds the CPU permit, so waiting for
+        // the owner could deadlock the same way. Take it only when it is free.
+        if tenferro_cpu::current_cpu_execution() == tenferro_cpu::CpuThreadExecution::SharedScope {
+            return match self.backend.try_lock() {
+                Ok(backend) => Ok(backend),
+                Err(std::sync::TryLockError::Poisoned(_)) => Err(poisoned()),
+                Err(std::sync::TryLockError::WouldBlock) => {
+                    Err(tenferro_tensor::SessionEntryError::Contended {
+                        backend: "EagerRuntime",
+                        message: "the runtime is in use by another thread while this thread's \
+                                  CPU execution scope holds the permit; waiting could deadlock"
+                            .to_owned(),
+                    }
+                    .into())
+                }
+            };
+        }
+        // Independent top-level callers wait for the owner and are served in turn.
+        self.backend.lock().map_err(|_| poisoned())
     }
 
     fn lock_extension_caches(&self) -> Result<MutexGuard<'_, ExtensionCacheStore>> {
@@ -3863,41 +3913,22 @@ impl EagerRuntime {
         self.lock_backend()?.synchronize().map_err(Error::from)
     }
 
-    fn exec_outputs_with_runtime<R>(
+    /// Owner-context extension fallback used by `extension::apply_eager` when
+    /// the extension has no prepared session executor.
+    pub(crate) fn exec_extension_outputs_read(
         &self,
-        lock_backend_section: &'static str,
-        exec_section: &'static str,
-        op: &StdTensorOp,
-        execute: impl FnOnce(&mut EagerBackend, Option<&Runtime>) -> Result<R>,
-    ) -> Result<R> {
-        // Lock ordering: eager execution holds the backend lock while standard
-        // ops run without runtime extension access; extension ops receive the
-        // runtime so extension cache locks are acquired only from that path.
-        let mut backend = profile_eager_op_section(lock_backend_section, || self.lock_backend())?;
-        let runtime = matches!(op, StdTensorOp::Extension(_)).then_some(&self.runtime);
-        profile_eager_op_section(exec_section, || execute(&mut backend, runtime))
-    }
-
-    pub(crate) fn exec_outputs(&self, op: &StdTensorOp, inputs: &[&Tensor]) -> Result<Vec<Tensor>> {
-        self.exec_outputs_with_runtime(
-            "exec_outputs.lock_backend",
-            "exec_outputs.exec_op",
-            op,
-            |backend, runtime| exec_op_on_tensors_with_runtime(op, inputs, backend, runtime),
-        )
-    }
-
-    pub(crate) fn exec_outputs_read(
-        &self,
-        op: &StdTensorOp,
+        op: &Arc<dyn tenferro_ops::ext_op::ExtensionOp>,
         inputs: &[TensorRead<'_>],
     ) -> Result<Vec<Tensor>> {
-        self.exec_outputs_with_runtime(
-            "exec_outputs_read.lock_backend",
-            "exec_outputs_read.exec_op",
-            op,
-            |backend, runtime| exec_op_on_tensor_reads_with_runtime(op, inputs, backend, runtime),
-        )
+        // Lock ordering: the backend lock is held for the input session; the
+        // runtime's extension cache locks are acquired only after it.
+        let mut backend =
+            profile_eager_op_section("exec_extension_outputs_read.lock_backend", || {
+                self.lock_backend()
+            })?;
+        profile_eager_op_section("exec_extension_outputs_read.exec_op", || {
+            exec_extension_op_on_tensor_reads(op, inputs, &mut *backend, &self.runtime)
+        })
     }
 
     #[cfg(test)]
@@ -6419,44 +6450,6 @@ fn tensor_meta_from_value(value: &TensorValue) -> TensorMeta {
         value.dtype(),
         value.shape().iter().copied().map(SymDim::from).collect(),
     )
-}
-
-pub(crate) fn exec_single_output(
-    op: &StdTensorOp,
-    inputs: &[&Tensor],
-    ctx: &EagerRuntime,
-) -> Result<Tensor> {
-    let mut outputs = ctx.exec_outputs(op, inputs)?;
-    if outputs.len() != 1 {
-        return Err(Error::Internal(format!(
-            "expected one eager output for {:?}, got {}",
-            op,
-            outputs.len()
-        )));
-    }
-    Ok(profile_eager_op_section(
-        "exec_single_output.remove_output",
-        || outputs.remove(0),
-    ))
-}
-
-pub(crate) fn exec_single_output_read(
-    op: &StdTensorOp,
-    inputs: &[TensorRead<'_>],
-    ctx: &EagerRuntime,
-) -> Result<Tensor> {
-    let mut outputs = ctx.exec_outputs_read(op, inputs)?;
-    if outputs.len() != 1 {
-        return Err(Error::Internal(format!(
-            "expected one eager output for {:?}, got {}",
-            op,
-            outputs.len()
-        )));
-    }
-    Ok(profile_eager_op_section(
-        "exec_single_output_read.remove_output",
-        || outputs.remove(0),
-    ))
 }
 
 #[cfg(test)]

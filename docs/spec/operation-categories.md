@@ -164,8 +164,9 @@ and traced surfaces (subject to the same parity rule within each family):
   Concrete inputs use `TensorEinsumExt` and `TypedTensorEinsumExt` for owned
   tensors, `TensorReadEinsumExt` and `TypedTensorReadEinsumExt` for borrowed
   views, and `ConcreteEinsumPlan` for repeated execution; traced graph
-  construction uses `TraceContextEinsumExt`; autodiff eager inputs use
-  `EagerEinsumExt`; `tensordot` sugar uses tensor extension traits.
+  construction uses `TraceContextEinsumExt`; autodiff eager einsum and
+  `tensordot` use `EagerSessionEinsumExt` on a borrowed `EagerSession`; traced
+  `tensordot` sugar uses `TracedTensorEinsumExt`.
 - **FFT** (`tenferro-fft`): `fft`, `ifft`, `rfft`, and `irfft`.
   Concrete inputs use `TensorFftExt` and `TensorReadFftExt`; traced graph
   construction uses `TracedTensorFftExt`.

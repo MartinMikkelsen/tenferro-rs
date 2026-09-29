@@ -128,8 +128,8 @@ kind, so the zero-copy slice it hands to faer is provably compact column-major.
 A non-contiguous view (transpose, slice, broadcast) is rejected by `as_slice()`
 with an explicit error and is never silently materialized. A backend-placed
 tensor is rejected the same way and is never implicitly downloaded. The caller
-performs the explicit copy or transfer: `CpuBackend::to_contiguous` for host
-non-contiguous views, and the owning backend's explicit download API for
+performs the explicit copy or transfer: the session's `to_contiguous_read` for
+host non-contiguous views, and the owning backend's explicit download API for
 backend buffers (`CpuBackend` itself rejects foreign backend buffers, so the
 tensor's own backend must perform the transfer).
 
@@ -249,9 +249,13 @@ fn faer_rejects_non_contiguous_without_materializing() -> tenferro_tensor::Resul
         "unexpected error: {error}"
     );
 
-    // The caller decides to materialize through an explicit backend call.
+    // The caller decides to materialize through an explicit backend session.
     let mut backend = CpuBackend::new();
-    let compact = backend.to_contiguous(&transposed)?;
+    let read = transposed.into_tensor_read()?;
+    let compact = backend.with_backend_session(|session| session.to_contiguous_read(read))??;
+    let compact = compact
+        .as_typed::<f64>()
+        .expect("materialized an f64 tensor");
     assert!(compact.is_col_major_contiguous()?);
     // 3x2 column-major copy of the transposed matrix [[1,4],[2,5],[3,6]]:
     // column 0 = [1,2,3], column 1 = [4,5,6].

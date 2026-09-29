@@ -31,7 +31,7 @@ class GuideCase:
 EINSUM_SOURCE = r"""
 use tenferro_ad::{EagerRuntime, Tensor};
 use tenferro_cpu::{runtime_engine_id, runtime_engine_registration, CpuBackend};
-use tenferro_einsum::{EagerEinsumExt, TraceContextEinsumExt};
+use tenferro_einsum::{EagerSessionEinsumExt, TraceContextEinsumExt};
 use tenferro_runtime::program::ProgramInputSpec;
 use tenferro_runtime::{GraphCompiler, Runtime, TraceContext};
 
@@ -63,7 +63,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let ctx = EagerRuntime::new()?;
     let u = ctx.variable_from(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?)?;
     let v = ctx.variable_from(Tensor::from_vec_col_major(vec![3], vec![3.0_f64, 4.0, 5.0])?)?;
-    let outer = [&u, &v].einsum("i,j->ij")?;
+    let outer = ctx.with_eager_session(|s| s.einsum(&[&u, &v], "i,j->ij"))??;
     assert_eq!(outer.shape(), &[2, 3]);
 
     Ok(())

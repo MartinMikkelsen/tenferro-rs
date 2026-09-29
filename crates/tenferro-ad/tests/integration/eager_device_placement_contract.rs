@@ -59,7 +59,7 @@ fn eager_generated_constant_and_shape_outputs_are_uploaded_before_backend_ops() 
     let tensor_session_path = source_section(
         &eager_exec,
         "pub(crate) fn exec_standard_op_on_tensors_with_session",
-        "fn exec_standard_op_on_tensor_reads<B: BackendSessionHost>",
+        "pub(crate) fn exec_standard_op_on_tensor_reads_in_session",
     );
     assert_ordered_needles(
         "exec_standard_op_on_tensors_with_session",
@@ -71,21 +71,13 @@ fn eager_generated_constant_and_shape_outputs_are_uploaded_before_backend_ops() 
         ],
     );
 
-    let read_path = source_section(
-        &eager_exec,
-        "fn exec_standard_op_on_tensor_reads<B: BackendSessionHost>",
-        "pub(crate) fn exec_standard_op_on_tensor_reads_in_session",
-    );
-    assert!(read_path.contains(".with_backend_session(|exec|"));
-    assert!(read_path.contains("exec_standard_op_on_tensor_reads_with_session(op, inputs, exec)"));
+    // No self-entering standard-op path remains (#1946 F9): standard ops run
+    // only on a borrowed session; the owner-context fallback is extension-only.
+    assert!(!eager_exec.contains("fn exec_standard_op_on_tensor_reads<B: BackendSessionHost>"));
 
-    let tensor_path = source_section(
-        &eager_exec,
-        "fn exec_standard_op_on_tensors<B: BackendSessionHost>",
-        "pub(crate) fn exec_standard_op_on_tensors_in_session",
-    );
-    assert!(tensor_path.contains(".with_backend_session(|exec|"));
-    assert!(tensor_path.contains("exec_standard_op_on_tensors_with_session(op, inputs, exec)"));
+    // The owned-tensor standard-op path is gone (#1946 F9): owned inputs run
+    // through the borrowed session's `exec_standard_op_on_tensors_with_session`.
+    assert!(!eager_exec.contains("fn exec_standard_op_on_tensors<B: BackendSessionHost>"));
 }
 
 #[test]

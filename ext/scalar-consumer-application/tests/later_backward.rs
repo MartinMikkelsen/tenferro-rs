@@ -15,11 +15,12 @@ use tenferro_df64_proof::Df64;
 use tenferro_runtime::extension::apply;
 use tenferro_runtime::{GraphCompiler, Runtime, TracedTensor};
 use tenferro_tensor::{DType, Tensor};
-use tenferro_tensor::{ErasedHostTensor, HostTensor};
+use tenferro_tensor::{DynRank, ErasedHostTensor, Host, TypedTensor};
 
 fn external(values: Vec<Df64>, shape: Vec<usize>) -> Tensor {
     Tensor::external(ErasedHostTensor::new(
-        HostTensor::from_vec_col_major(shape, values).expect("shape matches data"),
+        TypedTensor::<_, DynRank, Host>::from_host_vec_col_major(shape, values)
+            .expect("shape matches data"),
     ))
 }
 
@@ -54,7 +55,7 @@ fn overwrite(tensor: &mut Tensor, index: usize, value: Df64) {
             payload
                 .downcast_mut::<Df64>()
                 .expect("external element type")
-                .as_mut_slice()[index] = value;
+                .host_data_mut()[index] = value;
         }
         None => panic!("expected an externally defined payload"),
     }

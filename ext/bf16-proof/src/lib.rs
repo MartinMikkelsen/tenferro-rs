@@ -343,11 +343,11 @@ tenferro_tensor::define_scalar_set! {
     ///
     /// ```rust
     /// use tenferro_bf16_proof::{Bf16, Bf16Set, Bf16Tag};
-    /// use tenferro_tensor::{HostTensor, ScalarSet};
+    /// use tenferro_tensor::{DynRank, Host, ScalarSet, TypedTensor};
     ///
-    /// let value = Bf16Set::Bf16(HostTensor::from_vec_col_major(vec![1], vec![Bf16::from_f32(2.0)])?);
+    /// let value = Bf16Set::Bf16(TypedTensor::<_, DynRank, Host>::from_host_vec_col_major(vec![1], vec![Bf16::from_f32(2.0)])?);
     /// assert_eq!(value.tag(), Bf16Tag::Bf16);
-    /// # Ok::<(), tenferro_tensor_core::ValidationError>(())
+    /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
     pub enum Bf16Set;
 }

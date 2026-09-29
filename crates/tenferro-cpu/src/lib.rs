@@ -164,11 +164,7 @@ pub(crate) mod buffer_pool {
 }
 mod capability;
 pub mod context;
-// INVARIANT: Task 2 stages crate-private stack adapters here before Task 3 wires
-// them into CpuContext.
-#[allow(dead_code)]
 mod domain_executor;
-#[allow(dead_code)]
 mod dot_runtime;
 pub(crate) use tenferro_cpu_basic::PooledUninitOutput;
 pub(crate) use tenferro_cpu_basic::{erased_raw_strided_ref, erased_raw_strided_uninit_mut};
@@ -225,11 +221,13 @@ pub use affinity_policy::{
     CpuAffinityInputError, CpuAffinityPolicy, CpuAffinityResolutionError, CpuAffinitySelection,
     CpuAffinitySelectionReason,
 };
+pub use backend::execution_scope::{current_cpu_execution, CpuThreadExecution};
 pub use backend::{
     CpuBackend, CpuBackendError, CpuBackendKind, CpuExecutionInfo, CpuExecutionMode,
     CpuRuntimeIdentity, ExternalCpuDomainRegistryError,
 };
 pub use batch_policy::{with_batch_policy, CpuBatchPolicy, CpuBatchStrategy, CpuBatchThresholds};
+
 pub use buffer_pool::BufferPoolStats;
 pub use capability::cpu_capabilities;
 pub use context::{CpuContext, CpuContextError, DEFAULT_WORKER_STACK_BYTES};

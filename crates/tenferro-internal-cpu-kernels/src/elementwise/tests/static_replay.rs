@@ -8,7 +8,7 @@ fn static_replay_preserves_scalar_side_and_negative_strides() {
     let input = TypedTensor::<f64>::from_vec_col_major([3usize], vec![2.0, 3.0, 4.0]).unwrap();
     let reverse = input
         .as_view()
-        .try_slice(&[StridedSliceSpec::new(0, Some(3), -1)])
+        .slice_view(&[StridedSliceSpec::new(0, Some(3), -1)])
         .unwrap();
     for (left_scalar, expected_sub, expected_div) in [
         (true, vec![8.0, 9.0, 10.0], vec![3.0, 4.0, 6.0]),

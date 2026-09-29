@@ -34,7 +34,7 @@ use tenferro_tensor::{ErrorKind, ValidationKind};
 use tenferro_tensor::{TensorRead, TensorStructural, TensorView, TensorWrite};
 
 use crate::eager_backend::EagerBackend;
-use crate::eager_exec::exec_op_on_tensor_reads_with_runtime;
+use crate::eager_exec::exec_extension_op_on_tensor_reads;
 
 mod placement_bound;
 mod runtime_snapshot;
@@ -438,7 +438,7 @@ impl ExtensionOp for ReadPathFallbackProbe {
 
 #[test]
 fn tensor_read_extension_path_errors_when_runtime_family_is_missing() {
-    let op = StdTensorOp::Extension(Arc::new(ReadPathFallbackProbe));
+    let op: Arc<dyn ExtensionOp> = Arc::new(ReadPathFallbackProbe);
     let input = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
     let reads = [TensorRead::from_tensor(&input)];
     let mut backend = CpuBackend::new();
@@ -448,7 +448,7 @@ fn tensor_read_extension_path_errors_when_runtime_family_is_missing() {
         .unwrap();
     let runtime = builder.build().unwrap();
 
-    let err = exec_op_on_tensor_reads_with_runtime(&op, &reads, &mut backend, Some(&runtime))
+    let err = exec_extension_op_on_tensor_reads(&op, &reads, &mut backend, &runtime)
         .expect_err("runtime owner with missing extension module must not eager fallback");
 
     let message = err.to_string();

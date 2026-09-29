@@ -90,13 +90,13 @@ supported scalar type.
 ## view is not slice-contiguous
 
 A view cannot be exposed as a borrowed slice unless its layout is contiguous.
-Materialize a compact owner with `to_contiguous` before requesting the slice:
+Materialize a compact owner with the session's `to_contiguous_read` before
+requesting the slice:
 
 <!-- snippet-source: docs/tutorial-code/src/bin/execution_snippets.rs#troubleshooting_11 -->
 ```rust
 use tenferro_cpu::CpuBackend;
-use tenferro_tensor::backend::TensorViewCanonicalization;
-use tenferro_tensor::TypedTensor;
+use tenferro_tensor::{BackendSessionHost, TypedTensor};
 
 let source = TypedTensor::<f64>::from_vec_col_major(
     vec![2, 3],
@@ -109,8 +109,9 @@ assert!(error
     .contains("view is not contiguous column-major"));
 
 let mut backend = CpuBackend::new();
-let compact = backend.to_contiguous(&transposed)?;
-assert_eq!(compact.as_slice()?, &[1.0, 3.0, 5.0, 2.0, 4.0, 6.0]);
+let read = transposed.into_tensor_read()?;
+let compact = backend.with_backend_session(|session| session.to_contiguous_read(read))??;
+assert_eq!(compact.as_slice::<f64>()?, &[1.0, 3.0, 5.0, 2.0, 4.0, 6.0]);
 ```
 <!-- end-snippet-source -->
 

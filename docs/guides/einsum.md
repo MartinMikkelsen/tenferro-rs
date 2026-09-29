@@ -10,8 +10,9 @@ and `TensorReadEinsumExt` and `TypedTensorReadEinsumExt` for borrowed inputs;
 preallocated-output execution uses the matching `*IntoExt` traits;
 repeated-shape concrete workloads can use `ConcreteEinsumPlan`. Traced graph
 construction uses `TraceContextEinsumExt`;
-autodiff eager execution uses `EagerEinsumExt`; `tensordot` contraction sugar
-uses tensor extension traits. Compiled traced execution also requires explicit
+autodiff eager execution uses `EagerSessionEinsumExt` on a borrowed
+`EagerSession`; traced `tensordot` contraction sugar uses
+`TracedTensorEinsumExt`. Compiled traced execution also requires explicit
 runtime registration for einsum extension ops.
 
 When working from a local checkout, use paths that match your project layout.
@@ -53,7 +54,7 @@ num-complex = "0.4"
 
 Concrete and graph-only users can omit `tenferro-ad` and the `autodiff`
 feature. Enable `tenferro-einsum`'s `autodiff` feature when using
-`EagerEinsumExt` or einsum AD rules. The traced examples below are fragments;
+`EagerSessionEinsumExt` or einsum AD rules. The traced examples below are fragments;
 copy them into `fn main() -> Result<(), Box<dyn std::error::Error>>` when
 turning them into a standalone `src/main.rs`.
 
@@ -282,7 +283,8 @@ assert_eq!(result.as_slice::<f64>()?, &[22.0, 28.0, 49.0, 64.0]);
 ## EagerTensor
 
 With the `autodiff` feature, `tenferro-einsum` also exposes immediate
-`EagerTensor` execution.
+`EagerTensor` execution through `EagerSessionEinsumExt` on a borrowed
+`EagerSession`; `session.tensordot(&a, &b, axes)` is available there too.
 The `"i->ii"` form embeds a vector on a diagonal. This is a tenferro extension
 to the common NumPy/PyTorch einsum surface; NumPy rejects repeated output
 labels in that form.
@@ -290,7 +292,7 @@ labels in that form.
 <!-- snippet-source: docs/tutorial-code/src/bin/math_snippets.rs#einsum_15 -->
 ```rust
 use tenferro_ad::{EagerRuntime, Tensor};
-use tenferro_einsum::EagerEinsumExt;
+use tenferro_einsum::EagerSessionEinsumExt;
 
 let ctx = EagerRuntime::new()?;
 let u = ctx.variable_from(Tensor::from_vec_col_major(
@@ -302,8 +304,11 @@ let v = ctx.variable_from(Tensor::from_vec_col_major(
     vec![3.0_f64, 4.0, 5.0],
 )?)?;
 
-let outer = [&u, &v].einsum("i,j->ij")?;
-let diag = [&v].einsum("i->ii")?;
+let (outer, diag) = ctx.with_eager_session(|s| {
+    let outer = s.einsum(&[&u, &v], "i,j->ij")?;
+    let diag = s.einsum(&[&v], "i->ii")?;
+    Ok::<_, tenferro_einsum::Error>((outer, diag))
+})??;
 
 assert_eq!(outer.shape(), &[2, 3]);
 let outer_tensor = outer.to_tensor()?;

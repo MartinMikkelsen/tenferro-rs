@@ -25,19 +25,18 @@ assert_eq!(backend.num_threads(), 4);
     fn snippet_parallelism_and_caching_2() -> Result<(), Box<dyn std::error::Error>> {
         // snippet-start:parallelism_and_caching_2
 use tenferro_cpu::CpuBackend;
-use tenferro_tensor::{TypedTensor};
-use tenferro_tensor::backend::TensorViewCanonicalization;
+use tenferro_tensor::{BackendSessionHost, TypedTensor};
 
 let tensor = TypedTensor::<f64>::from_vec_col_major(
     vec![2, 3],
     vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
 )?;
-let transposed = tensor.as_view().transpose_view([1, 0])?;
+let transposed = tensor.as_view().transpose_view([1, 0])?.into_tensor_read()?;
 let mut backend = CpuBackend::with_threads(4)?;
-let compact = backend.to_contiguous(&transposed)?;
+let compact = backend.with_backend_session(|session| session.to_contiguous_read(transposed))??;
 
 assert_eq!(compact.shape(), &[3, 2]);
-assert_eq!(compact.as_slice()?, &[1.0, 3.0, 5.0, 2.0, 4.0, 6.0]);
+assert_eq!(compact.as_slice::<f64>()?, &[1.0, 3.0, 5.0, 2.0, 4.0, 6.0]);
         // snippet-end:parallelism_and_caching_2
         Ok(())
     }
@@ -171,8 +170,7 @@ assert_eq!(gpu_x.shape(), &[2]);
     fn snippet_troubleshooting_11() -> Result<(), Box<dyn std::error::Error>> {
         // snippet-start:troubleshooting_11
 use tenferro_cpu::CpuBackend;
-use tenferro_tensor::backend::TensorViewCanonicalization;
-use tenferro_tensor::TypedTensor;
+use tenferro_tensor::{BackendSessionHost, TypedTensor};
 
 let source = TypedTensor::<f64>::from_vec_col_major(
     vec![2, 3],
@@ -185,8 +183,9 @@ assert!(error
     .contains("view is not contiguous column-major"));
 
 let mut backend = CpuBackend::new();
-let compact = backend.to_contiguous(&transposed)?;
-assert_eq!(compact.as_slice()?, &[1.0, 3.0, 5.0, 2.0, 4.0, 6.0]);
+let read = transposed.into_tensor_read()?;
+let compact = backend.with_backend_session(|session| session.to_contiguous_read(read))??;
+assert_eq!(compact.as_slice::<f64>()?, &[1.0, 3.0, 5.0, 2.0, 4.0, 6.0]);
         // snippet-end:troubleshooting_11
         Ok(())
     }

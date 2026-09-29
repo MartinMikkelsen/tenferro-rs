@@ -14,7 +14,8 @@ fn assert_f32_view_canonicalization<B: TensorViewCanonicalization<f32, DynRank>>
 #[test]
 fn webgpu_backend_implements_tensor_backend_contract() {
     assert_tensor_backend::<WebGpuBackend>();
-    assert_f32_view_canonicalization::<WebGpuBackend>();
+    // Typed canonicalization lives on the session, not the owner (#1946 F6).
+    assert_f32_view_canonicalization::<tenferro_gpu::webgpu::WebGpuExecSession<'static>>();
 
     let _upload: fn(&mut tenferro_gpu::webgpu::WebGpuExecSession<'static>, TensorRead<'_>) -> Result<Tensor> =
         <tenferro_gpu::webgpu::WebGpuExecSession<'static> as TensorDeviceTransfer>::upload_host_tensor;

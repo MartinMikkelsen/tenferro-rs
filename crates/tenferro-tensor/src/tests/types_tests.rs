@@ -1142,7 +1142,7 @@ fn backend_mutable_views_keep_metadata_paths_without_host_access() {
     {
         let mut view = tensor.as_view_mut();
         let sliced = view
-            .try_slice(&[
+            .slice_view(&[
                 StridedSliceSpec::all(),
                 StridedSliceSpec::new(0, Some(1), 1),
             ])
@@ -1153,7 +1153,7 @@ fn backend_mutable_views_keep_metadata_paths_without_host_access() {
 
     {
         let mut view = tensor.as_view_mut();
-        let reshaped = view.try_reshape(&[4]).unwrap();
+        let reshaped = view.reshape_view(&[4]).unwrap();
         assert_eq!(reshaped.shape(), &[4]);
         assert!(reshaped.backend_buffer().is_some());
     }
@@ -1332,21 +1332,23 @@ fn typed_tensor_view_sliced_layouts_preserve_indexed_access() {
     assert_eq!(transposed.shape(), &[3, 2]);
     assert_eq!(transposed.get(&[2, 1]), Some(&6));
 
-    let reversed_cols = view.try_slice_axis(1, StridedSliceSpec::reverse()).unwrap();
+    let reversed_cols = view
+        .slice_axis_view(1, StridedSliceSpec::reverse())
+        .unwrap();
     assert_eq!(reversed_cols.strides(), &[3, -1]);
     assert_eq!(reversed_cols.get(&[0, 0]), Some(&3));
     assert_eq!(reversed_cols.get(&[1, 2]), Some(&4));
 
     let every_other_col = view
-        .try_slice(&[StridedSliceSpec::all(), StridedSliceSpec::new(0, None, 2)])
+        .slice_view(&[StridedSliceSpec::all(), StridedSliceSpec::new(0, None, 2)])
         .unwrap();
     assert_eq!(every_other_col.get(&[0, 1]), Some(&3));
     assert_eq!(every_other_col.get(&[1, 1]), Some(&6));
-    assert!(view.try_reshape(&[6]).is_err());
+    assert!(view.reshape_view(&[6]).is_err());
 
     let col_major = [1_i32, 4, 2, 5, 3, 6];
     let contiguous = TypedTensorView::from_col_major(&[2, 3], &col_major).unwrap();
-    assert_eq!(contiguous.try_reshape(&[6]).unwrap().strides(), &[1]);
+    assert_eq!(contiguous.reshape_view(&[6]).unwrap().strides(), &[1]);
 }
 
 #[test]
@@ -1384,7 +1386,9 @@ fn strided_tensor_view_mut_updates_sliced_host_layouts() {
     assert_eq!(view.get(&[1, 2]), Some(&600));
 
     {
-        let mut reversed_cols = view.try_slice_axis(1, StridedSliceSpec::reverse()).unwrap();
+        let mut reversed_cols = view
+            .slice_axis_view(1, StridedSliceSpec::reverse())
+            .unwrap();
         assert_eq!(reversed_cols.strides(), &[3, -1]);
         *reversed_cols.get_mut(&[0, 0]).unwrap() = 30;
     }
@@ -1497,9 +1501,9 @@ fn strided_tensor_view_validation_covers_error_edges() {
 
     let empty = TypedTensorView::from_slice([0, 3], [1, 0], 3, &data).unwrap();
     assert_eq!(empty.n_elements(), 0);
-    assert_eq!(empty.try_reshape(&[0]).unwrap().shape(), &[0]);
+    assert_eq!(empty.reshape_view(&[0]).unwrap().shape(), &[0]);
     let reversed_empty = empty
-        .try_slice_axis(0, StridedSliceSpec::reverse())
+        .slice_axis_view(0, StridedSliceSpec::reverse())
         .unwrap();
     assert_eq!(reversed_empty.shape(), &[0, 3]);
     assert_eq!(empty.get(&[0, 0]), None);
@@ -1583,29 +1587,29 @@ fn typed_tensor_view_slice_transpose_and_reshape_cover_boundaries() {
     ));
 
     assert!(matches!(
-        view.try_slice(&[StridedSliceSpec::all()]),
+        view.slice_view(&[StridedSliceSpec::all()]),
         Err(Error::Validation {
             source: ValidationError::RankMismatch { .. },
             ..
         })
     ));
     assert!(matches!(
-        view.try_slice_axis(2, StridedSliceSpec::all()),
+        view.slice_axis_view(2, StridedSliceSpec::all()),
         Err(Error::Validation {
             source: ValidationError::AxisOutOfBounds { .. },
             ..
         })
     ));
     assert!(matches!(
-        view.try_slice(&[StridedSliceSpec::all(), StridedSliceSpec::new(0, None, 0)]),
+        view.slice_view(&[StridedSliceSpec::all(), StridedSliceSpec::new(0, None, 0)]),
         Err(Error::Validation { .. })
     ));
     assert!(matches!(
-        view.try_slice(&[StridedSliceSpec::all(), StridedSliceSpec::new(-4, None, 1)]),
+        view.slice_view(&[StridedSliceSpec::all(), StridedSliceSpec::new(-4, None, 1)]),
         Err(Error::Validation { .. })
     ));
     assert!(matches!(
-        view.try_slice(&[
+        view.slice_view(&[
             StridedSliceSpec::all(),
             StridedSliceSpec::new(0, Some(4), 1)
         ]),
@@ -1613,13 +1617,13 @@ fn typed_tensor_view_slice_transpose_and_reshape_cover_boundaries() {
     ));
 
     let empty = view
-        .try_slice_axis(1, StridedSliceSpec::new(2, Some(1), 1))
+        .slice_axis_view(1, StridedSliceSpec::new(2, Some(1), 1))
         .unwrap();
     assert_eq!(empty.shape(), &[2, 0]);
     assert_eq!(empty.n_elements(), 0);
 
     assert!(matches!(
-        view.try_reshape(&[5]),
+        view.reshape_view(&[5]),
         Err(Error::Validation { .. })
     ));
     assert!(matches!(
@@ -1633,7 +1637,7 @@ fn typed_tensor_view_slice_transpose_and_reshape_cover_boundaries() {
     assert_eq!(scalar.get(&[]), Some(&1));
 
     let singleton_axis = TypedTensorView::from_slice([1, 3], [99, 1], 0, &data).unwrap();
-    assert_eq!(singleton_axis.try_reshape(&[3]).unwrap().strides(), &[1]);
+    assert_eq!(singleton_axis.reshape_view(&[3]).unwrap().strides(), &[1]);
 }
 
 #[test]
@@ -2319,10 +2323,12 @@ fn erased_payload_accessors_cover_every_preset_dtype() {
 
 #[test]
 fn an_external_payload_is_carried_by_the_value_type() {
-    use crate::{ErasedHostTensor, HostTensor};
+    use crate::{DynRank, ErasedHostTensor, Host};
 
-    let payload =
-        ErasedHostTensor::new(HostTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap());
+    let payload = ErasedHostTensor::new(
+        TypedTensor::<f64, DynRank, Host>::from_host_vec_col_major(vec![2], vec![1.0_f64, 2.0])
+            .unwrap(),
+    );
     let element = payload.element_type_id();
     let tensor = Tensor::external(payload);
 
@@ -2345,7 +2351,7 @@ fn an_external_payload_is_carried_by_the_value_type() {
             payload
                 .downcast_mut::<f64>()
                 .expect("payload type")
-                .as_mut_slice()[0] = 9.0;
+                .host_data_mut()[0] = 9.0;
             assert_eq!(
                 payload.as_dense::<f64>().expect("dense payload").0,
                 &[9.0, 2.0]

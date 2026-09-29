@@ -273,14 +273,14 @@ fn full_svd_read_consumes_strided_offset_and_reversed_views_unchanged() {
         let transposed = base.as_view().transpose_view([1, 0]).unwrap();
         let offset = base
             .as_view()
-            .try_slice(&[
+            .slice_view(&[
                 StridedSliceSpec::new(1, Some(3), 1),
                 StridedSliceSpec::new(1, Some(4), 1),
             ])
             .unwrap();
         let reversed = base
             .as_view()
-            .try_slice(&[StridedSliceSpec::reverse(), StridedSliceSpec::reverse()])
+            .slice_view(&[StridedSliceSpec::reverse(), StridedSliceSpec::reverse()])
             .unwrap();
 
         for (label, view, m, n) in [
@@ -480,7 +480,7 @@ fn faer_view_path_does_not_pool_an_input_copy() {
         .with_backend_session(|session| {
             let reversed = base
                 .as_view()
-                .try_slice(&[StridedSliceSpec::reverse(), StridedSliceSpec::reverse()])
+                .slice_view(&[StridedSliceSpec::reverse(), StridedSliceSpec::reverse()])
                 .unwrap();
             TensorRead::from_view(TensorView::F64(reversed))
                 .svd_full_read(session)

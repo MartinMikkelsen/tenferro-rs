@@ -34,6 +34,22 @@ use tenferro_tensor::{
     TypedTensorView, TypedTensorViewMut,
 };
 
+/// Run `f` on the CPU execution session of one fresh backend session entry.
+///
+/// The backend owner is not an execution surface (#1946 F6): session-only
+/// services such as `with_linalg_pool`, view canonicalization, fusion and
+/// buffer reclaim are reached through one session entry per call.
+pub(crate) fn with_cpu_session<R: Send>(
+    backend: &mut CpuBackend,
+    f: impl for<'a> FnOnce(&'a mut CpuExecSession<'a>) -> R + Send,
+) -> R {
+    backend
+        .with_backend_session(|session| {
+            with_cpu_exec_session(session, f).expect("CpuBackend must expose its CpuExecSession")
+        })
+        .expect("CPU session entry must be admitted")
+}
+
 #[test]
 fn with_cpu_exec_session_checks_exact_marker_and_scopes_borrow() {
     let mut backend = CpuBackend::new();

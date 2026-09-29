@@ -705,7 +705,7 @@ assert_eq!(result.as_slice::<f64>()?, &[22.0, 28.0, 49.0, 64.0]);
     fn snippet_einsum_15() -> Result<(), Box<dyn std::error::Error>> {
         // snippet-start:einsum_15
 use tenferro_ad::{EagerRuntime, Tensor};
-use tenferro_einsum::EagerEinsumExt;
+use tenferro_einsum::EagerSessionEinsumExt;
 
 let ctx = EagerRuntime::new()?;
 let u = ctx.variable_from(Tensor::from_vec_col_major(
@@ -717,8 +717,11 @@ let v = ctx.variable_from(Tensor::from_vec_col_major(
     vec![3.0_f64, 4.0, 5.0],
 )?)?;
 
-let outer = [&u, &v].einsum("i,j->ij")?;
-let diag = [&v].einsum("i->ii")?;
+let (outer, diag) = ctx.with_eager_session(|s| {
+    let outer = s.einsum(&[&u, &v], "i,j->ij")?;
+    let diag = s.einsum(&[&v], "i->ii")?;
+    Ok::<_, tenferro_einsum::Error>((outer, diag))
+})??;
 
 assert_eq!(outer.shape(), &[2, 3]);
 let outer_tensor = outer.to_tensor()?;

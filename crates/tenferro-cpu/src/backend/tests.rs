@@ -13,6 +13,23 @@ mod output_affinity;
 #[cfg(feature = "cpu-blas")]
 mod provider_session;
 
+/// Run `f` on the CPU execution session of one fresh backend session entry.
+///
+/// The backend owner is not an execution surface (#1946 F6). This mirrors
+/// `crate::tests::with_cpu_session`, which is not compiled under
+/// `provider-inject` while these backend unit tests are.
+pub(super) fn with_cpu_session<R: Send>(
+    backend: &mut CpuBackend,
+    f: impl for<'a> FnOnce(&'a mut CpuExecSession<'a>) -> R + Send,
+) -> R {
+    backend
+        .with_backend_session(|session| {
+            crate::with_cpu_exec_session(session, f)
+                .expect("CpuBackend must expose its CpuExecSession")
+        })
+        .expect("CPU session entry must be admitted")
+}
+
 /// Assert that `error` is the typed CPU reentry rejection.
 fn assert_reentered(error: &crate::Error) {
     assert!(
@@ -144,20 +161,19 @@ fn native_production_entry_points_use_the_centralized_context_policy() {
     let backend = include_str!("../backend.rs");
     let exec_session = include_str!("../exec_session.rs");
 
-    let try_install = backend
-        .split_once("fn try_install")
-        .unwrap()
-        .1
-        .split_once("fn install_with_pool")
-        .unwrap()
-        .0;
-    let install_with_pool = backend
-        .split_once("fn install_with_pool")
-        .unwrap()
-        .1
-        .split_once("pub fn with_linalg_pool")
-        .unwrap()
-        .0;
+    // The backend owner is not an execution surface (#1946 F6): native
+    // execution with the buffer pool is entered only by the session.
+    for owner_entry in [
+        "fn try_install",
+        "fn install_with_pool",
+        "fn with_linalg_pool",
+    ] {
+        assert!(
+            !backend.contains(owner_entry),
+            "CpuBackend must not regain the owner-side native entry `{owner_entry}`"
+        );
+    }
+
     let run_native = exec_session
         .split_once("fn run_native")
         .unwrap()
@@ -166,11 +182,9 @@ fn native_production_entry_points_use_the_centralized_context_policy() {
         .unwrap()
         .0;
 
-    for source in [try_install, install_with_pool, run_native] {
-        assert!(source.contains("preferred_engine_mode"));
-        assert!(source.contains("with_native_parallelism"));
-        assert!(!source.contains("enter(ParallelMode::Sequential"));
-    }
+    assert!(run_native.contains("preferred_engine_mode"));
+    assert!(run_native.contains("with_native_parallelism"));
+    assert!(!run_native.contains("enter(ParallelMode::Sequential"));
 }
 
 #[test]
@@ -273,10 +287,11 @@ fn cpu_hot_kernels_delegate_to_erased_strided_replay() {
 
 #[test]
 fn direct_native_scope_uses_the_selected_rayon_budget() {
-    let backend = CpuBackend::with_threads(2).unwrap();
-    let participants = backend
-        .try_install(|| Ok(crate::provider::tests::run_unscoped_native_map(true)))
-        .unwrap();
+    let mut backend = CpuBackend::with_threads(2).unwrap();
+    let participants = with_cpu_session(&mut backend, |cpu| {
+        cpu.with_linalg_pool(|_, _| Ok(crate::provider::tests::run_unscoped_native_map(true)))
+    })
+    .unwrap();
 
     assert_eq!(participants.max_active(), 2);
     assert_eq!(participants.thread_count(), 2);
@@ -541,12 +556,13 @@ fn placement_handle_clones_share_coordinator_engine_and_resources() {
         placed.resolved_placement(),
         Some(ResolvedCpuPlacement::AllAllowed { .. })
     ));
-    placed
-        .with_linalg_pool(|_, pool| {
+    with_cpu_session(&mut placed, |cpu| {
+        cpu.with_linalg_pool(|_, pool| {
             <f64 as PoolScalar>::pool_release(pool, vec![1.0, 2.0]);
             Ok(())
         })
-        .unwrap();
+    })
+    .unwrap();
     assert_eq!(clone.buffer_pool_len().unwrap(), 1);
 }
 
@@ -926,12 +942,13 @@ fn unavailable_blas_backend_kind_reports_config_errors() {
         crate::buffer_pool::DEFAULT_MAX_RETAINED_CAPACITY_BYTES,
         CpuBackendKind::Blas,
     );
-    let retained = backend
-        .with_linalg_pool(|_, pool| {
+    let retained = with_cpu_session(&mut backend, |cpu| {
+        cpu.with_linalg_pool(|_, pool| {
             <f64 as PoolScalar>::pool_release(pool, vec![1.0, 2.0]);
             Ok(pool.len())
         })
-        .unwrap();
+    })
+    .unwrap();
     assert_eq!(retained, 1);
     assert_eq!(backend.buffer_pool_len().unwrap(), 1);
 
@@ -1003,13 +1020,14 @@ fn cpu_session_profile_helpers_cover_current_profile_mode() {
 fn with_linalg_pool_restores_backend_pool_and_context() {
     let mut backend = CpuBackend::with_threads(1).unwrap();
 
-    let len_inside_pool = backend
-        .with_linalg_pool(|context, pool| {
+    let len_inside_pool = with_cpu_session(&mut backend, |cpu| {
+        cpu.with_linalg_pool(|context, pool| {
             assert_eq!(context.thread_budget().get(), 1);
             <f64 as PoolScalar>::pool_release(pool, vec![1.0, 2.0, 3.0, 4.0]);
             Ok(pool.len())
         })
-        .unwrap();
+    })
+    .unwrap();
 
     assert_eq!(len_inside_pool, 1);
     assert_eq!(backend.buffer_pool_len().unwrap(), 1);
@@ -1018,12 +1036,13 @@ fn with_linalg_pool_restores_backend_pool_and_context() {
 #[test]
 fn linalg_pool_acquire_then_panic_replenishes_buffer_but_reports_poison() {
     let mut backend = CpuBackend::with_threads(1).unwrap();
-    backend
-        .with_linalg_pool(|_, pool| {
+    with_cpu_session(&mut backend, |cpu| {
+        cpu.with_linalg_pool(|_, pool| {
             <f64 as PoolScalar>::pool_release(pool, Vec::with_capacity(1024));
             Ok(())
         })
-        .unwrap();
+    })
+    .unwrap();
     assert_eq!(backend.buffer_pool_len().unwrap(), 1);
     assert_eq!(
         backend.buffer_pool_stats().unwrap().capacity_bytes,
@@ -1031,10 +1050,12 @@ fn linalg_pool_acquire_then_panic_replenishes_buffer_but_reports_poison() {
     );
 
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let _ = backend.with_linalg_pool::<()>(|_, pool| {
-            let _in_flight = pool.acquire_with_capacity::<f64>(1024);
-            assert_eq!(pool.retained_capacity_bytes(), 0);
-            panic!("forced panic after pool acquisition");
+        let _ = with_cpu_session(&mut backend, |cpu| {
+            cpu.with_linalg_pool::<()>(|_, pool| {
+                let _in_flight = pool.acquire_with_capacity::<f64>(1024);
+                assert_eq!(pool.retained_capacity_bytes(), 0);
+                panic!("forced panic after pool acquisition");
+            })
         });
     }));
 
@@ -1055,18 +1076,21 @@ fn linalg_pool_acquire_then_panic_replenishes_buffer_but_reports_poison() {
 #[test]
 fn uninit_output_partial_write_then_panic_discards_without_replenishment() {
     let mut backend = CpuBackend::with_threads(1).unwrap();
-    backend
-        .with_linalg_pool(|_, pool| {
+    with_cpu_session(&mut backend, |cpu| {
+        cpu.with_linalg_pool(|_, pool| {
             <bool as PoolScalar>::pool_release(pool, Vec::with_capacity(1024));
             Ok(())
         })
-        .unwrap();
+    })
+    .unwrap();
 
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let _ = backend.with_linalg_pool::<()>(|_, pool| {
-            let mut output = crate::PooledUninitOutput::<bool>::new(pool, vec![1024]).unwrap();
-            output.as_uninit_bytes_mut()[0].write(1);
-            panic!("forced panic after a partial uninitialized output write");
+        let _ = with_cpu_session(&mut backend, |cpu| {
+            cpu.with_linalg_pool::<()>(|_, pool| {
+                let mut output = crate::PooledUninitOutput::<bool>::new(pool, vec![1024]).unwrap();
+                output.as_uninit_bytes_mut()[0].write(1);
+                panic!("forced panic after a partial uninitialized output write");
+            })
         });
     }));
 

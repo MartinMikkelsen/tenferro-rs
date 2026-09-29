@@ -48,9 +48,8 @@ selected dynamically, when you want the broad concrete tensor operation
 API, or when you need to pass CPU or CUDA tensors through backend dispatch.
 
 `tenferro-tensor-core` is lower-level: it owns rank/layout metadata, dtype tags
-and scalar promotion facts. The tensor types, including the host container
-`HostTensor<T>` and the backend-capable `TypedTensor<T, R, D>`, live in
-`tenferro-tensor`.
+and scalar promotion facts. The tensor types live in `tenferro-tensor`; plain
+host data, including a custom scalar type, is `TypedTensor<T, R, Host>`.
 
 `EagerTensor` is concrete eager execution. It wraps `Tensor` values in an
 `EagerRuntime`, so each operation computes a concrete result immediately.
@@ -101,9 +100,9 @@ operations.
 | Need | Without autodiff | Eager path | Traced path |
 | --- | --- | --- | --- |
 | Everyday tensor ops | `TensorSessionOpsExt` / `TypedTensorSessionOpsExt` session-explicit methods | `EagerTensor` methods / associated functions | `TracedTensor` methods / associated functions |
-| Einsum | `[&a, &b].einsum(...)` via `TensorEinsumExt` / `TypedTensorEinsumExt`; `TensorReadEinsumExt` / `TypedTensorReadEinsumExt` for views; `ConcreteEinsumPlan` for repeated fixed metadata | `[&a, &b].einsum(...)` via `EagerEinsumExt` | `trace.einsum(...)` via `TraceContextEinsumExt` plus `extension_module` |
+| Einsum | `[&a, &b].einsum(...)` via `TensorEinsumExt` / `TypedTensorEinsumExt`; `TensorReadEinsumExt` / `TypedTensorReadEinsumExt` for views; `ConcreteEinsumPlan` for repeated fixed metadata | `session.einsum(&[&a, &b], ...)` via `EagerSessionEinsumExt` | `trace.einsum(...)` via `TraceContextEinsumExt` plus `extension_module` |
 | FFT | `x.fft(...)` via `TensorFftExt`; `read.fft_read(...)` via `TensorReadFftExt` | `session.fft(&x, ...)` via `EagerSessionFftExt` with `autodiff` (`EagerTensorFftExt` only for consuming in-place FFT) | `x.fft(...)` via `TracedTensorFftExt` plus `extension_module` |
-| Tensordot sugar | Use `matmul` or `dot_general` directly | `a.tensordot(&b, axes)` via `EagerTensorEinsumExt` | `a.tensordot(&b, axes)` via `TracedTensorEinsumExt` |
+| Tensordot sugar | Use `matmul` or `dot_general` directly | `session.tensordot(&a, &b, axes)` via `EagerSessionEinsumExt` | `a.tensordot(&b, axes)` via `TracedTensorEinsumExt` |
 | Linear algebra | `TensorLinalgExt` session methods via `with_backend_session` | `EagerTensorLinalgExt` methods with `autodiff` | `TracedTensorLinalgExt` methods |
 | Automatic differentiation | Not applicable | `backward()` plus `EagerRuntime` functional `grad`, `vjp`, `jvp`, HVP via composition | `grad`, `vjp`, `jvp`, HVP via composition |
 | External operations | Extension-defined concrete hooks | Extension-defined eager hooks and optional AD rules | Extension-defined graph hooks and optional AD rules |

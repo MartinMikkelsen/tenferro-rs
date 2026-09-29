@@ -377,6 +377,14 @@ arbiter state and executor-entry failure. Request-id exhaustion stays a wait
 (ids restart once every permit drains). The design council recorded
 nonblocking `Busy` as one valid policy, not the only safe one.
 
+**Lock-order enforcement (#1946 F1).** The rule above was stated but not
+checked: a thread could hold a session of one eager runtime (or a CPU execution
+scope) and block on another runtime's owner lock. The eager owner lock is now
+taken only when this thread holds no session, portable session guard or CPU
+permit; otherwise entry fails with `Reentered` before any wait. Inside a shared
+execution scope the owner lock is tried, not awaited, and a busy owner is
+`Contended`. Cross-thread permit waits keep the FIFO policy above.
+
 **Unwind reuse.** The engine-resources lock is still recovered after a callback
 unwinds: `BufferPoolLoan` restores in-flight pool accounting on unwind, so the
 next session sees a consistent pool, while pool introspection keeps reporting the
@@ -565,7 +573,9 @@ thresholds default to the constants they replace: `vendor_batch_max_item_dim`
 `CpuVendorBatch::Allowed`), `outer_min_items` 2 and `outer_min_items_per_lane`
 1. Routes: grouped GEMM supports all five strategies (a forced `OuterParallel`
 inside an entered session fans out over the context's own lanes); strided
-batched contractions support all but `OuterParallel`, which is a typed error;
+batched contractions support all five (a forced `OuterParallel` splits the
+batch over the entered context's lanes, and is a typed error when the context
+cannot fan out, the output items overlap, or the provider runs its own threads);
 faer packed LU/solve supports all but `WholeBatchVendor`, while the LAPACK
 packed-LU loop accepts only `Auto` and `ProviderItems` and rejects the other
 forced strategies with a typed error: each `?getrf`/`?getrs` threads itself, so
@@ -583,9 +593,14 @@ session no longer runs every `Auto` batch serially. When the entered Inner
 context owns more than one Rayon thread and the provider may run inside a lane
 (faer; BLAS is excluded by its declared scheduling), `Auto` fans a strided batch
 or a grouped job list out over the context's own lanes, each lane Sequential.
-The gate is a cost model, not the item-count thresholds alone: one GEMM item
-costs about 50 ns plus one nanosecond per 16 multiply-adds, and a lane needs at
-least 8 us of estimated work, so short batches keep one provider call.
+The gate is a cost model, not the item-count thresholds alone: by default one
+GEMM item costs about 50 ns plus one nanosecond per 16 multiply-adds, and a
+lane needs at least 8 us of estimated work, so short batches keep one provider
+call. The three parameters are `CpuBatchThresholds` fields
+(`lane_item_overhead_ns`, `lane_muladds_per_ns`, `lane_min_work_ns`), so they
+follow the same backend default < scoped < per-operation precedence as the
+item thresholds (#1946 F3). Allocating and caller-owned destinations take the
+same decision (#1946 F2).
 Strided batches split into one contiguous batch chunk per lane over disjoint
 output storage. Grouped jobs run one contiguous chunk per lane in one provider
 call when the nonempty jobs' output starts increase (which, with the
@@ -613,6 +628,11 @@ would need a reverse dependency. Core scalar traits that currently mention
 HostTensor or core Tensor must lose those storage-conversion methods; equivalent
 storage-facing methods belong in `tenferro-tensor`. Keep pure scalar tags and
 validation below it. External erased storage/adapters are migrated, not removed.
+
+#1946 F8 completes this: `HostTensor` / `HostTensorView` are removed with no
+alias, `define_scalar_set!` members, `DefaultScalars` and `ErasedHostTensor`
+carry `TypedTensor<T, DynRank, Host>`, and `tenferro_tensor::core` re-exports
+metadata only.
 
 No new crate, no blanket ban on legitimate existing dependencies between
 operation families/runtime. The table assigns ownership, not a fictitious linear

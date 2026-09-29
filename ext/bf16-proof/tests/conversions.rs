@@ -6,18 +6,19 @@
 
 use tenferro_bf16_proof::conversion::{narrow, widen};
 use tenferro_bf16_proof::Bf16;
-use tenferro_tensor::HostTensor;
+use tenferro_tensor::{DynRank, Host, TypedTensor};
 
-fn bf16(values: &[f32]) -> HostTensor<Bf16> {
-    HostTensor::from_vec_col_major(
+fn bf16(values: &[f32]) -> TypedTensor<Bf16, DynRank, Host> {
+    TypedTensor::<_, DynRank, Host>::from_host_vec_col_major(
         vec![values.len()],
         values.iter().copied().map(Bf16::from_f32).collect(),
     )
     .expect("shape matches data")
 }
 
-fn scalar(value: f32) -> HostTensor<f32> {
-    HostTensor::from_vec_col_major(vec![1], vec![value]).expect("shape matches data")
+fn scalar(value: f32) -> TypedTensor<f32, DynRank, Host> {
+    TypedTensor::<_, DynRank, Host>::from_host_vec_col_major(vec![1], vec![value])
+        .expect("shape matches data")
 }
 
 #[test]
@@ -87,8 +88,11 @@ fn special_values_and_range_survive_both_directions() {
     );
 
     let infinite = narrow(
-        &HostTensor::from_vec_col_major(vec![2], vec![f32::INFINITY, f32::NEG_INFINITY])
-            .expect("shape"),
+        &TypedTensor::<_, DynRank, Host>::from_host_vec_col_major(
+            vec![2],
+            vec![f32::INFINITY, f32::NEG_INFINITY],
+        )
+        .expect("shape"),
     )
     .expect("narrow");
     assert!(infinite.as_slice()[0].to_f32().is_infinite());

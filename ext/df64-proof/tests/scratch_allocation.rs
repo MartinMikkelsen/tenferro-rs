@@ -20,7 +20,7 @@ use tenferro_df64_proof::Df64;
 use tenferro_runtime::extension::apply;
 use tenferro_runtime::{GraphCompiler, Runtime, TracedTensor};
 use tenferro_tensor::Tensor;
-use tenferro_tensor::{ErasedHostTensor, HostTensor};
+use tenferro_tensor::{DynRank, ErasedHostTensor, Host, TypedTensor};
 
 /// Counts every allocation the test process makes.
 struct Counting;
@@ -57,7 +57,8 @@ fn measure(mut body: impl FnMut()) -> (usize, usize) {
 
 fn external(values: Vec<Df64>, shape: Vec<usize>) -> Tensor {
     Tensor::external(ErasedHostTensor::new(
-        HostTensor::from_vec_col_major(shape, values).expect("shape matches data"),
+        TypedTensor::<_, DynRank, Host>::from_host_vec_col_major(shape, values)
+            .expect("shape matches data"),
     ))
 }
 

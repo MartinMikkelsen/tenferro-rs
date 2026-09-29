@@ -93,7 +93,7 @@ pub use concrete::{
     TypedTensorReadEinsumExt, TypedTensorReadEinsumIntoExt, TypedTensorTensordotExt,
 };
 #[cfg(feature = "autodiff")]
-pub use eager_ad::{EagerEinsumExt, EagerTensorEinsumExt};
+pub use eager_ad::EagerSessionEinsumExt;
 pub use error::{Error, PlanningError, Result};
 pub use extension::extension_module;
 #[cfg(feature = "autodiff")]

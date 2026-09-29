@@ -8,18 +8,19 @@ use tenferro_cpu::{scalar_binary_into, CpuBackend};
 use tenferro_df64_proof::{Df64, Df64Add};
 use tenferro_tensor::TensorRead;
 use tenferro_tensor::{BackendSessionHost, Tensor};
-use tenferro_tensor::{ErasedHostTensor, HostTensor};
+use tenferro_tensor::{DynRank, ErasedHostTensor, Host, TypedTensor};
 
 fn external<T>(values: Vec<T>) -> Tensor
 where
     T: tenferro_tensor_core::Scalar,
 {
     Tensor::external(ErasedHostTensor::new(
-        HostTensor::from_vec_col_major(vec![values.len()], values).expect("shape matches data"),
+        TypedTensor::<_, DynRank, Host>::from_host_vec_col_major(vec![values.len()], values)
+            .expect("shape matches data"),
     ))
 }
 
-fn payload<T>(tensor: &Tensor) -> &HostTensor<T>
+fn payload<T>(tensor: &Tensor) -> &TypedTensor<T, DynRank, Host>
 where
     T: tenferro_tensor_core::Scalar,
 {
@@ -34,8 +35,11 @@ fn an_external_scalar_composes_with_ordinary_operations_in_one_session() {
     let low = 2f64.powi(-80);
     let lhs = external(vec![Df64::from_f64(1.0), Df64::zero()]);
     let rhs = external(vec![Df64::from_f64(low), Df64::zero()]);
-    let mut destination = HostTensor::from_vec_col_major(vec![2], vec![Df64::zero(), Df64::zero()])
-        .expect("shape matches data");
+    let mut destination = TypedTensor::<_, DynRank, Host>::from_host_vec_col_major(
+        vec![2],
+        vec![Df64::zero(), Df64::zero()],
+    )
+    .expect("shape matches data");
 
     let mut backend = CpuBackend::new();
     backend

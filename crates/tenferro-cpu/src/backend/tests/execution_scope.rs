@@ -55,7 +55,9 @@ fn shared_scope_installs_once_and_reuses_resources_across_operations() {
                             .unwrap()
                             .unwrap();
                         assert_eq!(y.as_slice::<f64>().unwrap(), &[2.0, 4.0, 6.0, 8.0]);
-                        backend.reclaim_buffer(y);
+                        backend
+                            .with_backend_session(|__s| __s.reclaim_buffer(y))
+                            .unwrap();
                         let run = |session: &mut dyn BackendSession| {
                             let y = session
                                 .mul_read(TensorRead::from_tensor(&x), TensorRead::from_tensor(&x))

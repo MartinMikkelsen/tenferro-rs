@@ -7,6 +7,7 @@ use std::time::Duration;
 use tenferro_tensor::DotGeneralConfig;
 
 use super::super::*;
+use super::with_cpu_session;
 use crate::{
     CpuDomainExecutor, CpuDomainExecutorCapabilities, CpuDomainExecutorError, CpuDomainId,
     CpuDomainOwnership, CpuExecutorAffinity, CpuExecutorReentrancy, CpuExecutorShutdown, CpuId,
@@ -931,12 +932,13 @@ fn external_linalg_execution_uses_the_supplied_no_inner_executor() {
     )
     .unwrap();
 
-    backend
-        .with_linalg_pool(|context, _| {
+    with_cpu_session(&mut backend, |cpu| {
+        cpu.with_linalg_pool(|context, _| {
             assert_eq!(context.parallel_mode(), crate::ParallelMode::Sequential);
             Ok(())
         })
-        .unwrap();
+    })
+    .unwrap();
 
     assert_eq!(installs.load(Ordering::Relaxed), 1);
 }
@@ -1085,13 +1087,14 @@ fn sequential_direct_session_native_dot_and_linalg_each_enter_exactly_once() {
     assert_eq!(submits.load(Ordering::Relaxed), 0);
 
     let linalg_calls = AtomicUsize::new(0);
-    backend
-        .with_linalg_pool(|context, _| {
+    with_cpu_session(&mut backend, |cpu| {
+        cpu.with_linalg_pool(|context, _| {
             assert_eq!(context.parallel_mode(), crate::ParallelMode::Sequential);
             linalg_calls.fetch_add(1, Ordering::Relaxed);
             Ok(())
         })
-        .unwrap();
+    })
+    .unwrap();
     assert_eq!(linalg_calls.load(Ordering::Relaxed), 1);
     assert_eq!(installs.load(Ordering::Relaxed), 4);
     assert_eq!(submits.load(Ordering::Relaxed), 0);
@@ -1253,8 +1256,8 @@ fn caller_managed_same_pool_entry_uses_only_the_declared_rayon_team() {
     let names = Arc::new(std::sync::Mutex::new(BTreeSet::new()));
     let observed = Arc::clone(&names);
     pool.install(|| {
-        backend
-            .with_linalg_pool(|context, _| {
+        with_cpu_session(&mut backend, |cpu| {
+            cpu.with_linalg_pool(|context, _| {
                 assert_eq!(context.thread_budget().get(), 2);
                 assert_eq!(context.admission_mode(), CpuAdmissionMode::CallerManaged);
                 assert!(context.cpus().is_none());
@@ -1268,7 +1271,8 @@ fn caller_managed_same_pool_entry_uses_only_the_declared_rayon_team() {
                 });
                 Ok(())
             })
-            .unwrap();
+        })
+        .unwrap();
     });
 
     let names = names.lock().unwrap();
@@ -1323,24 +1327,26 @@ fn distinct_caller_managed_domains_overlap_and_select_by_id() {
     let (release_a_tx, release_a_rx) = mpsc::channel();
     let (release_b_tx, release_b_rx) = mpsc::channel();
     let first = std::thread::spawn(move || {
-        backend_a
-            .with_linalg_pool(move |_, _| {
+        with_cpu_session(&mut backend_a, move |cpu| {
+            cpu.with_linalg_pool(move |_, _| {
                 entered_tx.send(31).unwrap();
                 release_a_rx.recv().unwrap();
                 Ok(())
             })
-            .unwrap();
+        })
+        .unwrap();
     });
     let entered_tx = entered_rx;
     let (second_entered_tx, second_entered_rx) = mpsc::channel();
     let second = std::thread::spawn(move || {
-        backend_b
-            .with_linalg_pool(move |_, _| {
+        with_cpu_session(&mut backend_b, move |cpu| {
+            cpu.with_linalg_pool(move |_, _| {
                 second_entered_tx.send(32).unwrap();
                 release_b_rx.recv().unwrap();
                 Ok(())
             })
-            .unwrap();
+        })
+        .unwrap();
     });
 
     let first_id = entered_tx.recv_timeout(Duration::from_secs(2));
@@ -1365,15 +1371,14 @@ fn caller_managed_public_reentry_is_rejected_and_unwind_releases_admission() {
     let mut backend = external_backend(CpuDomainId::new(41), [domain], topology([0])).unwrap();
     let mut nested = backend.clone();
 
-    backend
-        .with_linalg_pool(|_, _| {
+    with_cpu_session(&mut backend, |cpu| {
+        cpu.with_linalg_pool(|_, _| {
             let (result_tx, result_rx) = mpsc::channel();
             rayon::scope(|scope| {
                 scope.spawn(move |_| {
                     let mut ran = false;
-                    let outcome = nested.with_linalg_pool(|_, _| {
+                    let outcome = nested.with_backend_session(|_| {
                         ran = true;
-                        Ok(())
                     });
                     result_tx.send((outcome, ran)).unwrap();
                 });
@@ -1388,28 +1393,28 @@ fn caller_managed_public_reentry_is_rejected_and_unwind_releases_admission() {
             assert!(
                 matches!(
                     error,
-                    crate::Error::SessionEntry {
-                        source: SessionEntryError::Contended {
-                            backend: CPU_BACKEND,
-                            ..
-                        } | SessionEntryError::Reentered {
-                            backend: CPU_BACKEND
-                        }
+                    SessionEntryError::Contended {
+                        backend: CPU_BACKEND,
+                        ..
+                    } | SessionEntryError::Reentered {
+                        backend: CPU_BACKEND
                     }
                 ),
                 "{error}"
             );
             Ok(())
         })
-        .unwrap();
+    })
+    .unwrap();
 
     let panic = catch_unwind(AssertUnwindSafe(|| {
-        backend
-            .with_linalg_pool(|_, _| -> crate::Result<()> { panic!("fixture unwind") })
-            .unwrap();
+        with_cpu_session(&mut backend, |cpu| {
+            cpu.with_linalg_pool(|_, _| -> crate::Result<()> { panic!("fixture unwind") })
+        })
+        .unwrap();
     }));
     assert!(panic.is_err());
-    backend.with_linalg_pool(|_, _| Ok(())).unwrap();
+    with_cpu_session(&mut backend, |cpu| cpu.with_linalg_pool(|_, _| Ok(()))).unwrap();
 }
 
 #[test]

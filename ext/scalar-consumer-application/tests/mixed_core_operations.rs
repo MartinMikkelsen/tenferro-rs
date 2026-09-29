@@ -15,7 +15,7 @@ use tenferro_df64_proof::{Df64, Df64Add};
 use tenferro_runtime::extension::apply;
 use tenferro_runtime::{GraphCompiler, Runtime, TracedTensor};
 use tenferro_tensor::Tensor;
-use tenferro_tensor::{ErasedHostTensor, HostTensor};
+use tenferro_tensor::{DynRank, ErasedHostTensor, Host, TypedTensor};
 
 /// A runtime carrying the standard engine and the contribution's module together.
 fn mixed_runtime() -> Runtime {
@@ -32,7 +32,8 @@ fn mixed_runtime() -> Runtime {
 
 fn external(values: Vec<Df64>, shape: Vec<usize>) -> Tensor {
     Tensor::external(ErasedHostTensor::new(
-        HostTensor::from_vec_col_major(shape, values).expect("shape matches data"),
+        TypedTensor::<_, DynRank, Host>::from_host_vec_col_major(shape, values)
+            .expect("shape matches data"),
     ))
 }
 
@@ -82,10 +83,16 @@ fn the_core_operations_run_in_the_mixed_configuration() {
     );
 
     // The precision example: add the low component, then subtract the leading one.
-    let mut sum = HostTensor::from_vec_col_major(vec![1], vec![Df64::from_f64(1.0)])
-        .expect("shape matches data");
-    let increment = HostTensor::from_vec_col_major(vec![1], vec![Df64 { hi: low, lo: 0.0 }])
-        .expect("shape matches data");
+    let mut sum = TypedTensor::<_, DynRank, Host>::from_host_vec_col_major(
+        vec![1],
+        vec![Df64::from_f64(1.0)],
+    )
+    .expect("shape matches data");
+    let increment = TypedTensor::<_, DynRank, Host>::from_host_vec_col_major(
+        vec![1],
+        vec![Df64 { hi: low, lo: 0.0 }],
+    )
+    .expect("shape matches data");
     let leading = sum.clone();
     scalar_binary_into::<Df64, Df64Add>("add", &mut sum, &leading, &increment)
         .expect("addition in the extended scalar");
@@ -94,7 +101,7 @@ fn the_core_operations_run_in_the_mixed_configuration() {
     assert_eq!(difference.narrow_to_f64(), low);
 
     // The reduction keeps the low component through the shared fold.
-    let values = HostTensor::from_vec_col_major(
+    let values = TypedTensor::<_, DynRank, Host>::from_host_vec_col_major(
         vec![2],
         vec![Df64::from_f64(1.0), Df64 { hi: low, lo: 0.0 }],
     )
@@ -104,7 +111,9 @@ fn the_core_operations_run_in_the_mixed_configuration() {
     assert_eq!(reduced - Df64::from_f64(1.0), Df64 { hi: low, lo: 0.0 });
 
     // The canonical path is still present and still ordinary in the same process.
-    let ordinary = HostTensor::from_vec_col_major(vec![2], vec![1.0_f64, low]).expect("shape");
+    let ordinary =
+        TypedTensor::<_, DynRank, Host>::from_host_vec_col_major(vec![2], vec![1.0_f64, low])
+            .expect("shape");
     let ordinary_total = scalar_fold::<f64, AddOp>("sum", &ordinary, 0.0_f64).expect("f64 sum");
     assert_eq!(
         ordinary_total - 1.0,

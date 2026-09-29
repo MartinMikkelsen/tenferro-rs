@@ -1,121 +1,63 @@
 //! Dtype-erased external host value.
 //!
-//! A downstream crate that defines its own scalar stores its data in a
-//! [`HostTensor`](crate::HostTensor) and hands it to [`ErasedHostTensor`]. The
-//! payload keeps its own element type and is recovered by that type, so no
-//! bytes are reinterpreted. This is the external-scalar half of the tensor
-//! family and lives with the host container it erases.
+//! A downstream crate that defines its own scalar stores its data in the
+//! canonical host tensor, `TypedTensor<T, DynRank, Host>`, and hands it to
+//! [`ErasedHostTensor`]. The payload keeps its own element type and is
+//! recovered by that type, so no bytes are reinterpreted. The presented view
+//! is a canonical [`TensorLayout`] over that payload.
 
 use core::any::{Any, TypeId};
 use std::sync::Arc;
 
-use crate::HostTensor;
-use tenferro_tensor_core::{Scalar, ShapeVec, StrideVec, ValidationError};
+use crate::{Host, TypedTensor};
+use tenferro_tensor_core::{DynRank, Scalar, TensorLayout};
 
-/// Shape, element strides, and element offset of one erased view.
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct Layout {
-    shape: ShapeVec,
-    // Inline up to the same rank the shape is, so describing a payload of the usual rank
-    // allocates nothing: this runs on every value the contribution constructs.
-    strides: StrideVec,
-    offset: isize,
+/// The canonical host tensor an erased value carries.
+type Payload<T> = TypedTensor<T, DynRank, Host>;
+
+const OP: &str = "ErasedHostTensor";
+
+/// Number of logical elements named by `layout`.
+fn element_count(layout: &TensorLayout) -> usize {
+    layout.shape().iter().product()
 }
 
-impl Layout {
-    /// The dense column-major layout of `shape`.
-    fn dense(shape: &[usize]) -> Self {
-        let mut strides = StrideVec::with_capacity(shape.len());
-        let mut running = 1isize;
-        for extent in shape {
-            strides.push(running);
-            running = running.saturating_mul(*extent as isize);
-        }
-        Self {
-            shape: shape.into(),
-            strides,
-            offset: 0,
-        }
+/// Whether `layout` is the dense zero-offset column-major layout of its shape.
+///
+/// The check walks the extents in place: this runs on every erased access that
+/// wants the whole payload, so it must not allocate.
+fn is_dense(layout: &TensorLayout) -> bool {
+    if layout.offset() != 0 {
+        return false;
     }
-
-    /// Number of logical elements.
-    fn count(&self) -> usize {
-        self.shape.iter().product()
-    }
-
-    /// Whether this layout is the dense column-major layout of its own shape.
-    ///
-    /// The check walks the extents in place instead of building the dense layout to compare
-    /// against it: this runs on every erased access that wants the whole payload, so it must
-    /// not allocate.
-    fn is_dense(&self) -> bool {
-        if self.offset != 0 {
+    let mut running: isize = 1;
+    for (extent, stride) in layout.shape().iter().zip(layout.strides()) {
+        if *stride != running {
             return false;
         }
-        let mut running: isize = 1;
-        for (extent, stride) in self.shape.iter().zip(self.strides.iter()) {
-            if *stride != running {
-                return false;
-            }
-            running = running.saturating_mul(*extent as isize);
-        }
-        true
+        running = running.saturating_mul(*extent as isize);
     }
+    true
+}
 
-    /// The layout of the same elements under `axes`.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`ValidationError::InvalidPermutationLength`] when `axes` has the
-    /// wrong length, [`ValidationError::AxisOutOfBounds`] when an axis is out of
-    /// range, and [`ValidationError::DuplicateAxis`] when an axis repeats.
-    fn permuted(&self, axes: &[usize]) -> Result<Self, ValidationError> {
-        let rank = self.shape.len();
-        if axes.len() != rank {
-            return Err(ValidationError::InvalidPermutationLength {
-                expected: rank,
-                actual: axes.len(),
-            });
-        }
-        let mut seen = vec![false; rank];
-        for axis in axes {
-            if *axis >= rank {
-                return Err(ValidationError::AxisOutOfBounds { axis: *axis, rank });
-            }
-            if seen[*axis] {
-                return Err(ValidationError::DuplicateAxis {
-                    axis: *axis,
-                    role: "permute",
-                });
-            }
-            seen[*axis] = true;
-        }
-        Ok(Self {
-            shape: axes.iter().map(|axis| self.shape[*axis]).collect(),
-            strides: axes.iter().map(|axis| self.strides[*axis]).collect(),
-            offset: self.offset,
-        })
+/// Physical element offset of the logical `index`, or `None` out of range.
+fn linear_index(layout: &TensorLayout, index: &[usize]) -> Option<isize> {
+    if index.len() != layout.shape().len() {
+        return None;
     }
-
-    /// The linear storage index of one logical index, when it is in range.
-    fn linear_index(&self, index: &[usize]) -> Option<isize> {
-        if index.len() != self.shape.len() {
+    let mut linear = layout.offset();
+    for ((position, extent), stride) in index.iter().zip(layout.shape()).zip(layout.strides()) {
+        if position >= extent {
             return None;
         }
-        let mut linear = self.offset;
-        for (position, extent) in self.shape.iter().enumerate() {
-            if index[position] >= *extent {
-                return None;
-            }
-            linear += self.strides[position] * index[position] as isize;
-        }
-        Some(linear)
+        linear += stride * *position as isize;
     }
+    Some(linear)
 }
 
 /// Object-safe operations the erased value needs from one payload.
 ///
-/// The payload is only ever one concrete `HostTensor<T>`, so a payload answers
+/// The payload is only ever one concrete `TypedTensor<T, DynRank, Host>`, so a payload answers
 /// with its own element type and never by reinterpreting bytes.
 trait ErasedPayload: Send + Sync {
     /// Copy the payload while keeping its concrete element type.
@@ -123,10 +65,10 @@ trait ErasedPayload: Send + Sync {
     fn as_any(&self) -> &dyn Any;
     fn as_any_mut(&mut self) -> &mut dyn Any;
     /// Copy the elements named by `layout` into a new dense payload.
-    fn gather(&self, layout: &Layout) -> Result<Box<dyn ErasedPayload>, ValidationError>;
+    fn gather(&self, layout: &TensorLayout) -> crate::Result<Box<dyn ErasedPayload>>;
 }
 
-impl<T: Scalar> ErasedPayload for HostTensor<T> {
+impl<T: Scalar> ErasedPayload for Payload<T> {
     fn clone_payload(&self) -> Box<dyn ErasedPayload> {
         Box::new(self.clone())
     }
@@ -139,32 +81,33 @@ impl<T: Scalar> ErasedPayload for HostTensor<T> {
         self
     }
 
-    fn gather(&self, layout: &Layout) -> Result<Box<dyn ErasedPayload>, ValidationError> {
+    fn gather(&self, layout: &TensorLayout) -> crate::Result<Box<dyn ErasedPayload>> {
         let source = self.as_slice();
-        let expected = layout.count();
+        let expected = element_count(layout);
         let mut gathered = Vec::with_capacity(expected);
-        let rank = layout.shape.len();
-        let mut index = vec![0usize; rank];
+        let mut index = vec![0usize; layout.shape().len()];
         for _ in 0..expected {
-            let linear = layout
-                .linear_index(&index)
+            let linear = linear_index(layout, &index)
                 .and_then(|linear| usize::try_from(linear).ok())
                 .filter(|linear| *linear < source.len())
-                .ok_or(ValidationError::ShapeDataLengthMismatch {
-                    expected,
-                    actual: source.len(),
-                })?;
+                .ok_or(crate::Error::validation(
+                    OP,
+                    tenferro_tensor_core::ValidationError::ShapeDataLengthMismatch {
+                        expected,
+                        actual: source.len(),
+                    },
+                ))?;
             gathered.push(source[linear]);
             for (position, current) in index.iter_mut().enumerate() {
                 *current += 1;
-                if *current < layout.shape[position] {
+                if *current < layout.shape()[position] {
                     break;
                 }
                 *current = 0;
             }
         }
-        Ok(Box::new(HostTensor::from_vec_col_major(
-            layout.shape.clone(),
+        Ok(Box::new(Payload::from_host_vec_col_major(
+            layout.shape().to_vec(),
             gathered,
         )?))
     }
@@ -187,18 +130,18 @@ impl<T: Scalar> ErasedPayload for HostTensor<T> {
 /// # Examples
 ///
 /// ```rust
-/// use tenferro_tensor::{ErasedHostTensor, HostTensor};
+/// use tenferro_tensor::{DynRank, ErasedHostTensor, Host, TypedTensor};
 ///
-/// let value = ErasedHostTensor::new(HostTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?);
+/// let value = ErasedHostTensor::new(TypedTensor::<_, DynRank, Host>::from_host_vec_col_major(vec![2], vec![1.0_f64, 2.0])?);
 /// assert_eq!(value.downcast_ref::<f64>().unwrap().as_slice(), &[1.0, 2.0]);
 /// assert_eq!(value.clone().element_count(), 2);
-/// # Ok::<(), tenferro_tensor_core::ValidationError>(())
+/// # Ok::<(), tenferro_tensor::Error>(())
 /// ```
 pub struct ErasedHostTensor {
     payload: Arc<dyn ErasedPayload>,
     type_id: TypeId,
     element: TypeId,
-    layout: Layout,
+    layout: TensorLayout,
     payload_elements: usize,
     /// Whether `layout` is the dense column-major layout of its own shape.
     ///
@@ -217,13 +160,13 @@ impl Clone for ErasedHostTensor {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_tensor::{ErasedHostTensor, HostTensor};
+    /// use tenferro_tensor::{DynRank, ErasedHostTensor, Host, TypedTensor};
     ///
-    /// let value = ErasedHostTensor::new(HostTensor::from_vec_col_major(vec![1], vec![7_i64])?);
+    /// let value = ErasedHostTensor::new(TypedTensor::<_, DynRank, Host>::from_host_vec_col_major(vec![1], vec![7_i64])?);
     /// let view = value.clone();
     /// assert!(view.shares_payload_with(&value));
     /// assert!(!view.duplicate().shares_payload_with(&value));
-    /// # Ok::<(), tenferro_tensor_core::ValidationError>(())
+    /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
     fn clone(&self) -> Self {
         Self {
@@ -241,9 +184,9 @@ impl core::fmt::Debug for ErasedHostTensor {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("ErasedHostTensor")
             .field("type_id", &self.type_id)
-            .field("shape", &self.layout.shape)
-            .field("strides", &self.layout.strides)
-            .field("offset", &self.layout.offset)
+            .field("shape", &self.layout.shape())
+            .field("strides", &self.layout.strides())
+            .field("offset", &self.layout.offset())
             .finish()
     }
 }
@@ -256,18 +199,19 @@ impl ErasedHostTensor {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_tensor::{ErasedHostTensor, HostTensor};
+    /// use tenferro_tensor::{DynRank, ErasedHostTensor, Host, TypedTensor};
     ///
-    /// let erased = ErasedHostTensor::new(HostTensor::from_vec_col_major(vec![1], vec![7_i32])?);
+    /// let erased = ErasedHostTensor::new(TypedTensor::<_, DynRank, Host>::from_host_vec_col_major(vec![1], vec![7_i32])?);
     /// assert!(erased.is::<i32>());
-    /// # Ok::<(), tenferro_tensor_core::ValidationError>(())
+    /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
-    pub fn new<T: Scalar>(value: HostTensor<T>) -> Self {
-        let layout = Layout::dense(value.shape());
-        let payload_elements = layout.count();
+    pub fn new<T: Scalar>(value: TypedTensor<T, DynRank, Host>) -> Self {
+        // An owned tensor is always compact, so the erased value starts dense.
+        let layout = value.layout();
+        let payload_elements = element_count(&layout);
         Self {
             payload: Arc::new(value),
-            type_id: TypeId::of::<HostTensor<T>>(),
+            type_id: TypeId::of::<Payload<T>>(),
             element: TypeId::of::<T>(),
             dense: true,
             layout,
@@ -280,11 +224,11 @@ impl ErasedHostTensor {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_tensor::{ErasedHostTensor, HostTensor};
+    /// use tenferro_tensor::{DynRank, ErasedHostTensor, Host, TypedTensor};
     ///
-    /// let erased = ErasedHostTensor::new(HostTensor::from_vec_col_major(vec![1], vec![1.0_f32])?);
-    /// assert_eq!(erased.type_id(), core::any::TypeId::of::<HostTensor<f32>>());
-    /// # Ok::<(), tenferro_tensor_core::ValidationError>(())
+    /// let erased = ErasedHostTensor::new(TypedTensor::<_, DynRank, Host>::from_host_vec_col_major(vec![1], vec![1.0_f32])?);
+    /// assert_eq!(erased.type_id(), core::any::TypeId::of::<TypedTensor<f32, DynRank, Host>>());
+    /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
     #[must_use]
     pub fn type_id(&self) -> TypeId {
@@ -298,11 +242,11 @@ impl ErasedHostTensor {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_tensor::{ErasedHostTensor, HostTensor};
+    /// use tenferro_tensor::{DynRank, ErasedHostTensor, Host, TypedTensor};
     ///
-    /// let erased = ErasedHostTensor::new(HostTensor::from_vec_col_major(vec![1], vec![1.0_f64])?);
+    /// let erased = ErasedHostTensor::new(TypedTensor::<_, DynRank, Host>::from_host_vec_col_major(vec![1], vec![1.0_f64])?);
     /// assert_eq!(erased.element_type_id(), core::any::TypeId::of::<f64>());
-    /// # Ok::<(), tenferro_tensor_core::ValidationError>(())
+    /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
     #[must_use]
     pub fn element_type_id(&self) -> TypeId {
@@ -314,15 +258,15 @@ impl ErasedHostTensor {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_tensor::{ErasedHostTensor, HostTensor};
+    /// use tenferro_tensor::{DynRank, ErasedHostTensor, Host, TypedTensor};
     ///
-    /// let erased = ErasedHostTensor::new(HostTensor::from_vec_col_major(vec![2, 3], vec![0.0_f64; 6])?);
+    /// let erased = ErasedHostTensor::new(TypedTensor::<_, DynRank, Host>::from_host_vec_col_major(vec![2, 3], vec![0.0_f64; 6])?);
     /// assert_eq!(erased.shape(), &[2, 3]);
-    /// # Ok::<(), tenferro_tensor_core::ValidationError>(())
+    /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
     #[must_use]
     pub fn shape(&self) -> &[usize] {
-        &self.layout.shape
+        self.layout.shape()
     }
 
     /// Element strides of the presented view.
@@ -330,15 +274,15 @@ impl ErasedHostTensor {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_tensor::{ErasedHostTensor, HostTensor};
+    /// use tenferro_tensor::{DynRank, ErasedHostTensor, Host, TypedTensor};
     ///
-    /// let erased = ErasedHostTensor::new(HostTensor::from_vec_col_major(vec![2, 3], vec![0.0_f64; 6])?);
+    /// let erased = ErasedHostTensor::new(TypedTensor::<_, DynRank, Host>::from_host_vec_col_major(vec![2, 3], vec![0.0_f64; 6])?);
     /// assert_eq!(erased.strides(), &[1, 2]);
-    /// # Ok::<(), tenferro_tensor_core::ValidationError>(())
+    /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
     #[must_use]
     pub fn strides(&self) -> &[isize] {
-        &self.layout.strides
+        self.layout.strides()
     }
 
     /// Element offset of the presented view.
@@ -346,15 +290,15 @@ impl ErasedHostTensor {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_tensor::{ErasedHostTensor, HostTensor};
+    /// use tenferro_tensor::{DynRank, ErasedHostTensor, Host, TypedTensor};
     ///
-    /// let erased = ErasedHostTensor::new(HostTensor::from_vec_col_major(vec![2], vec![0.0_f64; 2])?);
+    /// let erased = ErasedHostTensor::new(TypedTensor::<_, DynRank, Host>::from_host_vec_col_major(vec![2], vec![0.0_f64; 2])?);
     /// assert_eq!(erased.offset(), 0);
-    /// # Ok::<(), tenferro_tensor_core::ValidationError>(())
+    /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
     #[must_use]
     pub fn offset(&self) -> isize {
-        self.layout.offset
+        self.layout.offset()
     }
 
     /// Whether the presented view is the dense column-major layout of its shape.
@@ -362,11 +306,11 @@ impl ErasedHostTensor {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_tensor::{ErasedHostTensor, HostTensor};
+    /// use tenferro_tensor::{DynRank, ErasedHostTensor, Host, TypedTensor};
     ///
-    /// let erased = ErasedHostTensor::new(HostTensor::from_vec_col_major(vec![2, 3], vec![0.0_f64; 6])?);
+    /// let erased = ErasedHostTensor::new(TypedTensor::<_, DynRank, Host>::from_host_vec_col_major(vec![2, 3], vec![0.0_f64; 6])?);
     /// assert!(erased.is_contiguous());
-    /// # Ok::<(), tenferro_tensor_core::ValidationError>(())
+    /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
     #[must_use]
     pub fn is_contiguous(&self) -> bool {
@@ -378,15 +322,15 @@ impl ErasedHostTensor {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_tensor::{ErasedHostTensor, HostTensor};
+    /// use tenferro_tensor::{DynRank, ErasedHostTensor, Host, TypedTensor};
     ///
-    /// let erased = ErasedHostTensor::new(HostTensor::from_vec_col_major(vec![2, 3], vec![0.0_f64; 6])?);
+    /// let erased = ErasedHostTensor::new(TypedTensor::<_, DynRank, Host>::from_host_vec_col_major(vec![2, 3], vec![0.0_f64; 6])?);
     /// assert_eq!(erased.element_count(), 6);
-    /// # Ok::<(), tenferro_tensor_core::ValidationError>(())
+    /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
     #[must_use]
     pub fn element_count(&self) -> usize {
-        self.layout.count()
+        element_count(&self.layout)
     }
 
     /// Whether two erased values present the same stored payload.
@@ -397,12 +341,12 @@ impl ErasedHostTensor {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_tensor::{ErasedHostTensor, HostTensor};
+    /// use tenferro_tensor::{DynRank, ErasedHostTensor, Host, TypedTensor};
     ///
-    /// let erased = ErasedHostTensor::new(HostTensor::from_vec_col_major(vec![1], vec![1.0_f64])?);
+    /// let erased = ErasedHostTensor::new(TypedTensor::<_, DynRank, Host>::from_host_vec_col_major(vec![1], vec![1.0_f64])?);
     /// assert!(erased.shares_payload_with(&erased.clone()));
     /// assert!(!erased.shares_payload_with(&erased.duplicate()));
-    /// # Ok::<(), tenferro_tensor_core::ValidationError>(())
+    /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
     #[must_use]
     pub fn shares_payload_with(&self, other: &Self) -> bool {
@@ -417,13 +361,13 @@ impl ErasedHostTensor {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_tensor::{ErasedHostTensor, HostTensor};
+    /// use tenferro_tensor::{DynRank, ErasedHostTensor, Host, TypedTensor};
     ///
-    /// let erased = ErasedHostTensor::new(HostTensor::from_vec_col_major(vec![1], vec![1.0_f64])?);
+    /// let erased = ErasedHostTensor::new(TypedTensor::<_, DynRank, Host>::from_host_vec_col_major(vec![1], vec![1.0_f64])?);
     /// let mut copy = erased.duplicate();
-    /// copy.downcast_mut::<f64>().unwrap().as_mut_slice()[0] = 5.0;
+    /// copy.downcast_mut::<f64>().unwrap().host_data_mut()[0] = 5.0;
     /// assert_eq!(erased.as_dense::<f64>().unwrap().0, &[1.0]);
-    /// # Ok::<(), tenferro_tensor_core::ValidationError>(())
+    /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
     #[must_use]
     pub fn duplicate(&self) -> Self {
@@ -444,26 +388,29 @@ impl ErasedHostTensor {
     ///
     /// # Errors
     ///
-    /// Returns [`ValidationError::InvalidPermutationLength`] when `axes` does not
-    /// have one entry per axis, [`ValidationError::AxisOutOfBounds`] when an axis
-    /// is out of range, and [`ValidationError::DuplicateAxis`] when an axis
-    /// repeats.
+    /// Returns a validation error carrying
+    /// [`tenferro_tensor_core::ValidationError::InvalidPermutationLength`] when `axes` does not have
+    /// one entry per axis, [`tenferro_tensor_core::ValidationError::AxisOutOfBounds`] when an axis is
+    /// out of range, or [`tenferro_tensor_core::ValidationError::DuplicateAxis`] when an axis repeats.
     ///
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_tensor::{ErasedHostTensor, HostTensor};
+    /// use tenferro_tensor::{DynRank, ErasedHostTensor, Host, TypedTensor};
     ///
-    /// let erased = ErasedHostTensor::new(HostTensor::from_vec_col_major(vec![2, 3], vec![0.0_f64; 6])?);
+    /// let erased = ErasedHostTensor::new(TypedTensor::<_, DynRank, Host>::from_host_vec_col_major(vec![2, 3], vec![0.0_f64; 6])?);
     /// let permuted = erased.permuted(&[1, 0])?;
     /// assert_eq!(permuted.shape(), &[3, 2]);
     /// assert_eq!(permuted.strides(), &[2, 1]);
     /// assert!(permuted.shares_payload_with(&erased));
-    /// # Ok::<(), tenferro_tensor_core::ValidationError>(())
+    /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
-    pub fn permuted(&self, axes: &[usize]) -> Result<Self, ValidationError> {
-        let layout = self.layout.permuted(axes)?;
-        let dense = layout.is_dense();
+    pub fn permuted(&self, axes: &[usize]) -> crate::Result<Self> {
+        let layout = self
+            .layout
+            .transpose_view(axes)
+            .map_err(|source| crate::Error::validation("ErasedHostTensor::permuted", source))?;
+        let dense = is_dense(&layout);
         Ok(Self {
             layout,
             dense,
@@ -479,25 +426,28 @@ impl ErasedHostTensor {
     ///
     /// # Errors
     ///
-    /// Returns [`ValidationError::ShapeDataLengthMismatch`] when the view names
-    /// storage the payload does not have.
+    /// Returns a validation error carrying
+    /// [`tenferro_tensor_core::ValidationError::ShapeDataLengthMismatch`] when the view names storage
+    /// the payload does not have.
     ///
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_tensor::{ErasedHostTensor, HostTensor};
+    /// use tenferro_tensor::{DynRank, ErasedHostTensor, Host, TypedTensor};
     ///
-    /// let erased = ErasedHostTensor::new(HostTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0])?);
+    /// let erased = ErasedHostTensor::new(TypedTensor::<_, DynRank, Host>::from_host_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0])?);
     /// let contiguous = erased.permuted(&[1, 0])?.to_contiguous()?;
     /// assert_eq!(contiguous.shape(), &[2, 2]);
     /// assert!(contiguous.is_contiguous());
     /// assert_eq!(contiguous.as_dense::<f64>().unwrap().0, &[1.0, 3.0, 2.0, 4.0]);
-    /// # Ok::<(), tenferro_tensor_core::ValidationError>(())
+    /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
-    pub fn to_contiguous(&self) -> Result<Self, ValidationError> {
+    pub fn to_contiguous(&self) -> crate::Result<Self> {
         let payload = self.payload.gather(&self.layout)?;
-        let layout = Layout::dense(&self.layout.shape);
-        let payload_elements = layout.count();
+        let layout = TensorLayout::compact(self.layout.shape().into()).map_err(|source| {
+            crate::Error::validation("ErasedHostTensor::to_contiguous", source)
+        })?;
+        let payload_elements = element_count(&layout);
         Ok(Self {
             payload: Arc::from(payload),
             type_id: self.type_id,
@@ -513,15 +463,15 @@ impl ErasedHostTensor {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_tensor::{ErasedHostTensor, HostTensor};
+    /// use tenferro_tensor::{DynRank, ErasedHostTensor, Host, TypedTensor};
     ///
-    /// let erased = ErasedHostTensor::new(HostTensor::from_vec_col_major(vec![1], vec![1.0_f64])?);
+    /// let erased = ErasedHostTensor::new(TypedTensor::<_, DynRank, Host>::from_host_vec_col_major(vec![1], vec![1.0_f64])?);
     /// assert!(erased.is::<f64>());
-    /// # Ok::<(), tenferro_tensor_core::ValidationError>(())
+    /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
     #[must_use]
     pub fn is<T: Scalar>(&self) -> bool {
-        self.payload.as_any().is::<HostTensor<T>>()
+        self.payload.as_any().is::<Payload<T>>()
     }
 
     /// Borrow the whole payload when it is dense and has element type `T`.
@@ -533,21 +483,21 @@ impl ErasedHostTensor {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_tensor::{ErasedHostTensor, HostTensor};
+    /// use tenferro_tensor::{DynRank, ErasedHostTensor, Host, TypedTensor};
     ///
-    /// let erased = ErasedHostTensor::new(HostTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0])?);
+    /// let erased = ErasedHostTensor::new(TypedTensor::<_, DynRank, Host>::from_host_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0])?);
     /// assert_eq!(erased.downcast_ref::<f64>().unwrap().shape(), &[2, 2]);
     ///
     /// // A strided view is not the dense payload, so the dense borrow refuses it.
-    /// assert_eq!(erased.permuted(&[1, 0])?.downcast_ref::<f64>(), None);
-    /// # Ok::<(), tenferro_tensor_core::ValidationError>(())
+    /// assert!(erased.permuted(&[1, 0])?.downcast_ref::<f64>().is_none());
+    /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
     #[must_use]
-    pub fn downcast_ref<T: Scalar>(&self) -> Option<&HostTensor<T>> {
+    pub fn downcast_ref<T: Scalar>(&self) -> Option<&Payload<T>> {
         if !self.is_contiguous() {
             return None;
         }
-        self.payload.as_any().downcast_ref::<HostTensor<T>>()
+        self.payload.as_any().downcast_ref::<Payload<T>>()
     }
 
     /// Mutably borrow the whole payload when it is dense, unique, and has
@@ -560,20 +510,20 @@ impl ErasedHostTensor {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_tensor::{ErasedHostTensor, HostTensor};
+    /// use tenferro_tensor::{DynRank, ErasedHostTensor, Host, TypedTensor};
     ///
-    /// let mut erased = ErasedHostTensor::new(HostTensor::from_vec_col_major(vec![1], vec![1_i64])?);
-    /// erased.downcast_mut::<i64>().unwrap().as_mut_slice()[0] = 9;
+    /// let mut erased = ErasedHostTensor::new(TypedTensor::<_, DynRank, Host>::from_host_vec_col_major(vec![1], vec![1_i64])?);
+    /// erased.downcast_mut::<i64>().unwrap().host_data_mut()[0] = 9;
     /// assert_eq!(erased.downcast_ref::<i64>().unwrap().as_slice(), &[9]);
-    /// # Ok::<(), tenferro_tensor_core::ValidationError>(())
+    /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
-    pub fn downcast_mut<T: Scalar>(&mut self) -> Option<&mut HostTensor<T>> {
+    pub fn downcast_mut<T: Scalar>(&mut self) -> Option<&mut Payload<T>> {
         if !self.is_contiguous() {
             return None;
         }
         Arc::get_mut(&mut self.payload)?
             .as_any_mut()
-            .downcast_mut::<HostTensor<T>>()
+            .downcast_mut::<Payload<T>>()
     }
 
     /// Take the whole payload when it is dense and has element type `T`.
@@ -581,22 +531,22 @@ impl ErasedHostTensor {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_tensor::{ErasedHostTensor, HostTensor};
+    /// use tenferro_tensor::{DynRank, ErasedHostTensor, Host, TypedTensor};
     ///
-    /// let erased = ErasedHostTensor::new(HostTensor::from_vec_col_major(vec![1], vec![2.0_f64])?);
+    /// let erased = ErasedHostTensor::new(TypedTensor::<_, DynRank, Host>::from_host_vec_col_major(vec![1], vec![2.0_f64])?);
     /// assert_eq!(erased.into_typed::<f64>().unwrap().as_slice(), &[2.0]);
-    /// # Ok::<(), tenferro_tensor_core::ValidationError>(())
+    /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
     #[must_use]
-    pub fn into_typed<T: Scalar>(mut self) -> Option<HostTensor<T>> {
+    pub fn into_typed<T: Scalar>(mut self) -> Option<Payload<T>> {
         if !self.dense {
             return None;
         }
         // A shared payload cannot be taken out of its reference count, so taking
         // the elements requires the caller to be the only holder.
         let payload = Arc::get_mut(&mut self.payload)?;
-        let tensor = payload.as_any_mut().downcast_mut::<HostTensor<T>>()?;
-        let empty = HostTensor::from_vec_col_major(vec![0], Vec::<T>::new()).ok()?;
+        let tensor = payload.as_any_mut().downcast_mut::<Payload<T>>()?;
+        let empty = Payload::<T>::from_host_vec_col_major(vec![0], Vec::new()).ok()?;
         Some(core::mem::replace(tensor, empty))
     }
 
@@ -608,11 +558,11 @@ impl ErasedHostTensor {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_tensor::{ErasedHostTensor, HostTensor};
+    /// use tenferro_tensor::{DynRank, ErasedHostTensor, Host, TypedTensor};
     ///
-    /// let erased = ErasedHostTensor::new(HostTensor::from_vec_col_major(vec![2, 2], vec![0.0_f64; 4])?);
+    /// let erased = ErasedHostTensor::new(TypedTensor::<_, DynRank, Host>::from_host_vec_col_major(vec![2, 2], vec![0.0_f64; 4])?);
     /// assert_eq!(erased.payload_element_count(), 4);
-    /// # Ok::<(), tenferro_tensor_core::ValidationError>(())
+    /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
     #[must_use]
     pub fn payload_element_count(&self) -> usize {
@@ -625,18 +575,18 @@ impl ErasedHostTensor {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_tensor::{ErasedHostTensor, HostTensor};
+    /// use tenferro_tensor::{DynRank, ErasedHostTensor, Host, TypedTensor};
     ///
-    /// let erased = ErasedHostTensor::new(HostTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?);
+    /// let erased = ErasedHostTensor::new(TypedTensor::<_, DynRank, Host>::from_host_vec_col_major(vec![2], vec![1.0_f64, 2.0])?);
     /// assert_eq!(erased.as_dense::<f64>().unwrap().0, &[1.0, 2.0]);
-    /// # Ok::<(), tenferro_tensor_core::ValidationError>(())
+    /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
     #[must_use]
     pub fn as_dense<T: Scalar>(&self) -> Option<(&[T], &[usize])> {
         if !self.is_contiguous() {
             return None;
         }
-        let payload = self.payload.as_any().downcast_ref::<HostTensor<T>>()?;
+        let payload = self.payload.as_any().downcast_ref::<Payload<T>>()?;
         Some((payload.as_slice(), payload.shape()))
     }
 
@@ -648,18 +598,18 @@ impl ErasedHostTensor {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_tensor::{ErasedHostTensor, HostTensor};
+    /// use tenferro_tensor::{DynRank, ErasedHostTensor, Host, TypedTensor};
     ///
-    /// let erased = ErasedHostTensor::new(HostTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0])?);
+    /// let erased = ErasedHostTensor::new(TypedTensor::<_, DynRank, Host>::from_host_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0])?);
     /// let permuted = erased.permuted(&[1, 0])?;
     /// assert_eq!(permuted.element_at::<f64>(&[1, 0]), Some(&3.0));
     /// assert_eq!(permuted.element_at::<f64>(&[2, 0]), None);
-    /// # Ok::<(), tenferro_tensor_core::ValidationError>(())
+    /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
     #[must_use]
     pub fn element_at<T: Scalar>(&self, index: &[usize]) -> Option<&T> {
-        let payload = self.payload.as_any().downcast_ref::<HostTensor<T>>()?;
-        let linear = usize::try_from(self.layout.linear_index(index)?).ok()?;
+        let payload = self.payload.as_any().downcast_ref::<Payload<T>>()?;
+        let linear = usize::try_from(linear_index(&self.layout, index)?).ok()?;
         payload.as_slice().get(linear)
     }
 
@@ -675,9 +625,9 @@ impl ErasedHostTensor {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_tensor::{ErasedHostTensor, HostTensor};
+    /// use tenferro_tensor::{DynRank, ErasedHostTensor, Host, TypedTensor};
     ///
-    /// let erased = ErasedHostTensor::new(HostTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0])?);
+    /// let erased = ErasedHostTensor::new(TypedTensor::<_, DynRank, Host>::from_host_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0])?);
     ///
     /// // A view that shares its payload refuses a mutable element borrow.
     /// let mut shared = erased.permuted(&[1, 0])?;
@@ -688,14 +638,14 @@ impl ErasedHostTensor {
     /// *owned.element_at_mut::<f64>(&[1, 0]).unwrap() = 20.0;
     /// assert_eq!(owned.element_at::<f64>(&[1, 0]), Some(&20.0));
     /// assert_eq!(erased.as_dense::<f64>().unwrap().0, &[1.0, 2.0, 3.0, 4.0]);
-    /// # Ok::<(), tenferro_tensor_core::ValidationError>(())
+    /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
     pub fn element_at_mut<T: Scalar>(&mut self, index: &[usize]) -> Option<&mut T> {
         let layout = &self.layout;
-        let linear = usize::try_from(layout.linear_index(index)?).ok()?;
+        let linear = usize::try_from(linear_index(layout, index)?).ok()?;
         let payload = Arc::get_mut(&mut self.payload)?;
-        let payload = payload.as_any_mut().downcast_mut::<HostTensor<T>>()?;
-        payload.as_mut_slice().get_mut(linear)
+        let payload = payload.as_any_mut().downcast_mut::<Payload<T>>()?;
+        payload.host_data_mut().get_mut(linear)
     }
 }
 

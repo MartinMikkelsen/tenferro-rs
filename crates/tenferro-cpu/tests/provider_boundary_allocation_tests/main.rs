@@ -18,7 +18,7 @@ use tenferro_cpu::{
 };
 use tenferro_tensor::{
     BackendSessionHost, ContractionScalar, CpuDomainId, DType, DotGeneralAccumulation,
-    DotGeneralConfig, SliceConfig, Tensor, TensorBuffer, TensorRead, TensorWrite,
+    DotGeneralConfig, SliceConfig, Tensor, TensorRead, TensorWrite,
 };
 
 struct CountingAllocator;
@@ -366,17 +366,23 @@ fn warmed_tiny_cpu_backend_cases_do_not_exceed_fixed_main_allocations() {
             })
             .unwrap()
             .unwrap();
-        backend.reclaim_buffer(output);
+        backend
+            .with_backend_session(|__s| __s.reclaim_buffer(output))
+            .unwrap();
         let output = backend
             .with_backend_session(|__s| __s.reduce_sum_read(TensorRead::from_tensor(&matrix), &[0]))
             .unwrap()
             .unwrap();
-        backend.reclaim_buffer(output);
+        backend
+            .with_backend_session(|__s| __s.reclaim_buffer(output))
+            .unwrap();
         let output = backend
             .with_backend_session(|__s| __s.slice(&matrix, &slice))
             .unwrap()
             .unwrap();
-        backend.reclaim_buffer(output);
+        backend
+            .with_backend_session(|__s| __s.reclaim_buffer(output))
+            .unwrap();
         let output = backend
             .with_backend_session(|__s| {
                 __s.dot_general_read(
@@ -387,7 +393,9 @@ fn warmed_tiny_cpu_backend_cases_do_not_exceed_fixed_main_allocations() {
             })
             .unwrap()
             .unwrap();
-        backend.reclaim_buffer(output);
+        backend
+            .with_backend_session(|__s| __s.reclaim_buffer(output))
+            .unwrap();
     }
 
     let elementwise = count_repeated(
@@ -401,7 +409,9 @@ fn warmed_tiny_cpu_backend_cases_do_not_exceed_fixed_main_allocations() {
                 })
                 .unwrap()
                 .unwrap();
-            backend.reclaim_buffer(output);
+            backend
+                .with_backend_session(|__s| __s.reclaim_buffer(output))
+                .unwrap();
         },
         ITERATIONS,
     );
@@ -413,7 +423,9 @@ fn warmed_tiny_cpu_backend_cases_do_not_exceed_fixed_main_allocations() {
                 })
                 .unwrap()
                 .unwrap();
-            backend.reclaim_buffer(output);
+            backend
+                .with_backend_session(|__s| __s.reclaim_buffer(output))
+                .unwrap();
         },
         ITERATIONS,
     );
@@ -423,7 +435,9 @@ fn warmed_tiny_cpu_backend_cases_do_not_exceed_fixed_main_allocations() {
                 .with_backend_session(|__s| __s.slice(&matrix, &slice))
                 .unwrap()
                 .unwrap();
-            backend.reclaim_buffer(output);
+            backend
+                .with_backend_session(|__s| __s.reclaim_buffer(output))
+                .unwrap();
         },
         ITERATIONS,
     );
@@ -439,7 +453,9 @@ fn warmed_tiny_cpu_backend_cases_do_not_exceed_fixed_main_allocations() {
                 })
                 .unwrap()
                 .unwrap();
-            backend.reclaim_buffer(output);
+            backend
+                .with_backend_session(|__s| __s.reclaim_buffer(output))
+                .unwrap();
         },
         ITERATIONS,
     );

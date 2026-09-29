@@ -22,7 +22,7 @@ use tenferro_runtime::{
     SpecializationProjection,
 };
 use tenferro_tensor::{DType, Tensor, TensorRead, TensorView};
-use tenferro_tensor::{ErasedHostTensor, HostTensor};
+use tenferro_tensor::{DynRank, ErasedHostTensor, Host, TypedTensor};
 use tenferro_tensor_core::Scalar;
 
 use crate::{Df64, Df64Add};
@@ -1237,11 +1237,9 @@ fn qr_of(
         r[column + column * columns] = sign * norm;
     }
 
-    let q = HostTensor::from_vec_col_major(vec![rows, columns], q)
-        .map_err(|source| tenferro_tensor::Error::validation("df64_qr", source))
+    let q = TypedTensor::<_, DynRank, Host>::from_host_vec_col_major(vec![rows, columns], q)
         .map_err(tenferro_runtime::Error::from)?;
-    let r = HostTensor::from_vec_col_major(vec![columns, columns], r)
-        .map_err(|source| tenferro_tensor::Error::validation("df64_qr", source))
+    let r = TypedTensor::<_, DynRank, Host>::from_host_vec_col_major(vec![columns, columns], r)
         .map_err(tenferro_runtime::Error::from)?;
     Ok(vec![
         Tensor::external(ErasedHostTensor::new(q)),
@@ -1283,7 +1281,7 @@ fn from_f64_of(
 fn external_payload<'a, T: Scalar>(
     op: &'static str,
     tensor: &'a Tensor,
-) -> tenferro_tensor::Result<&'a HostTensor<T>> {
+) -> tenferro_tensor::Result<&'a TypedTensor<T, DynRank, Host>> {
     match tensor.external_payload() {
         Some(payload) => payload.downcast_ref::<T>().ok_or_else(|| {
             tenferro_tensor::Error::unsupported_dtype(
@@ -1580,10 +1578,13 @@ fn tensor_of(
     matrix: crate::dense::Matrix<'_>,
 ) -> tenferro_runtime::Result<Tensor> {
     let columns = matrix.columns();
-    let host = HostTensor::from_vec_col_major(vec![matrix.rows, columns], matrix.data.into_owned())
-        .map_err(|source| {
-            tenferro_runtime::Error::from(tenferro_tensor::Error::runtime_state_source(op, source))
-        })?;
+    let host = TypedTensor::<_, DynRank, Host>::from_host_vec_col_major(
+        vec![matrix.rows, columns],
+        matrix.data.into_owned(),
+    )
+    .map_err(|source| {
+        tenferro_runtime::Error::from(tenferro_tensor::Error::runtime_state_source(op, source))
+    })?;
     Ok(Tensor::external(ErasedHostTensor::new(host)))
 }
 
@@ -1870,13 +1871,8 @@ fn contract_in_scalar(
 }
 
 /// Wrap a payload as an external tensor of the shape the labels describe.
-fn external_of(
-    op: &'static str,
-    values: Vec<Df64>,
-    shape: Vec<usize>,
-) -> tenferro_runtime::Result<Tensor> {
-    let tensor = HostTensor::from_vec_col_major(shape, values)
-        .map_err(|source| tenferro_tensor::Error::validation(op, source))
+fn external_of(values: Vec<Df64>, shape: Vec<usize>) -> tenferro_runtime::Result<Tensor> {
+    let tensor = TypedTensor::<_, DynRank, Host>::from_host_vec_col_major(shape, values)
         .map_err(tenferro_runtime::Error::from)?;
     Ok(Tensor::external(ErasedHostTensor::new(tensor)))
 }
@@ -1966,7 +1962,7 @@ fn einsum_of(
         ));
     }
     let (values, shape) = fold_in_scalar(op, labels, out_labels, &operands)?;
-    Ok(vec![external_of(op, values, shape)?])
+    Ok(vec![external_of(values, shape)?])
 }
 
 /// The adjoint of a contraction: the cotangent of each operand, in the extended scalar.
@@ -2015,7 +2011,7 @@ fn einsum_vjp_of(
         let mut step_labels: Vec<Box<[u32]>> = labels.to_vec();
         step_labels[position] = out_labels.to_vec().into_boxed_slice();
         let (values, shape) = fold_in_scalar(op, &step_labels, &labels[position], &substituted)?;
-        outputs.push(external_of(op, values, shape)?);
+        outputs.push(external_of(values, shape)?);
     }
     Ok(outputs)
 }
@@ -2088,7 +2084,7 @@ fn einsum_jvp_of(
             "at least one operand must carry a tangent",
         ))
     })?;
-    Ok(vec![external_of(op, values, out_shape)?])
+    Ok(vec![external_of(values, out_shape)?])
 }
 
 /// The column-major offset an input's labels select at one output and contracted index.
@@ -2164,9 +2160,11 @@ fn expand_of(
         ))
     })?;
     let count: usize = shape.iter().product();
-    let output = HostTensor::from_vec_col_major(shape.to_vec(), vec![value; count])
-        .map_err(|source| tenferro_tensor::Error::validation("df64_expand", source))
-        .map_err(tenferro_runtime::Error::from)?;
+    let output = TypedTensor::<_, DynRank, Host>::from_host_vec_col_major(
+        shape.to_vec(),
+        vec![value; count],
+    )
+    .map_err(tenferro_runtime::Error::from)?;
     Ok(vec![Tensor::external(ErasedHostTensor::new(output))])
 }
 
@@ -2180,8 +2178,7 @@ fn total_of(
         external_payload::<Df64>("df64_total", tensor).map_err(tenferro_runtime::Error::from)?;
     let total = scalar_fold::<Df64, Df64Add>("df64_total", payload, Df64::zero())
         .map_err(tenferro_runtime::Error::from)?;
-    let output = HostTensor::from_vec_col_major(vec![], vec![total])
-        .map_err(|source| tenferro_tensor::Error::validation("df64_total", source))
+    let output = TypedTensor::<_, DynRank, Host>::from_host_vec_col_major(vec![], vec![total])
         .map_err(tenferro_runtime::Error::from)?;
     Ok(vec![Tensor::external(ErasedHostTensor::new(output))])
 }

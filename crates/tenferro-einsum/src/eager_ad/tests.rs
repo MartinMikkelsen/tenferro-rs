@@ -2,8 +2,14 @@ use tenferro_ad::{EagerRuntime, EagerTensor};
 use tenferro_cpu::CpuBackend;
 use tenferro_tensor::{Tensor, TensorRead, TensorView};
 
-use super::{backend_broadcast_multiply_untracked, einsum, einsum_whole_program_untracked};
-use crate::{ContractionTree, Subscripts};
+use super::backend_broadcast_multiply_untracked;
+
+/// One eager session per call, running the borrowed-session einsum inside it.
+fn einsum(inputs: &[&EagerTensor], subscripts: &str) -> crate::Result<EagerTensor> {
+    inputs[0]
+        .runtime()
+        .with_eager_session(|s| super::einsum(s, inputs, subscripts))?
+}
 
 #[test]
 fn dot_general_retained_bytes_count_only_spilled_capacity() {
@@ -60,48 +66,19 @@ fn binary_einsum_col_major_matmul_uses_direct_dot_general_fast_path() {
 }
 
 #[test]
-fn whole_program_untracked_matches_per_op_nary_result() {
+fn outer_product_einsum_reuses_its_extension_cache_entry() {
     let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
-    let a_data: Vec<f64> = (0..6).map(|i| i as f64 + 1.0).collect();
-    let b_data: Vec<f64> = (0..12).map(|i| i as f64 * 0.5 - 2.0).collect();
-    let c_data: Vec<f64> = (0..20).map(|i| (i as f64).sin()).collect();
     let a = EagerTensor::from_tensor_in(
-        Tensor::from_vec_col_major(vec![2, 3], a_data).unwrap(),
+        Tensor::from_vec_col_major(vec![2, 3], (0..6).map(|i| i as f64 + 1.0).collect()).unwrap(),
         ctx.clone(),
     )
     .unwrap();
     let b = EagerTensor::from_tensor_in(
-        Tensor::from_vec_col_major(vec![3, 4], b_data).unwrap(),
+        Tensor::from_vec_col_major(vec![3, 4], (0..12).map(|i| i as f64 * 0.5 - 2.0).collect())
+            .unwrap(),
         ctx.clone(),
     )
     .unwrap();
-    let c = EagerTensor::from_tensor_in(
-        Tensor::from_vec_col_major(vec![4, 5], c_data).unwrap(),
-        ctx.clone(),
-    )
-    .unwrap();
-
-    // Reference: default per-op N-ary path.
-    let reference = einsum(&[&a, &b, &c], "ij,jk,kl->il").unwrap();
-
-    // Whole-program path on an explicit contraction tree (same logical result).
-    let subs = Subscripts::parse("ij,jk,kl->il").unwrap();
-    let tree = ContractionTree::from_pairs(&subs, &[&[2, 3], &[3, 4], &[4, 5]], &[(0, 1), (2, 3)])
-        .unwrap();
-    let whole = einsum_whole_program_untracked(&[&a, &b, &c], &tree).unwrap();
-
-    assert_eq!(whole.shape(), reference.shape());
-    let got_tensor = whole.to_tensor().unwrap();
-    let want_tensor = reference.to_tensor().unwrap();
-    let got = got_tensor.as_slice::<f64>().unwrap();
-    let want = want_tensor.as_slice::<f64>().unwrap();
-    assert_eq!(got.len(), want.len());
-    for (g, w) in got.iter().zip(want.iter()) {
-        assert!(
-            (g - w).abs() < 1e-10,
-            "whole-program result {g} != per-op {w}"
-        );
-    }
     let first = einsum(&[&a, &b], "ij,kl->ijkl").unwrap();
     let first_stats = ctx.cache_stats().unwrap();
     let second = einsum(&[&a, &b], "ij,kl->ijkl").unwrap();
@@ -116,25 +93,6 @@ fn whole_program_untracked_matches_per_op_nary_result() {
         second_stats.extensions.hits,
         first_stats.extensions.hits + 1
     );
-}
-
-#[test]
-fn whole_program_untracked_rejects_tracked_inputs() {
-    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
-    let a = EagerTensor::requires_grad_in(
-        Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64; 4]).unwrap(),
-        ctx.clone(),
-    )
-    .unwrap();
-    let b = EagerTensor::from_tensor_in(
-        Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64; 4]).unwrap(),
-        ctx.clone(),
-    )
-    .unwrap();
-
-    let subs = Subscripts::parse("ij,jk->ik").unwrap();
-    let tree = ContractionTree::from_pairs(&subs, &[&[2, 2], &[2, 2]], &[(0, 1)]).unwrap();
-    assert!(einsum_whole_program_untracked(&[&a, &b], &tree).is_err());
 }
 
 #[test]
@@ -400,4 +358,45 @@ fn eager_outer_product_can_return_lazy_noncompact_output() {
         out.to_tensor().unwrap().as_slice::<f64>().unwrap(),
         expected.as_slice()
     );
+}
+
+/// #1946 F4: an untracked einsum inside `capture_trace` stays in the semantic
+/// trace, so the VJP reaches the untracked input. The removed prototype gate
+/// (`TENFERRO_EAGER_WHOLE_PROGRAM`) executed such calls through concrete tensors
+/// and returned a fresh leaf, losing the trace.
+#[test]
+fn captured_untracked_einsum_keeps_its_vjp() {
+    let runtime = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
+    let x = EagerTensor::from_tensor_in(
+        Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0]).unwrap(),
+        runtime.clone(),
+    )
+    .unwrap();
+    let seed = EagerTensor::from_tensor_in(
+        Tensor::from_vec_col_major(vec![], vec![1.0_f64]).unwrap(),
+        runtime.clone(),
+    )
+    .unwrap();
+    let y = {
+        let _capture = runtime.capture_trace();
+        einsum(&[&x, &x, &x], "i,i,i->").unwrap()
+    };
+    let grad = runtime.vjp(&y, &x, &seed).unwrap().to_tensor().unwrap();
+    // d/dx_i sum_j x_j^3 = 3 x_i^2.
+    assert_eq!(grad.as_slice::<f64>().unwrap(), &[12.0, 27.0]);
+}
+
+/// #1946 F4: no environment variable may switch eager einsum onto an
+/// alternate execution path.
+#[test]
+fn eager_einsum_has_no_environment_execution_gate() {
+    for (name, source) in [
+        ("eager_ad.rs", include_str!("../eager_ad.rs")),
+        ("eager.rs", include_str!("../eager.rs")),
+    ] {
+        assert!(
+            !source.contains("TENFERRO_EAGER_WHOLE_PROGRAM") && !source.contains("std::env::var"),
+            "{name} must not read an environment switch for eager einsum execution"
+        );
+    }
 }

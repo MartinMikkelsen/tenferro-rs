@@ -10,9 +10,8 @@ use crate::{
     BackendRuntimeCache, DType, DeviceAccessError, DeviceAccessRequest, DeviceId, DeviceKind,
     Error, GpuBackendKind, HostAccessError, MemoryKind, Placement, PreparedDeviceAccess,
     ProviderCapabilities, ProviderReadMapping, ProviderWriteMapping, RootBoundSpan,
-    RootResourceExtent, Tensor, TensorBackend, TensorBuffer, TensorDeviceTransfer, TensorRank,
-    TensorRead, TensorScalar, TensorViewCanonicalization, TypedTensor, TypedTensorView,
-    TypedTensorViewMut,
+    RootResourceExtent, Tensor, TensorBackend, TensorDeviceTransfer, TensorRank, TensorRead,
+    TensorScalar, TypedTensor, TypedTensorView,
 };
 
 const DEFAULT_CUBE_DIM_X: u32 = 256;
@@ -757,25 +756,6 @@ macro_rules! unsupported {
     };
 }
 pub(crate) use unsupported;
-
-impl TensorViewCanonicalization<f32, tenferro_tensor::DynRank> for WebGpuBackend {
-    fn to_contiguous(
-        &mut self,
-        view: &TypedTensorView<'_, f32>,
-    ) -> crate::Result<TypedTensor<f32>> {
-        structural::to_contiguous_f32(self, view)
-    }
-
-    fn copy_into(
-        &mut self,
-        _src: &TypedTensorView<'_, f32>,
-        _dst: &mut TypedTensorViewMut<'_, f32>,
-    ) -> crate::Result<()> {
-        unsupported!("WebGpuBackend::copy_into")
-    }
-}
-
-impl TensorBuffer for WebGpuBackend {}
 
 impl TensorDeviceTransfer for WebGpuBackend {
     fn download_to_host(&mut self, tensor: TensorRead<'_>) -> crate::Result<Tensor> {

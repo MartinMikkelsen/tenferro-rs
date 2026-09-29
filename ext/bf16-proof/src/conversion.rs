@@ -6,29 +6,32 @@
 //! [`half::bf16::from_f32`] does. Neither direction is a promotion rule, and neither is implicit.
 
 use crate::Bf16;
-use tenferro_tensor::HostTensor;
-use tenferro_tensor_core::ValidationError;
+use tenferro_tensor::{DynRank, Host, TypedTensor};
 
 /// Widen every stored value to `f32`, which is exact.
 ///
 /// # Errors
 ///
-/// Returns [`ValidationError`] when the output shape cannot be built, which cannot happen for a
-/// shape that already exists.
+/// Returns a validation error carrying
+/// [`tenferro_tensor_core::ValidationError::ShapeDataLengthMismatch`] when the
+/// output shape cannot be built, which cannot happen for a shape that already
+/// exists.
 ///
 /// # Examples
 ///
 /// ```rust
 /// use tenferro_bf16_proof::{conversion::widen, Bf16};
-/// use tenferro_tensor::HostTensor;
+/// use tenferro_tensor::{DynRank, Host, TypedTensor};
 ///
-/// let source = HostTensor::from_vec_col_major(vec![2], vec![Bf16::from_f32(1.0), Bf16::from_f32(2.5)])?;
+/// let source = TypedTensor::<_, DynRank, Host>::from_host_vec_col_major(vec![2], vec![Bf16::from_f32(1.0), Bf16::from_f32(2.5)])?;
 /// let widened = widen(&source)?;
 /// assert_eq!(widened.as_slice(), &[1.0_f32, 2.5]);
-/// # Ok::<(), tenferro_tensor_core::ValidationError>(())
+/// # Ok::<(), tenferro_tensor::Error>(())
 /// ```
-pub fn widen(source: &HostTensor<Bf16>) -> Result<HostTensor<f32>, ValidationError> {
-    HostTensor::from_vec_col_major(
+pub fn widen(
+    source: &TypedTensor<Bf16, DynRank, Host>,
+) -> Result<TypedTensor<f32, DynRank, Host>, tenferro_tensor::Error> {
+    TypedTensor::<_, DynRank, Host>::from_host_vec_col_major(
         source.shape().to_vec(),
         source
             .as_slice()
@@ -42,22 +45,26 @@ pub fn widen(source: &HostTensor<Bf16>) -> Result<HostTensor<f32>, ValidationErr
 ///
 /// # Errors
 ///
-/// Returns [`ValidationError`] when the output shape cannot be built, which cannot happen for a
-/// shape that already exists.
+/// Returns a validation error carrying
+/// [`tenferro_tensor_core::ValidationError::ShapeDataLengthMismatch`] when the
+/// output shape cannot be built, which cannot happen for a shape that already
+/// exists.
 ///
 /// # Examples
 ///
 /// ```rust
 /// use tenferro_bf16_proof::conversion::narrow;
-/// use tenferro_tensor::HostTensor;
+/// use tenferro_tensor::{DynRank, Host, TypedTensor};
 ///
 /// // 1.00390625 rounds down to 1.0: bfloat16 keeps eight bits of significand.
-/// let source = HostTensor::from_vec_col_major(vec![1], vec![1.00390625_f32])?;
+/// let source = TypedTensor::<_, DynRank, Host>::from_host_vec_col_major(vec![1], vec![1.00390625_f32])?;
 /// assert_eq!(narrow(&source)?.as_slice()[0].to_f32(), 1.0);
-/// # Ok::<(), tenferro_tensor_core::ValidationError>(())
+/// # Ok::<(), tenferro_tensor::Error>(())
 /// ```
-pub fn narrow(source: &HostTensor<f32>) -> Result<HostTensor<Bf16>, ValidationError> {
-    HostTensor::from_vec_col_major(
+pub fn narrow(
+    source: &TypedTensor<f32, DynRank, Host>,
+) -> Result<TypedTensor<Bf16, DynRank, Host>, tenferro_tensor::Error> {
+    TypedTensor::<_, DynRank, Host>::from_host_vec_col_major(
         source.shape().to_vec(),
         source
             .as_slice()

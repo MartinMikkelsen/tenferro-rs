@@ -2,7 +2,7 @@
 
 use num_complex::Complex32;
 use tenferro_ad::{EagerRuntime, EagerTensor};
-use tenferro_einsum::{EagerEinsumExt, TraceContextEinsumExt};
+use tenferro_einsum::{EagerSessionEinsumExt, TraceContextEinsumExt};
 use tenferro_gpu::{
     webgpu::download_webgpu_tensor, webgpu::upload_webgpu_tensor, webgpu::webgpu_available,
 };
@@ -10,6 +10,45 @@ use tenferro_gpu::{webgpu::WebGpuBackend, webgpu::WebGpuRuntime};
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_runtime::program::ProgramInputSpec;
 use tenferro_runtime::{CompiledGraph, DType, GraphCompiler, Runtime, Tensor, TraceContext};
+
+use tenferro_einsum::{EinsumNotation, EinsumSubscripts, TensorDotAxes};
+// Test helpers: each call opens one eager session on the inputs' runtime and
+// runs the borrowed-session contraction inside it.
+fn einsum(inputs: &[&EagerTensor], subscripts: &str) -> tenferro_einsum::Result<EagerTensor> {
+    inputs[0]
+        .runtime()
+        .with_eager_session(|s| s.einsum(inputs, subscripts))?
+}
+
+#[allow(dead_code)]
+fn einsum_notation(
+    inputs: &[&EagerTensor],
+    notation: &EinsumNotation,
+) -> tenferro_einsum::Result<EagerTensor> {
+    inputs[0]
+        .runtime()
+        .with_eager_session(|s| s.einsum_notation(inputs, notation))?
+}
+
+#[allow(dead_code)]
+fn einsum_subscripts(
+    inputs: &[&EagerTensor],
+    subscripts: &EinsumSubscripts,
+) -> tenferro_einsum::Result<EagerTensor> {
+    inputs[0]
+        .runtime()
+        .with_eager_session(|s| s.einsum_subscripts(inputs, subscripts))?
+}
+
+#[allow(dead_code)]
+fn tensordot(
+    lhs: &EagerTensor,
+    rhs: &EagerTensor,
+    axes: TensorDotAxes<'_>,
+) -> tenferro_einsum::Result<EagerTensor> {
+    lhs.runtime()
+        .with_eager_session(|s| s.tensordot(lhs, rhs, axes))?
+}
 
 fn matmul2_col_major(lhs: &[Complex32], rhs: &[Complex32]) -> [Complex32; 4] {
     let a00 = lhs[0];
@@ -104,8 +143,8 @@ fn eager_tensor_einsum_runs_rank2_f32_matmul_on_webgpu_when_adapter_available() 
     let rhs =
         EagerTensor::from_tensor_in(upload_webgpu_tensor(&runtime, &rhs).unwrap(), ctx).unwrap();
 
-    let out = [&lhs, &rhs].einsum("ij,jk->ik").unwrap();
-    let host = download_webgpu_tensor(&runtime, out.to_tensor().unwrap()).unwrap();
+    let out = einsum(&[&lhs, &rhs], "ij,jk->ik").unwrap();
+    let host = download_webgpu_tensor(&runtime, &out.to_tensor().unwrap()).unwrap();
 
     assert_eq!(host.shape(), &[2, 2]);
     let actual = host.as_slice::<f32>().unwrap();
@@ -144,8 +183,8 @@ fn eager_tensor_einsum_runs_batched_f32_matmul_on_webgpu_when_adapter_available(
     let rhs =
         EagerTensor::from_tensor_in(upload_webgpu_tensor(&runtime, &rhs).unwrap(), ctx).unwrap();
 
-    let out = [&lhs, &rhs].einsum("ikb,kjb->ijb").unwrap();
-    let host = download_webgpu_tensor(&runtime, out.to_tensor().unwrap()).unwrap();
+    let out = einsum(&[&lhs, &rhs], "ikb,kjb->ijb").unwrap();
+    let host = download_webgpu_tensor(&runtime, &out.to_tensor().unwrap()).unwrap();
 
     assert_eq!(host.shape(), &[2, 2, 2]);
     assert_f32_close(
@@ -183,8 +222,8 @@ fn eager_tensor_einsum_runs_rank2_c32_matmul_on_webgpu_when_adapter_available() 
     let rhs =
         EagerTensor::from_tensor_in(upload_webgpu_tensor(&runtime, &rhs).unwrap(), ctx).unwrap();
 
-    let out = [&lhs, &rhs].einsum("ij,jk->ik").unwrap();
-    let host = download_webgpu_tensor(&runtime, out.to_tensor().unwrap()).unwrap();
+    let out = einsum(&[&lhs, &rhs], "ij,jk->ik").unwrap();
+    let host = download_webgpu_tensor(&runtime, &out.to_tensor().unwrap()).unwrap();
 
     assert_eq!(host.shape(), &[2, 2]);
     let actual = host.as_slice::<Complex32>().unwrap();

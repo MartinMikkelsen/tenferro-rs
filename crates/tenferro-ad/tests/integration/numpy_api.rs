@@ -292,18 +292,22 @@ fn eager_tensor_methods_cover_conversion_matmul_and_extension_standard_op() {
         .unwrap();
     assert_eq!(casted.value().unwrap().as_slice::<i32>().unwrap(), &[1, 2]);
 
-    let negated = tenferro_ad::extension::apply_standard_op(StdTensorOp::Neg, &[&x]).unwrap();
+    let negated = ctx
+        .with_eager_session(|s| s.apply_standard_op(StdTensorOp::Neg, &[&x]))
+        .unwrap()
+        .unwrap();
     assert_eq!(
         negated.value().unwrap().as_slice::<f64>().unwrap(),
         &[-1.0, -2.0]
     );
 
-    let extension_err = tenferro_ad::extension::apply_standard_op(
-        StdTensorOp::Extension(Arc::new(TestExtensionOp)),
-        &[&x],
-    )
-    .err()
-    .unwrap();
+    let extension_err = ctx
+        .with_eager_session(|s| {
+            s.apply_standard_op(StdTensorOp::Extension(Arc::new(TestExtensionOp)), &[&x])
+        })
+        .unwrap()
+        .err()
+        .unwrap();
     assert!(matches!(
         extension_err,
         RuntimeError::Validation {

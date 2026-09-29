@@ -14,7 +14,7 @@ use tenferro_cpu::CpuBackend;
 use tenferro_runtime::extension::apply;
 use tenferro_runtime::{GraphCompiler, Runtime, TracedTensor};
 use tenferro_tensor::{DType, Tensor};
-use tenferro_tensor::{ErasedHostTensor, HostTensor};
+use tenferro_tensor::{DynRank, ErasedHostTensor, Host, TypedTensor};
 
 fn runtime_with_module() -> Runtime {
     let backend = CpuBackend::new();
@@ -30,8 +30,11 @@ fn runtime_with_module() -> Runtime {
 
 fn external(values: &[f32], shape: Vec<usize>) -> Tensor {
     Tensor::external(ErasedHostTensor::new(
-        HostTensor::from_vec_col_major(shape, values.iter().copied().map(Bf16::from_f32).collect())
-            .expect("shape matches data"),
+        TypedTensor::<_, DynRank, Host>::from_host_vec_col_major(
+            shape,
+            values.iter().copied().map(Bf16::from_f32).collect(),
+        )
+        .expect("shape matches data"),
     ))
 }
 

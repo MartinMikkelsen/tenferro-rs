@@ -11,6 +11,7 @@ use std::fmt;
 use tenferro_tensor_core::ValidationError;
 
 use super::{checked_view_element_count, Rank, TensorScalar, TypedTensor, TypedTensorView};
+use crate::{Host, Representation};
 
 #[inline(always)]
 fn in_bounds<const N: usize>(shape: &[usize; N], index: [usize; N]) -> bool {
@@ -519,7 +520,57 @@ impl<T: TensorScalar, const N: usize> TypedTensor<T, Rank<N>> {
     }
 }
 
-impl<'a, T: 'static, const N: usize> TypedTensorView<'a, T, Rank<N>> {
+impl<T: TensorScalar, const N: usize> TypedTensor<T, Rank<N>, Host> {
+    /// Validate and borrow this host-marked tensor as a compact column-major
+    /// host view. The `Host` marker is kept: no erasure to `Dynamic` is needed.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::{Host, Rank, TypedTensor};
+    /// let tensor =
+    ///     TypedTensor::<i32, Rank<2>, Host>::from_host_vec_col_major([2, 1], vec![1, 2])?;
+    /// assert_eq!(tensor.host_col_major_view()?.get([1, 0]), Some(&2));
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] when compact layout, shape
+    /// arithmetic, or the logical host range is invalid.
+    pub fn host_col_major_view(&self) -> crate::Result<ColMajorView<'_, T, N>> {
+        const OP: &str = "TypedTensor::host_col_major_view";
+        self.assert_col_major_contiguous()?;
+        let shape = *self.layout().shape_array();
+        ColMajorView::new(self.as_slice(), shape, OP)
+    }
+
+    /// Validate and mutably borrow this host-marked tensor as a compact
+    /// column-major host view.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::{Host, Rank, TypedTensor};
+    /// let mut tensor = TypedTensor::<i32, Rank<1>, Host>::from_host_vec_col_major([1], vec![1])?;
+    /// if let Some(value) = tensor.host_col_major_view_mut()?.get_mut([0]) { *value = 3; }
+    /// assert_eq!(tensor.as_slice(), &[3]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] when compact layout, shape
+    /// arithmetic, or the logical host range is invalid.
+    pub fn host_col_major_view_mut(&mut self) -> crate::Result<ColMajorViewMut<'_, T, N>> {
+        const OP: &str = "TypedTensor::host_col_major_view_mut";
+        self.assert_col_major_contiguous()?;
+        let shape = *self.layout().shape_array();
+        ColMajorViewMut::new(self.host_data_mut(), shape, OP)
+    }
+}
+
+impl<'a, T: 'static, const N: usize, D: Representation> TypedTensorView<'a, T, Rank<N>, D> {
     /// Validate and borrow this tensor view as a compact column-major host view.
     ///
     /// Nonzero compact offsets are represented by the returned logical slice

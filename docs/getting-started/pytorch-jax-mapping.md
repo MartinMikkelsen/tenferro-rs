@@ -38,7 +38,7 @@ backend and device choices remain explicit.
 | Transpose | `x.transpose(0, 1)` | `jnp.transpose(x, axes)` | `ctx.with_backend_session(\|s\| x.transpose(&perm, s))` via `TensorSessionOpsExt` | `x.transpose(&perm)` |
 | Broadcast | `x.expand(...)` / implicit broadcast | implicit broadcast in many ops | backend-level op | `x.broadcast_in_dim(&shape, &dims)` |
 | Reduce sum | `x.sum(dim=...)` | `jnp.sum(x, axis=...)` | `ctx.with_backend_session(\|s\| x.reduce_sum(&axes, s))` via `TensorSessionOpsExt` | `x.reduce_sum(Some(&axes))` |
-| Einsum | `torch.einsum(spec, ...)` | `jnp.einsum(spec, ...)` | `[&a, &b].einsum(...)` via `EagerEinsumExt` | `trace.einsum(...)` via `TraceContextEinsumExt` plus extension module installation |
+| Einsum | `torch.einsum(spec, ...)` | `jnp.einsum(spec, ...)` | `ctx.with_eager_session(\|s\| s.einsum(&[&a, &b], spec))` via `EagerSessionEinsumExt` | `trace.einsum(...)` via `TraceContextEinsumExt` plus extension module installation |
 | SVD | `torch.linalg.svd(x)` | `jnp.linalg.svd(x)` | `ctx.with_backend_session(\|s\| x.svd(s))` via `TensorLinalgExt` | `x.svd()?` via `TracedTensorLinalgExt` |
 | QR | `torch.linalg.qr(x)` | `jnp.linalg.qr(x)` | `ctx.with_backend_session(\|s\| x.qr(s))` via `TensorLinalgExt` | `x.qr()?` via `TracedTensorLinalgExt` |
 | Cholesky | `torch.linalg.cholesky(x)` | `jnp.linalg.cholesky(x)` | `ctx.with_backend_session(\|s\| x.cholesky(s))` via `TensorLinalgExt` | `x.cholesky()?` via `TracedTensorLinalgExt` |

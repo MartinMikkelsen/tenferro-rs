@@ -10,10 +10,10 @@ use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_tensor::{SliceConfig, Tensor, TensorValue};
 
 use crate::eager::{
-    eager_capture_active, eager_grad_recording_enabled, eager_op_profile_start, exec_single_output,
-    exec_single_output_read, maybe_print_eager_op_profile, profile_eager_op_section,
-    record_eager_op_profile, record_eager_outputs, record_eager_outputs_in_session,
-    record_eager_value_outputs_in_session, EagerSession, EagerTensor,
+    eager_capture_active, eager_grad_recording_enabled, eager_op_profile_start,
+    maybe_print_eager_op_profile, profile_eager_op_section, record_eager_op_profile,
+    record_eager_outputs_in_session, record_eager_value_outputs_in_session, EagerSession,
+    EagerTensor,
 };
 use crate::eager_exec::{
     exec_standard_op_on_tensor_reads_with_session, exec_standard_op_on_tensors_with_session,
@@ -211,22 +211,10 @@ impl EagerTensor {
         Ok(result)
     }
 
-    pub(crate) fn nary_op(tensors: &[&Self], op: StdTensorOp) -> Result<Self> {
-        Self::nary_op_with_session(tensors, op, None)
-    }
-
     pub(crate) fn nary_op_in_session(
         tensors: &[&Self],
         op: StdTensorOp,
         session: &mut dyn tenferro_tensor::BackendSession,
-    ) -> Result<Self> {
-        Self::nary_op_with_session(tensors, op, Some(session))
-    }
-
-    fn nary_op_with_session(
-        tensors: &[&Self],
-        op: StdTensorOp,
-        mut session: Option<&mut dyn tenferro_tensor::BackendSession>,
     ) -> Result<Self> {
         let total_started = eager_op_profile_start();
         let Some(first) = tensors.first() else {
@@ -262,13 +250,10 @@ impl EagerTensor {
                     .collect::<Vec<_>>()
             });
             let output = profile_eager_op_section("nary_op.exec_single_output_read", || {
-                match session.as_deref_mut() {
-                    Some(session) => single_session_output(
-                        &op,
-                        exec_standard_op_on_tensor_reads_with_session(&op, &input_reads, session)?,
-                    ),
-                    None => exec_single_output_read(&op, &input_reads, &ctx),
-                }
+                single_session_output(
+                    &op,
+                    exec_standard_op_on_tensor_reads_with_session(&op, &input_reads, session)?,
+                )
             })?;
             let result = profile_eager_op_section("nary_op.new_untracked_result", || {
                 Self::new_untracked_result(ctx, output)
@@ -283,32 +268,22 @@ impl EagerTensor {
         let input_arcs = profile_eager_op_section("nary_op.materialize_inputs", || {
             tensors
                 .iter()
-                .map(|tensor| {
-                    match session.as_deref_mut() {
-                        Some(session) => tensor.duplicate_value_in_session(session),
-                        None => tensor.to_tensor(),
-                    }
-                    .map(Arc::new)
-                })
+                .map(|tensor| tensor.duplicate_value_in_session(session).map(Arc::new))
                 .collect::<Result<Vec<_>>>()
         })?;
         let inputs: Vec<&Tensor> = profile_eager_op_section("nary_op.collect_inputs", || {
             input_arcs.iter().map(|tensor| tensor.as_ref()).collect()
         });
         let output = profile_eager_op_section("nary_op.exec_single_output", || {
-            match session.as_deref_mut() {
-                Some(session) => single_session_output(
-                    &op,
-                    exec_standard_op_on_tensors_with_session(&op, &inputs, session)?,
-                ),
-                None => exec_single_output(&op, &inputs, &ctx),
-            }
+            single_session_output(
+                &op,
+                exec_standard_op_on_tensors_with_session(&op, &inputs, session)?,
+            )
         })?;
 
         let outputs = vec![&output];
-        let mut recorded = profile_eager_op_section("nary_op.record_outputs", || match session {
-            Some(session) => record_eager_outputs_in_session(&op, &outputs, tensors, session),
-            None => record_eager_outputs(&op, &outputs, tensors),
+        let mut recorded = profile_eager_op_section("nary_op.record_outputs", || {
+            record_eager_outputs_in_session(&op, &outputs, tensors, session)
         })?;
         let trace = recorded.traces.pop().ok_or_else(|| {
             Error::Internal(format!("expected one eager trace for {:?}, got 0", op))

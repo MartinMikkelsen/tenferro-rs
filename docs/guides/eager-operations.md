@@ -91,7 +91,9 @@ session with `runtime.with_eager_session(|session| { ... })`. This includes
 
 Operation-family crates add eager extension traits. For example,
 `tenferro_linalg::EagerTensorLinalgExt` owns linalg eager methods and
-`tenferro_einsum::EagerEinsumExt` owns eager einsum on input slices/arrays.
+`tenferro_einsum::EagerSessionEinsumExt` owns eager einsum and `tensordot` on a
+borrowed session, for example
+`ctx.with_eager_session(|s| s.einsum(&[&a, &b], "ij,jk->ik"))??`.
 
 For CUDA, eager means the operation is submitted immediately. It does not mean
 the host waits after every GPU kernel. Host synchronization happens at
@@ -143,19 +145,22 @@ the copy uses that backend's memory pool and thread policy:
 <!-- snippet-source: docs/tutorial-code/src/bin/core_tensor_snippets.rs#eager_operations_3 -->
 ```rust
 use tenferro_cpu::CpuBackend;
-use tenferro_tensor::{TypedTensor};
-use tenferro_tensor::backend::TensorViewCanonicalization;
+use tenferro_tensor::{BackendSessionHost, TypedTensor};
 
 let tensor = TypedTensor::<f64>::from_vec_col_major(
     vec![2, 3],
     vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
 ).unwrap();
 let view = tensor.as_view().transpose_view([1, 0]).unwrap();
+let read = view.into_tensor_read().unwrap();
 let mut backend = CpuBackend::new();
-let compact = backend.to_contiguous(&view).unwrap();
+let compact = backend
+    .with_backend_session(|session| session.to_contiguous_read(read))
+    .unwrap()
+    .unwrap();
 
 assert_eq!(compact.shape(), &[3, 2]);
-assert_eq!(compact.as_slice().unwrap(), &[1.0, 3.0, 5.0, 2.0, 4.0, 6.0]);
+assert_eq!(compact.as_slice::<f64>().unwrap(), &[1.0, 3.0, 5.0, 2.0, 4.0, 6.0]);
 ```
 <!-- end-snippet-source -->
 
@@ -249,7 +254,8 @@ means summing down each column and keeping one value per column.
 
 ## Einsum
 
-Use `tenferro_einsum::EagerEinsumExt` when working with `EagerTensor`.
+Use `tenferro_einsum::EagerSessionEinsumExt` on a borrowed session when working
+with `EagerTensor`: `ctx.with_eager_session(|s| s.einsum(&[&a, &b], "ij,jk->ik"))??`.
 For traced graph execution, use `tenferro_einsum::TraceContextEinsumExt` and
 install `tenferro_einsum::extension_module` on the `Runtime`.
 

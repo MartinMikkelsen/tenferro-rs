@@ -8,17 +8,17 @@
 use tenferro_bf16_proof::reduction::{sum_in_f32_accumulation, sum_with_per_step_rounding};
 use tenferro_bf16_proof::{Bf16, Bf16Add, Bf16Mul, Bf16Sub};
 use tenferro_cpu::{scalar_binary_into, scalar_fold};
-use tenferro_tensor::HostTensor;
+use tenferro_tensor::{DynRank, Host, TypedTensor};
 
-fn values(input: &[f32]) -> HostTensor<Bf16> {
-    HostTensor::from_vec_col_major(
+fn values(input: &[f32]) -> TypedTensor<Bf16, DynRank, Host> {
+    TypedTensor::<_, DynRank, Host>::from_host_vec_col_major(
         vec![input.len()],
         input.iter().copied().map(Bf16::from_f32).collect(),
     )
     .expect("shape matches data")
 }
 
-fn widened(input: &HostTensor<Bf16>) -> Vec<f32> {
+fn widened(input: &TypedTensor<Bf16, DynRank, Host>) -> Vec<f32> {
     input
         .as_slice()
         .iter()

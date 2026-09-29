@@ -25,6 +25,27 @@ pub struct WebGpuExecSession<'a> {
     backend: &'a mut WebGpuBackend,
 }
 
+// Typed view canonicalization runs on the session, never on the backend
+// owner: the owner is not an execution surface (#1946 F6).
+impl tenferro_tensor::TensorViewCanonicalization<f32, tenferro_tensor::DynRank>
+    for WebGpuExecSession<'_>
+{
+    fn to_contiguous(
+        &mut self,
+        view: &tenferro_tensor::TypedTensorView<'_, f32>,
+    ) -> crate::Result<tenferro_tensor::TypedTensor<f32>> {
+        super::structural::to_contiguous_f32(self.backend, view)
+    }
+
+    fn copy_into(
+        &mut self,
+        _src: &tenferro_tensor::TypedTensorView<'_, f32>,
+        _dst: &mut tenferro_tensor::TypedTensorViewMut<'_, f32>,
+    ) -> crate::Result<()> {
+        super::unsupported!("WebGpuExecSession::copy_into")
+    }
+}
+
 impl WebGpuExecSession<'_> {
     /// Borrow the provider runtime without exposing the owning backend.
     #[doc(hidden)]
@@ -557,9 +578,9 @@ impl TensorIndexing for WebGpuExecSession<'_> {
 
 impl TensorFusion for WebGpuExecSession<'_> {}
 
-delegate!(TensorBuffer {
-    fn reclaim_buffer(tensor: Tensor) -> ();
-});
+// WebGPU device buffers return to the runtime allocator on drop, so the
+// session keeps the trait's no-op reclaim; the owner is not a buffer surface.
+impl TensorBuffer for WebGpuExecSession<'_> {}
 
 delegate!(TensorDeviceTransfer {
     fn download_to_host(tensor: TensorRead<'_>) -> crate::Result<Tensor>;

@@ -24,6 +24,61 @@ thread_local! {
     static SCOPE: RefCell<Option<Scope>> = const { RefCell::new(None) };
 }
 
+/// What CPU execution the current thread is inside.
+///
+/// An owner that serializes callers with a blocking lock (such as an eager
+/// runtime's backend owner) must not wait on that lock while this thread holds
+/// a CPU execution permit: another thread may hold the owner and wait for the
+/// permit (#1946 F1).
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_cpu::{current_cpu_execution, CpuBackend, CpuThreadExecution};
+///
+/// assert_eq!(current_cpu_execution(), CpuThreadExecution::Idle);
+/// let backend = CpuBackend::with_threads(1)?;
+/// assert_eq!(backend.install(current_cpu_execution)?, CpuThreadExecution::Active);
+/// let in_scope = backend.with_execution_scope(current_cpu_execution)?;
+/// assert_eq!(in_scope, CpuThreadExecution::SharedScope);
+/// # Ok::<(), tenferro_tensor::Error>(())
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CpuThreadExecution {
+    /// No CPU execution holds a permit on this thread.
+    Idle,
+    /// A shared execution scope holds a permit, and none of its operations is
+    /// running: an operation or session may still be admitted under it.
+    SharedScope,
+    /// A CPU operation or session is running; nested entry is rejected.
+    Active,
+}
+
+/// Report what CPU execution the current thread is inside, including a
+/// managed Rayon worker running a session or scope callback.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_cpu::{current_cpu_execution, CpuThreadExecution};
+///
+/// assert_eq!(current_cpu_execution(), CpuThreadExecution::Idle);
+/// ```
+pub fn current_cpu_execution() -> CpuThreadExecution {
+    let idle_scope = SCOPE.with(|slot| {
+        slot.borrow()
+            .as_ref()
+            .is_some_and(|scope| !scope.operation_active)
+    });
+    if idle_scope {
+        CpuThreadExecution::SharedScope
+    } else if has_active_execution() {
+        CpuThreadExecution::Active
+    } else {
+        CpuThreadExecution::Idle
+    }
+}
+
 struct ScopeGuard;
 
 impl Drop for ScopeGuard {

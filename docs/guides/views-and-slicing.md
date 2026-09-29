@@ -27,7 +27,7 @@ The view can be transformed without copying:
 <!-- snippet-source: docs/tutorial-code/src/bin/core_tensor_snippets.rs#views_and_slicing_34 -->
 ```rust
 let transposed = view.transpose_view([1, 0])?;
-let reversed = transposed.try_slice(&[
+let reversed = transposed.slice_view(&[
     tenferro_tensor::StridedSliceSpec::all(),
     tenferro_tensor::StridedSliceSpec::reverse(),
 ])?;
@@ -95,7 +95,7 @@ This is why the following two operations have different names and contracts:
 
 | Operation | Physical effect |
 | --- | --- |
-| `transpose_view`, `try_slice`, reshape, reinterpretation | Descriptor-only view |
+| `transpose_view`, `slice_view`, reshape, reinterpretation | Descriptor-only view |
 | `duplicate` | Fresh same-placement allocation and copy |
 | `upload_tensor` | Fresh provider allocation and host-to-provider transfer |
 | `download_tensor` | Fresh host allocation and provider-to-host transfer |

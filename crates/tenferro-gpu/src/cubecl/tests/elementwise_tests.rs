@@ -131,9 +131,10 @@ fn elementwise_read_preserves_offset_and_strided_layouts() {
         [
             view.clone(),
             view.transpose_view([1, 0]).unwrap(),
-            view.try_slice_axis(1, StridedSliceSpec::new(1, None, 1))
+            view.slice_axis_view(1, StridedSliceSpec::new(1, None, 1))
                 .unwrap(),
-            view.try_slice_axis(0, StridedSliceSpec::reverse()).unwrap(),
+            view.slice_axis_view(0, StridedSliceSpec::reverse())
+                .unwrap(),
         ]
     }
     for (device_view, host_view) in layouts(view).into_iter().zip(layouts(host_view)) {

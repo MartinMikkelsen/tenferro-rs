@@ -1,8 +1,7 @@
 use tenferro_cpu::CpuBackend;
 use tenferro_tensor::backend::{ElementwiseFusionInst, ElementwiseFusionOp, ElementwiseFusionPlan};
 use tenferro_tensor::{
-    BackendSessionHost, DType, StridedSliceSpec, Tensor, TensorBuffer, TensorFusion, TensorRead,
-    TensorView, TypedTensor,
+    BackendSessionHost, DType, StridedSliceSpec, Tensor, TensorRead, TensorView, TypedTensor,
 };
 
 #[test]
@@ -14,7 +13,7 @@ fn static_analytic_replay_preserves_owned_and_reversed_values() {
     let owned = Tensor::from_typed::<f64>(typed.duplicate().unwrap());
     let reversed = typed
         .as_view()
-        .try_slice(&[StridedSliceSpec::new(0, Some(3), -1)])
+        .slice_view(&[StridedSliceSpec::new(0, Some(3), -1)])
         .unwrap();
     for op in 0..9 {
         let expected: Vec<_> = values
@@ -66,7 +65,9 @@ fn static_analytic_replay_preserves_owned_and_reversed_values() {
         }
         .unwrap();
         assert_eq!(output.as_slice::<f64>().unwrap(), expected);
-        backend.reclaim_buffer(output);
+        backend
+            .with_backend_session(|__s| __s.reclaim_buffer(output))
+            .unwrap();
         let read = TensorRead::from_view(TensorView::F64(reversed.clone()));
         let output = match op {
             0 => backend
@@ -103,7 +104,9 @@ fn static_analytic_replay_preserves_owned_and_reversed_values() {
             output.as_slice::<f64>().unwrap(),
             expected.into_iter().rev().collect::<Vec<_>>()
         );
-        backend.reclaim_buffer(output);
+        backend
+            .with_backend_session(|__s| __s.reclaim_buffer(output))
+            .unwrap();
     }
 }
 
@@ -126,7 +129,9 @@ fn static_pow_replay_preserves_wrapping_and_domain_checks() {
         .unwrap()
         .unwrap();
     assert_eq!(out.as_slice::<i64>().unwrap(), expected);
-    backend.reclaim_buffer(out);
+    backend
+        .with_backend_session(|__s| __s.reclaim_buffer(out))
+        .unwrap();
     let out = backend
         .with_backend_session(|__s| {
             __s.pow_read(TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs))
@@ -134,7 +139,9 @@ fn static_pow_replay_preserves_wrapping_and_domain_checks() {
         .unwrap()
         .unwrap();
     assert_eq!(out.as_slice::<i64>().unwrap(), expected);
-    backend.reclaim_buffer(out);
+    backend
+        .with_backend_session(|__s| __s.reclaim_buffer(out))
+        .unwrap();
     let negative = Tensor::from_vec_col_major([], vec![-1_i64]).unwrap();
     assert!(backend
         .with_backend_session(|__s| __s.pow_read(
@@ -172,14 +179,17 @@ fn ordinary_cpu_retains_supported_fusion_hook() {
     );
     for _ in 0..3 {
         let outputs = backend
-            .execute_elementwise_fusion(&[&x, &y, &z], &plan)
+            .with_backend_session(|__s| __s.execute_elementwise_fusion(&[&x, &y, &z], &plan))
+            .unwrap()
             .unwrap()
             .expect("ordinary CPU must retain its supported fusion hook");
         assert_eq!(outputs.len(), 2);
         assert_eq!(outputs[0].as_slice::<f64>().unwrap(), vec![3.0; N]);
         assert_eq!(outputs[1].as_slice::<f64>().unwrap(), vec![9.0; N]);
         for output in outputs {
-            backend.reclaim_buffer(output);
+            backend
+                .with_backend_session(|__s| __s.reclaim_buffer(output))
+                .unwrap();
         }
     }
 }

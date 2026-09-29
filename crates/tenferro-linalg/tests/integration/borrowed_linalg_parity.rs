@@ -189,7 +189,7 @@ fn borrowed_eig_consumes_strided_and_reversed_views_without_touching_the_source(
             (
                 "reversed",
                 base.as_view()
-                    .try_slice(&[StridedSliceSpec::reverse(), StridedSliceSpec::reverse()])
+                    .slice_view(&[StridedSliceSpec::reverse(), StridedSliceSpec::reverse()])
                     .unwrap(),
             ),
         ] {
@@ -334,7 +334,7 @@ fn faer_eig_view_path_does_not_pool_an_input_copy() {
         .with_backend_session(|session| {
             let reversed = base
                 .as_view()
-                .try_slice(&[StridedSliceSpec::reverse(), StridedSliceSpec::reverse()])
+                .slice_view(&[StridedSliceSpec::reverse(), StridedSliceSpec::reverse()])
                 .unwrap();
             TensorRead::from_view(TensorView::F64(reversed))
                 .eigvals_read(session)

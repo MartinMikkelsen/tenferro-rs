@@ -578,7 +578,7 @@ fn provider_view_host_mapping_uses_derived_layout_and_releases_guard() {
         .unwrap();
     let view = tensor
         .as_view()
-        .try_slice_axis(1, crate::StridedSliceSpec::new(1, Some(2), 1))
+        .slice_axis_view(1, crate::StridedSliceSpec::new(1, Some(2), 1))
         .unwrap();
     assert_eq!(
         view.with_host_read(|data| data.to_vec()).unwrap(),

@@ -36,11 +36,9 @@
 //! ```
 
 /// Backend-independent rank/layout, dtype and scalar metadata re-exported from
-/// `tenferro-tensor-core`. The tensor types themselves live in this crate.
+/// `tenferro-tensor-core`. It holds metadata only: every tensor type, including
+/// the default scalar set, is exported from this crate's root.
 pub mod core {
-    pub use crate::{
-        DefaultScalars, DefaultScalarsRef, DefaultScalarsView, HostTensor, HostTensorView,
-    };
     pub use tenferro_tensor_core::{
         col_major_strides, DType, DynRank, ErrorKind, IntoShapeVec, Rank, Result, ShapeMismatch,
         ShapeVec, SliceSpec, StrideVec, TensorLayout, TensorRank, TensorScalar, ValidationError,
@@ -78,8 +76,8 @@ pub use tenferro_tensor_core::{
     ValidationError, ValidationKind,
 };
 
+mod default_scalars;
 mod erased_host;
-mod host_container;
 mod scalar_set;
 
 pub mod backend;
@@ -95,10 +93,10 @@ pub mod types;
 pub mod validate;
 
 pub use backend::{
-    with_session_entry_guard, BackendCachedDot, BackendRuntimeCache, BackendSession,
-    BackendSessionHost, ContractionScalar, DotGeneralAccumulation, ElementwiseReadOp,
-    SessionCachedDot, TensorAnalytic, TensorBackend, TensorBackendOps, TensorBuffer,
-    TensorDeviceTransfer, TensorDot, TensorElementwise, TensorFusion, TensorIndexing,
+    has_active_backend_session, with_session_entry_guard, BackendCachedDot, BackendRuntimeCache,
+    BackendSession, BackendSessionHost, ContractionScalar, DotGeneralAccumulation,
+    ElementwiseReadOp, SessionCachedDot, TensorAnalytic, TensorBackend, TensorBackendOps,
+    TensorBuffer, TensorDeviceTransfer, TensorDot, TensorElementwise, TensorFusion, TensorIndexing,
     TensorReduction, TensorStructural, TensorViewCanonicalization,
 };
 pub use cache::{CacheStats, RuntimeCacheControl};
@@ -115,9 +113,7 @@ pub use native_session::NativeSessionRef;
 pub use scalar_set::ScalarSet;
 pub use session_entry::SessionEntryError;
 
-pub use host_container::{
-    DefaultScalars, DefaultScalarsRef, DefaultScalarsView, HostTensor, HostTensorView,
-};
+pub use default_scalars::{DefaultScalars, DefaultScalarsRef, DefaultScalarsView};
 
 pub use types::{
     col_major_strides, AllocationDomainId, AllocationId, BackendStorage, BackendStorageHandle,

@@ -14,6 +14,6 @@ pub use tenferro_runtime::{
 pub use tenferro_tensor::{DotGeneralAccumulation, TensorWrite, TypedTensorWrite};
 
 #[cfg(feature = "autodiff")]
-pub use crate::{EagerEinsumExt, EagerTensorEinsumExt};
+pub use crate::EagerSessionEinsumExt;
 #[cfg(feature = "autodiff")]
 pub use tenferro_ad::{EagerRuntime, EagerTensor};
