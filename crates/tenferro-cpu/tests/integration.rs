@@ -1,5 +1,7 @@
 #[path = "integration/backend_capability_contracts.rs"]
 mod backend_capability_contracts;
+#[path = "integration/batch_route_parity.rs"]
+mod batch_route_parity;
 #[path = "integration/inject_dual_abi_tests.rs"]
 mod inject_dual_abi_tests;
 #[path = "integration/inject_tests.rs"]
