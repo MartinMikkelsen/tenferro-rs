@@ -28,3 +28,34 @@ fn erased_tensor_size_stays_within_the_documented_bound() {
     // The payload tag lives in a niche, so `Option<Tensor>` costs no extra word.
     assert_eq!(size_of::<Option<Tensor>>(), size);
 }
+
+// #1946 F7: view transforms keep the representation marker, so a `Host`
+// view stays statically host-backed (the explicit annotations are the test).
+#[test]
+fn view_transforms_preserve_host_representation_marker() -> crate::Result<()> {
+    let mut tensor =
+        TypedTensor::<f64, Rank<2>, Host>::from_host_vec_col_major([2, 2], vec![1., 2., 3., 4.])?;
+
+    let view: TypedTensorView<'_, f64, Rank<2>, Host> = tensor.as_view();
+    let reshaped: TypedTensorView<'_, f64, DynRank, Host> = view.try_reshape(&[4])?;
+    assert_eq!(reshaped.as_host_slice(), &[1., 2., 3., 4.]);
+    assert_eq!(view.host_col_major_view()?.get([1, 0]), Some(&2.));
+    assert_eq!(tensor.host_col_major_view()?.get([0, 1]), Some(&3.));
+
+    let mut view_mut: TypedTensorViewMut<'_, f64, Rank<2>, Host> = tensor.as_view_mut();
+    {
+        let reshaped_mut: TypedTensorViewMut<'_, f64, DynRank, Host> =
+            view_mut.try_reshape(&[4])?;
+        let _ = reshaped_mut;
+    }
+    let read_only: TypedTensorView<'_, f64, Rank<2>, Host> = view_mut.as_read_only();
+    assert_eq!(read_only.as_host_slice(), &[1., 2., 3., 4.]);
+    let into_read_only: TypedTensorView<'_, f64, Rank<2>, Host> = view_mut.into_read_only();
+    assert_eq!(into_read_only.as_host_slice().len(), 4);
+
+    if let Some(value) = tensor.host_col_major_view_mut()?.get_mut([1, 1]) {
+        *value = 9.;
+    }
+    assert_eq!(tensor.as_slice(), &[1., 2., 3., 9.]);
+    Ok(())
+}

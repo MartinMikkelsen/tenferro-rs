@@ -3651,7 +3651,10 @@ impl<'a, T: 'static, R: TensorRank, D: Representation> TypedTensorView<'a, T, R,
     /// arithmetic overflow, or
     /// [`tenferro_tensor_core::ValidationError::ViewOutOfBounds`] when the
     /// reshaped view exceeds the backing buffer.
-    pub fn try_reshape(&self, shape: &[usize]) -> crate::Result<TypedTensorView<'a, T, DynRank>> {
+    pub fn try_reshape(
+        &self,
+        shape: &[usize],
+    ) -> crate::Result<TypedTensorView<'a, T, DynRank, D>> {
         let layout = reshape_layout_dyn(
             &self.layout,
             shape,
@@ -4606,7 +4609,7 @@ impl<'a, T: 'static, R: TensorRank, D: Representation> TypedTensorViewMut<'a, T,
     /// assert_eq!(view.as_read_only().as_slice()?, &[1, 2]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
-    pub fn as_read_only(&self) -> TypedTensorView<'_, T, R> {
+    pub fn as_read_only(&self) -> TypedTensorView<'_, T, R, D> {
         let buffer = match &self.buffer {
             TensorStorageRefMut::Host(data) => TensorStorageRef::Host(data),
             TensorStorageRefMut::Backend(buffer) => TensorStorageRef::Backend(&**buffer),
@@ -4632,7 +4635,7 @@ impl<'a, T: 'static, R: TensorRank, D: Representation> TypedTensorViewMut<'a, T,
     /// assert_eq!(view.into_read_only().get(&[0]), Some(&1));
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
-    pub fn into_read_only(self) -> TypedTensorView<'a, T, R> {
+    pub fn into_read_only(self) -> TypedTensorView<'a, T, R, D> {
         let buffer = match self.buffer {
             TensorStorageRefMut::Host(data) => TensorStorageRef::Host(data),
             TensorStorageRefMut::Backend(buffer) => TensorStorageRef::Backend(buffer),
@@ -4983,7 +4986,7 @@ impl<'a, T: 'static, R: TensorRank, D: Representation> TypedTensorViewMut<'a, T,
     pub fn try_reshape(
         &mut self,
         shape: &[usize],
-    ) -> crate::Result<TypedTensorViewMut<'_, T, DynRank>> {
+    ) -> crate::Result<TypedTensorViewMut<'_, T, DynRank, D>> {
         let layout = reshape_layout_dyn(
             &self.layout,
             shape,
