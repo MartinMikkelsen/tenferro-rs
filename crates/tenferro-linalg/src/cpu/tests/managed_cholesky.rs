@@ -7,9 +7,9 @@ use std::sync::{Arc, Mutex};
 use num_complex::{Complex32, Complex64};
 use tenferro_cpu::CpuBackend;
 use tenferro_tensor::{
-    AllocationDomainId, AllocationId, BackendStorage, DType, HostAccessError, HostReadGuard,
-    HostWriteGuard, MemoryKind, Placement, SharedTensorAllocationDomain, StorageBuffer, Tensor,
-    TensorRead, TensorScalar, TypedTensor,
+    AllocationDomainId, AllocationId, BackendSessionHost, BackendStorage, DType, HostAccessError,
+    HostReadGuard, HostWriteGuard, MemoryKind, Placement, SharedTensorAllocationDomain,
+    StorageBuffer, Tensor, TensorRead, TensorScalar, TypedTensor,
 };
 
 use super::with_cpu_linalg;
@@ -448,7 +448,8 @@ fn managed_snapshot_is_independent_and_rejects_foreign_storage() {
     let foreign = Tensor::from_typed(other.tensor(&[1], vec![2.0_f64]));
     let before = domain.counts.allocations.load(Ordering::Relaxed);
     let error = cpu
-        .to_contiguous_read(TensorRead::from_tensor(&foreign))
+        .with_backend_session(|__s| __s.to_contiguous_read(TensorRead::from_tensor(&foreign)))
+        .unwrap()
         .unwrap_err();
     assert!(matches!(
         error,
@@ -468,14 +469,20 @@ fn managed_snapshot_is_independent_and_rejects_foreign_storage() {
             memory_kind,
         ));
         assert!(matches!(
-            cpu.to_contiguous_read(TensorRead::from_tensor(&invalid)),
+            cpu.with_backend_session(
+                |__s| __s.to_contiguous_read(TensorRead::from_tensor(&invalid))
+            )
+            .unwrap(),
             Err(tenferro_tensor::Error::HostAccess { .. })
         ));
         assert_eq!(domain.counts.allocations.load(Ordering::Relaxed), before);
     }
     let transposed = input.as_view().transpose_view([1, 0]).unwrap();
     assert!(cpu
-        .to_contiguous_read(TensorRead::from_view(TensorView::F64(transposed)))
+        .with_backend_session(
+            |__s| __s.to_contiguous_read(TensorRead::from_view(TensorView::F64(transposed)))
+        )
+        .unwrap()
         .is_err());
     assert_eq!(domain.counts.allocations.load(Ordering::Relaxed), before);
 }
@@ -511,14 +518,19 @@ fn managed_borrowed_cholesky_respects_offset_and_rejects_strides() {
 #[cfg(feature = "autodiff")]
 #[test]
 fn managed_eager_cholesky_preserves_domain_and_values() {
-    use crate::EagerTensorLinalgExt;
+    use crate::EagerSessionLinalgExt;
     use tenferro_ad::{EagerRuntime, EagerTensor};
     let domain = FakeDomain::new();
     let input = domain.tensor(&[2, 2], vec![4.0_f64, 2.0, 2.0, 3.0]);
     let input_id = input.allocation_id();
     let runtime = EagerRuntime::with_cpu_backend(backend(&domain)).unwrap();
-    let eager = EagerTensor::from_tensor_in(Tensor::from_typed(input), runtime).unwrap();
-    let output = eager.cholesky().unwrap().to_tensor().unwrap();
+    let eager = EagerTensor::from_tensor_in(Tensor::from_typed(input), runtime.clone()).unwrap();
+    let output = runtime
+        .with_eager_session(|session| session.cholesky(&eager))
+        .unwrap()
+        .unwrap()
+        .to_tensor()
+        .unwrap();
     let output = output.as_typed::<f64>().unwrap();
     assert_eq!(output.allocation_domain(), Some(domain.id()));
     assert_ne!(output.allocation_id(), input_id);

@@ -17,7 +17,7 @@ let weights = TypedTensor::<f64>::from_vec_col_major(
     vec![3, 2],
     vec![0.5, -1.0, 1.5, 1.0, 2.0, -0.5],
 )?;
-let projected = backend.with_backend_session(|session| x.matmul(&weights, session))?;
+let projected = backend.with_backend_session(|session| x.matmul(&weights, session))??;
 assert_eq!(projected.shape(), &[2, 2]);
 assert_eq!(projected.host_data()?, &[3.0, 6.0, 3.5, 11.0]);
     // snippet-end:concrete-operation
@@ -34,8 +34,10 @@ let x = runtime.variable_from(Tensor::from_vec_col_major(
     vec![3],
     vec![1.0_f64, 2.0, 3.0],
 )?)?;
-let prediction = x.mul(&x)?;
-let loss = prediction.reduce_sum(Some(&[0]))?;
+let loss = runtime.with_eager_session(|s| {
+    let prediction = s.mul(&x, &x)?;
+    s.reduce_sum(&prediction, Some(&[0]))
+})??;
 loss.backward()?;
 assert_eq!(
     x.grad()?.expect("tracked variable should receive a gradient").as_slice::<f64>()?,
@@ -159,7 +161,7 @@ let mut backend = CpuBackend::new();
 // Ordinary execution: no explicit preparation needed.
 let ordinary = backend.with_backend_session(|session| {
     [&lhs, &rhs].einsum("ij,jk->ik", session)
-})?;
+})??;
 assert_eq!(ordinary.as_slice::<f64>()?, &[2.0, 4.0, 7.0, 10.0]);
 
 // Strings are fine for one-time preparation. The plan does not retain inputs.
@@ -171,7 +173,7 @@ for (data, expected) in [
     let next_lhs = Tensor::from_vec_col_major([2, 2], data)?;
     let result = backend.with_backend_session(|session| {
         plan.execute([&next_lhs, &rhs], session)
-    })?;
+    })??;
     assert_eq!(result.as_slice::<f64>()?, &expected);
 }
 
@@ -179,7 +181,7 @@ for (data, expected) in [
 let equation = EinsumSubscripts::new(&[&[0, 1], &[1, 2]], &[0, 2]);
 let structured = backend.with_backend_session(|session| {
     [&lhs, &rhs].einsum_subscripts(&equation, session)
-})?;
+})??;
 assert_eq!(structured.as_slice::<f64>()?, &[2.0, 4.0, 7.0, 10.0]);
     // snippet-end:ordinary-and-prepared-einsum
     Ok(())

@@ -242,24 +242,26 @@ fn cubecl_session_flushes_after_error_callback() {
     });
 }
 
-#[cfg(debug_assertions)]
 #[test]
 #[ignore = "requires CUDA"]
-fn cuda_with_backend_session_rejects_nested_entry_in_debug_builds() {
+fn cuda_with_backend_session_rejects_nested_entry() {
     assert!(gpu_available(), "CUDA test requires an available device");
     let mut backend = first_cuda_backend().expect("CUDA backend should initialize");
-    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        backend.with_backend_session(|_session| {
-            // The CUDA override wraps its closure in the portable in-session
+    let nested = backend
+        .with_backend_session(|_session| {
+            // The backend override wraps its closure in the portable in-session
             // guard, so re-entering any session-entry point on this thread
-            // (here the shared helper directly) trips the debug assert
-            // (issue #1680 Phase 3).
-            tenferro_tensor::with_session_entry_guard(|| ())
+            // (here the shared helper directly) is rejected before its callback
+            // runs (issue #1680 Phase 3).
+            tenferro_tensor::with_session_entry_guard("nested", || ())
         })
-    }));
+        .unwrap();
     assert!(
-        outcome.is_err(),
-        "nested session entry must panic in debug builds"
+        matches!(
+            nested,
+            Err(tenferro_tensor::SessionEntryError::Reentered { backend: "nested" })
+        ),
+        "nested session entry must be rejected with a typed error: {nested:?}"
     );
 }
 
@@ -270,10 +272,12 @@ fn cuda_with_backend_session_restores_the_in_session_flag_after_panic() {
     assert!(gpu_available(), "CUDA test requires an available device");
     let mut backend = first_cuda_backend().expect("CUDA backend should initialize");
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        backend.with_backend_session(|_session| panic!("boom"))
+        backend
+            .with_backend_session(|_session| panic!("boom"))
+            .unwrap()
     }));
     assert!(outcome.is_err());
     // The flag is usable again on the same thread.
-    let value = backend.with_backend_session(|_session| 7usize);
+    let value = backend.with_backend_session(|_session| 7usize).unwrap();
     assert_eq!(value, 7);
 }

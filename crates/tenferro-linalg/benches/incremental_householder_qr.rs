@@ -240,12 +240,14 @@ fn run_cpu(
 ) -> Result<Record, String> {
     let mut backend =
         CpuBackend::with_threads_and_kind(1, kind).map_err(|error| error.to_string())?;
-    backend.with_backend_session(|session| {
-        with_cpu_exec_session(session, |session| {
-            run_session(config, session, initial, blocks, accumulated)
+    backend
+        .with_backend_session(|session| {
+            with_cpu_exec_session(session, |session| {
+                run_session(config, session, initial, blocks, accumulated)
+            })
+            .ok_or_else(|| "CPU execution session unavailable".to_string())?
         })
-        .ok_or_else(|| "CPU execution session unavailable".to_string())?
-    })
+        .unwrap()
 }
 
 #[cfg(feature = "cuda")]
@@ -267,12 +269,14 @@ fn run_cuda(
         .collect::<Result<Vec<_>, _>>()?;
     let accumulated_device =
         upload_tensor(backend.runtime(), accumulated).map_err(|error| error.to_string())?;
-    let (mut record, q, r, reference_r) = backend.with_backend_session(|session| {
-        with_cuda_exec_session(session, |session| {
-            run_session_outputs(config, session, &initial, &blocks, &accumulated_device)
+    let (mut record, q, r, reference_r) = backend
+        .with_backend_session(|session| {
+            with_cuda_exec_session(session, |session| {
+                run_session_outputs(config, session, &initial, &blocks, &accumulated_device)
+            })
+            .ok_or_else(|| "CUDA execution session unavailable".to_string())?
         })
-        .ok_or_else(|| "CUDA execution session unavailable".to_string())?
-    })?;
+        .unwrap()?;
     let q = download_tensor(backend.runtime(), &q).map_err(|error| error.to_string())?;
     let r = download_tensor(backend.runtime(), &r).map_err(|error| error.to_string())?;
     let reference_r =
@@ -545,33 +549,49 @@ fn bcgs2_append<B: BenchSession>(
     block: &Tensor,
 ) -> Result<(Tensor, Tensor), String> {
     let qh = session
-        .transpose(q, &[1, 0])
+        .transpose_read(TensorRead::from_tensor(q), &[1, 0])
         .map_err(|error| error.to_string())?;
     let first = matmul(session, &qh, block)?;
     let first_reconstruction = matmul(session, q, &first)?;
     let first_residual = session
-        .sub(block, &first_reconstruction)
+        .sub_read(
+            TensorRead::from_tensor(block),
+            TensorRead::from_tensor(&first_reconstruction),
+        )
         .map_err(|error| error.to_string())?;
     let correction = matmul(session, &qh, &first_residual)?;
     let correction_reconstruction = matmul(session, q, &correction)?;
     let residual = session
-        .sub(&first_residual, &correction_reconstruction)
+        .sub_read(
+            TensorRead::from_tensor(&first_residual),
+            TensorRead::from_tensor(&correction_reconstruction),
+        )
         .map_err(|error| error.to_string())?;
     let projection = session
-        .add(&first, &correction)
+        .add_read(
+            TensorRead::from_tensor(&first),
+            TensorRead::from_tensor(&correction),
+        )
         .map_err(|error| error.to_string())?;
     let (appended_q, appended_r) = pair(session.qr(&residual).map_err(|error| error.to_string())?)?;
     let new_q = session
         .concatenate(&[q, &appended_q], 1)
         .map_err(|error| error.to_string())?;
     let scalar = session
-        .reduce_sum(&projection, &[0, 1])
+        .reduce_sum_read(TensorRead::from_tensor(&projection), &[0, 1])
         .map_err(|error| error.to_string())?;
     let zero = session
-        .sub(&scalar, &scalar)
+        .sub_read(
+            TensorRead::from_tensor(&scalar),
+            TensorRead::from_tensor(&scalar),
+        )
         .map_err(|error| error.to_string())?;
     let bottom_left = session
-        .broadcast_in_dim(&zero, &[appended_r.shape()[0], r.shape()[1]], &[])
+        .broadcast_in_dim_read(
+            TensorRead::from_tensor(&zero),
+            &[appended_r.shape()[0], r.shape()[1]],
+            &[],
+        )
         .map_err(|error| error.to_string())?;
     let top = session
         .concatenate(&[r, &projection], 1)
@@ -587,9 +607,9 @@ fn bcgs2_append<B: BenchSession>(
 
 fn matmul<B: BenchSession>(session: &mut B, lhs: &Tensor, rhs: &Tensor) -> Result<Tensor, String> {
     session
-        .dot_general(
-            lhs,
-            rhs,
+        .dot_general_read(
+            TensorRead::from_tensor(lhs),
+            TensorRead::from_tensor(rhs),
             &DotGeneralConfig {
                 lhs_contracting_dims: [1].as_slice().into(),
                 rhs_contracting_dims: [0].as_slice().into(),

@@ -1,7 +1,6 @@
 use crate::buffer_pool::{BufferPool, PoolScalar};
 use crate::{Tensor, TensorRead, TensorValue, TensorWrite};
 use num_complex::{Complex32, Complex64};
-use std::any::TypeId;
 use std::sync::Arc;
 use tenferro_tensor::backend::{BackendSession, ElementwiseFusionPlan, GroupedGemmConfig};
 use tenferro_tensor::{
@@ -22,8 +21,8 @@ use super::{
     materialize_tensor_read_in_domain, reduction, structural,
 };
 
-/// Marker for the concrete erased CPU execution-session target.
-#[doc(hidden)]
+/// Native-session marker for [`CpuExecSession`]; private to this crate so no
+/// other crate can create a token that claims to be a CPU session.
 pub(super) struct CpuExecSessionMarker;
 
 /// Borrowed CPU execution session used by scheduler-owned extension regions.
@@ -174,6 +173,23 @@ impl CpuExecSession<'_> {
     #[doc(hidden)]
     pub fn shared_allocation_domain(&self) -> Option<Arc<dyn SharedTensorAllocationDomain>> {
         self.allocation_domain.cloned()
+    }
+
+    /// Replace this session's effective batch policy, returning the previous one.
+    pub(crate) fn replace_batch_policy(
+        &mut self,
+        policy: crate::CpuBatchPolicy,
+    ) -> crate::CpuBatchPolicy {
+        let previous = self.entry.batch_policy();
+        self.set_batch_policy(policy);
+        previous
+    }
+
+    fn set_batch_policy(&mut self, policy: crate::CpuBatchPolicy) {
+        self.entry = self.entry.with_batch_policy(policy);
+        self.entered = self
+            .entered
+            .map(|context| context.with_batch_policy(policy));
     }
 
     /// Run a CPU-owned linalg kernel inside this already-entered session.
@@ -375,63 +391,39 @@ impl TensorElementwise for CpuExecSession<'_> {
         })
     }
 
-    delegate_with_pool_context!(add(lhs: &Tensor, rhs: &Tensor) => elementwise::add_with_pool);
-
     fn add_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor> {
         self.run_native_fresh_with_context(|context, buffers| {
             elementwise::add_read_with_pool(buffers, &context.strided_exec_context(), lhs, rhs)
         })
     }
 
-    delegate_with_pool_context!(sub(lhs: &Tensor, rhs: &Tensor) => elementwise::sub_with_pool);
     delegate_with_pool_context!(sub_read(lhs: TensorRead<'_>, rhs: TensorRead<'_>) => elementwise::sub_read_with_pool);
-    delegate_with_pool_context!(mul(lhs: &Tensor, rhs: &Tensor) => elementwise::mul_with_pool);
     delegate_with_pool_context!(mul_read(lhs: TensorRead<'_>, rhs: TensorRead<'_>) => elementwise::mul_read_with_pool);
-    delegate_with_pool_context!(neg(input: &Tensor) => elementwise::neg_with_pool);
     delegate_with_pool_context!(neg_read(input: TensorRead<'_>) => elementwise::neg_read_with_pool);
-    delegate_with_pool_context!(conj(input: &Tensor) => elementwise::conj_with_pool);
     delegate_with_pool_context!(conj_read(input: TensorRead<'_>) => elementwise::conj_read_with_pool);
-    delegate_with_pool_context!(div(lhs: &Tensor, rhs: &Tensor) => elementwise::div_with_pool);
     delegate_with_pool_context!(div_read(lhs: TensorRead<'_>, rhs: TensorRead<'_>) => elementwise::div_read_with_pool);
     delegate_with_pool_context!(rem(lhs: &Tensor, rhs: &Tensor) => elementwise::rem_with_pool);
     delegate_with_pool_context!(rem_read(lhs: TensorRead<'_>, rhs: TensorRead<'_>) => elementwise::rem_read_with_pool);
-    delegate_with_pool_context!(abs(input: &Tensor) => elementwise::abs_with_pool);
     delegate_with_pool_context!(abs_read(input: TensorRead<'_>) => elementwise::abs_read_with_pool);
-    delegate_with_pool_context!(sign(input: &Tensor) => elementwise::sign_with_pool);
     delegate_with_pool_context!(sign_read(input: TensorRead<'_>) => elementwise::sign_read_with_pool);
-    delegate_with_pool_context!(maximum(lhs: &Tensor, rhs: &Tensor) => elementwise::maximum_with_pool);
     delegate_with_pool_context!(maximum_read(lhs: TensorRead<'_>, rhs: TensorRead<'_>) => elementwise::maximum_read_with_pool);
-    delegate_with_pool_context!(minimum(lhs: &Tensor, rhs: &Tensor) => elementwise::minimum_with_pool);
     delegate_with_pool_context!(minimum_read(lhs: TensorRead<'_>, rhs: TensorRead<'_>) => elementwise::minimum_read_with_pool);
-    delegate_with_pool_context!(compare(lhs: &Tensor, rhs: &Tensor, dir: &CompareDir) => elementwise::compare_with_pool);
     delegate_with_pool_context!(compare_read(lhs: TensorRead<'_>, rhs: TensorRead<'_>, dir: &CompareDir) => elementwise::compare_read_with_pool);
-    delegate_with_pool_context!(select(pred: &Tensor, on_true: &Tensor, on_false: &Tensor) => elementwise::select_with_pool);
     delegate_with_pool_context!(select_read(pred: TensorRead<'_>, on_true: TensorRead<'_>, on_false: TensorRead<'_>) => elementwise::select_read_with_pool);
-    delegate_with_pool_context!(clamp(input: &Tensor, lower: &Tensor, upper: &Tensor) => elementwise::clamp_with_pool);
     delegate_with_pool_context!(clamp_read(input: TensorRead<'_>, lower: TensorRead<'_>, upper: TensorRead<'_>) => elementwise::clamp_read_with_pool);
 }
 
 impl TensorAnalytic for CpuExecSession<'_> {
     // Analytic
-    delegate_with_pool!(exp(input: &Tensor) => analytic::exp_with_pool);
     delegate_with_pool!(exp_read(input: TensorRead<'_>) => analytic::exp_read_with_pool);
-    delegate_with_pool!(log(input: &Tensor) => analytic::log_with_pool);
     delegate_with_pool!(log_read(input: TensorRead<'_>) => analytic::log_read_with_pool);
-    delegate_with_pool!(sin(input: &Tensor) => analytic::sin_with_pool);
     delegate_with_pool!(sin_read(input: TensorRead<'_>) => analytic::sin_read_with_pool);
-    delegate_with_pool!(cos(input: &Tensor) => analytic::cos_with_pool);
     delegate_with_pool!(cos_read(input: TensorRead<'_>) => analytic::cos_read_with_pool);
-    delegate_with_pool!(tanh(input: &Tensor) => analytic::tanh_with_pool);
     delegate_with_pool!(tanh_read(input: TensorRead<'_>) => analytic::tanh_read_with_pool);
-    delegate_with_pool!(sqrt(input: &Tensor) => analytic::sqrt_with_pool);
     delegate_with_pool!(sqrt_read(input: TensorRead<'_>) => analytic::sqrt_read_with_pool);
-    delegate_with_pool!(rsqrt(input: &Tensor) => analytic::rsqrt_with_pool);
     delegate_with_pool!(rsqrt_read(input: TensorRead<'_>) => analytic::rsqrt_read_with_pool);
-    delegate_with_pool!(pow(lhs: &Tensor, rhs: &Tensor) => analytic::pow_with_pool);
     delegate_with_pool!(pow_read(lhs: TensorRead<'_>, rhs: TensorRead<'_>) => analytic::pow_read_with_pool);
-    delegate_with_pool!(expm1(input: &Tensor) => analytic::expm1_with_pool);
     delegate_with_pool!(expm1_read(input: TensorRead<'_>) => analytic::expm1_read_with_pool);
-    delegate_with_pool!(log1p(input: &Tensor) => analytic::log1p_with_pool);
     delegate_with_pool!(log1p_read(input: TensorRead<'_>) => analytic::log1p_read_with_pool);
 }
 
@@ -464,16 +456,8 @@ impl TensorStructural for CpuExecSession<'_> {
         self.run_native(|_| copy_tensor_read_into("CpuBackend::copy_read_into", src, dst))
     }
 
-    delegate_with_pool!(transpose(input: &Tensor, perm: &[usize]) => structural::transpose_with_pool);
     fn transpose_read(&mut self, input: TensorRead<'_>, perm: &[usize]) -> crate::Result<Tensor> {
         self.run_native_fresh(|buffers| structural::transpose_read_with_pool(buffers, input, perm))
-    }
-
-    fn reshape(&mut self, input: &Tensor, shape: &[usize]) -> crate::Result<Tensor> {
-        // INVARIANT: typed_reshape performs a serial host copy (to_vec); no
-        // parallel kernel runs, so the engine entry is pure overhead on
-        // multi-thread pools.
-        structural::reshape(input, shape)
     }
 
     fn reshape_read(&mut self, input: TensorRead<'_>, shape: &[usize]) -> crate::Result<Tensor> {
@@ -488,7 +472,6 @@ impl TensorStructural for CpuExecSession<'_> {
         }
     }
 
-    delegate_with_pool!(broadcast_in_dim(input: &Tensor, shape: &[usize], dims: &[usize]) => structural::broadcast_in_dim_with_pool);
     fn broadcast_in_dim_read(
         &mut self,
         input: TensorRead<'_>,
@@ -509,12 +492,6 @@ impl TensorStructural for CpuExecSession<'_> {
 
 impl TensorReduction for CpuExecSession<'_> {
     // Reduction
-    fn reduce_sum(&mut self, input: &Tensor, axes: &[usize]) -> crate::Result<Tensor> {
-        self.run_native_fresh_with_context(|context, _| {
-            let exec_context = context.strided_exec_context();
-            reduction::reduce_sum(input, axes, &exec_context)
-        })
-    }
 
     fn reduce_sum_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
         self.run_native_fresh_with_context(|context, buffers| {
@@ -534,13 +511,6 @@ impl TensorReduction for CpuExecSession<'_> {
         })
     }
 
-    fn reduce_prod(&mut self, input: &Tensor, axes: &[usize]) -> crate::Result<Tensor> {
-        self.run_native_fresh_with_context(|context, _| {
-            let exec_context = context.strided_exec_context();
-            reduction::reduce_prod(input, axes, &exec_context)
-        })
-    }
-
     fn reduce_prod_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
         self.run_native_fresh_with_context(|context, buffers| {
             let exec_context = context.strided_exec_context();
@@ -548,24 +518,10 @@ impl TensorReduction for CpuExecSession<'_> {
         })
     }
 
-    fn reduce_max(&mut self, input: &Tensor, axes: &[usize]) -> crate::Result<Tensor> {
-        self.run_native_fresh_with_context(|context, _| {
-            let exec_context = context.strided_exec_context();
-            reduction::reduce_max(input, axes, &exec_context)
-        })
-    }
-
     fn reduce_max_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
         self.run_native_fresh_with_context(|context, buffers| {
             let exec_context = context.strided_exec_context();
             reduction::reduce_max_read(buffers, input, axes, &exec_context)
-        })
-    }
-
-    fn reduce_min(&mut self, input: &Tensor, axes: &[usize]) -> crate::Result<Tensor> {
-        self.run_native_fresh_with_context(|context, _| {
-            let exec_context = context.strided_exec_context();
-            reduction::reduce_min(input, axes, &exec_context)
         })
     }
 
@@ -612,9 +568,9 @@ impl CpuExecSession<'_> {
         // Uninitialized fast path: beta == 0 here by construction, so the
         // dot output is fully overwritten. Take it only when the GEMM
         // provider is the guaranteed consumer (no general-contraction
-        // provider) and exposes the full-overwrite witness. The uninit
-        // checkout holds the scratch pool exclusively, so only the direct
-        // GEMM plan is attempted; anything else falls back below.
+        // provider) and exposes the full-overwrite witness. Operand packing
+        // draws on the session pool while the destination is its own
+        // checkout; an unsupported plan falls back below.
         let providers = self.providers;
         let runtime = providers.dot_general();
         if runtime.general.is_none() && runtime.gemm.uninit_provider().is_some() {
@@ -627,6 +583,7 @@ impl CpuExecSession<'_> {
                 providers.inner(),
                 &self.entry,
                 self.entered.as_ref(),
+                self.buffers,
                 self.gemm_analysis_cache,
                 cache_slot,
                 &lhs,
@@ -670,22 +627,6 @@ impl CpuExecSession<'_> {
 }
 
 impl TensorDot for CpuExecSession<'_> {
-    fn dot_general(
-        &mut self,
-        lhs: &Tensor,
-        rhs: &Tensor,
-        config: &DotGeneralConfig,
-    ) -> crate::Result<Tensor> {
-        self.execute_dot_allocated(
-            None,
-            TensorRead::from_tensor(lhs),
-            TensorRead::from_tensor(rhs),
-            config,
-            false,
-            false,
-        )
-    }
-
     fn dot_general_read(
         &mut self,
         lhs: TensorRead<'_>,
@@ -1047,12 +988,11 @@ impl BackendSession for CpuExecSession<'_> {
         })
     }
 
-    fn session_type_id(&self) -> TypeId {
-        TypeId::of::<CpuExecSessionMarker>()
-    }
-
-    unsafe fn session_data_mut(&mut self) -> *mut () {
-        self as *mut Self as *mut ()
+    fn native_session(&mut self) -> Option<tenferro_tensor::NativeSessionRef<'_>> {
+        // SAFETY: `CpuExecSessionMarker` is private to this crate, and this is
+        // the only place a token carrying it is created; it always points to a
+        // `CpuExecSession`, exclusively borrowed for the token lifetime.
+        Some(unsafe { tenferro_tensor::NativeSessionRef::new::<CpuExecSessionMarker, _>(self) })
     }
 }
 

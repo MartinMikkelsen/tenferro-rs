@@ -22,9 +22,14 @@ fn fixture() -> Fixture {
         Arc::clone(&ctx),
     )
     .unwrap();
-    let x2 = x.mul(&x).unwrap();
-    let x3 = x2.mul(&x).unwrap();
-    let loss = x3.reduce_sum(Some(&[0])).unwrap();
+    let loss = ctx
+        .with_eager_session(|s| {
+            let x2 = s.mul(&x, &x)?;
+            let x3 = s.mul(&x2, &x)?;
+            s.reduce_sum(&x3, Some(&[0]))
+        })
+        .unwrap()
+        .unwrap();
     Fixture { ctx, x, loss }
 }
 

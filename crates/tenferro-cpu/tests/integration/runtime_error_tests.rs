@@ -2,10 +2,9 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 
 use tenferro_cpu::CpuBackend;
 use tenferro_tensor::{
-    BackendStorageHandle, DeviceId, DeviceKind, DotGeneralConfig, Error, GpuBackendKind,
-    MemoryKind, PadConfig, Placement, ScatterConfig, SliceConfig, StorageBuffer, Tensor,
-    TensorAnalytic, TensorDeviceTransfer, TensorDot, TensorElementwise, TensorIndexing, TensorRead,
-    TensorStructural, TypedTensor, ValidationError,
+    BackendSessionHost, BackendStorageHandle, DeviceId, DeviceKind, DotGeneralConfig, Error,
+    GpuBackendKind, MemoryKind, PadConfig, Placement, ScatterConfig, SliceConfig, StorageBuffer,
+    Tensor, TensorDeviceTransfer, TensorRead, TypedTensor, ValidationError,
 };
 
 fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
@@ -357,16 +356,19 @@ fn dot_general_rejects_out_of_bounds_contracting_dim() {
     let mut backend = CpuBackend::new();
 
     let err = backend
-        .dot_general(
-            &lhs,
-            &rhs,
-            &DotGeneralConfig {
-                lhs_contracting_dims: [2].as_slice().into(),
-                rhs_contracting_dims: [0].as_slice().into(),
-                lhs_batch_dims: [].as_slice().into(),
-                rhs_batch_dims: [].as_slice().into(),
-            },
-        )
+        .with_backend_session(|__s| {
+            __s.dot_general_read(
+                TensorRead::from_tensor(&lhs),
+                TensorRead::from_tensor(&rhs),
+                &DotGeneralConfig {
+                    lhs_contracting_dims: [2].as_slice().into(),
+                    rhs_contracting_dims: [0].as_slice().into(),
+                    lhs_batch_dims: [].as_slice().into(),
+                    rhs_batch_dims: [].as_slice().into(),
+                },
+            )
+        })
+        .unwrap()
         .unwrap_err();
 
     assert!(matches!(
@@ -384,7 +386,12 @@ fn add_rejects_shape_mismatch() {
     let rhs = f64_tensor(vec![3], vec![3.0, 4.0, 5.0]);
     let mut backend = CpuBackend::new();
 
-    let err = <CpuBackend as TensorElementwise>::add(&mut backend, &lhs, &rhs).unwrap_err();
+    let err = backend
+        .with_backend_session(|__s| {
+            __s.add_read(TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs))
+        })
+        .unwrap()
+        .unwrap_err();
 
     assert!(matches!(
         err,
@@ -402,7 +409,11 @@ fn cpu_backend_rejects_backend_buffers_without_panicking() {
     let mut backend = CpuBackend::new();
 
     let result = catch_unwind(AssertUnwindSafe(|| {
-        <CpuBackend as TensorElementwise>::add(&mut backend, &lhs, &rhs)
+        backend
+            .with_backend_session(|__s| {
+                __s.add_read(TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs))
+            })
+            .unwrap()
     }));
 
     assert!(result.is_ok(), "CPU backend should return Err, not panic");
@@ -416,7 +427,11 @@ fn transpose_returns_error_instead_of_panicking() {
     let input = f64_tensor(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]);
     let mut backend = CpuBackend::new();
 
-    let result = catch_unwind(AssertUnwindSafe(|| backend.transpose(&input, &[0])));
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        backend
+            .with_backend_session(|__s| __s.transpose_read(TensorRead::from_tensor(&input), &[0]))
+            .unwrap()
+    }));
 
     assert!(result.is_ok(), "transpose should return Err, not panic");
     let err = result.unwrap().unwrap_err();
@@ -437,7 +452,11 @@ fn reshape_returns_error_instead_of_panicking() {
     let input = f64_tensor(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]);
     let mut backend = CpuBackend::new();
 
-    let result = catch_unwind(AssertUnwindSafe(|| backend.reshape(&input, &[3])));
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        backend
+            .with_backend_session(|__s| __s.reshape_read(TensorRead::from_tensor(&input), &[3]))
+            .unwrap()
+    }));
 
     assert!(result.is_ok(), "reshape should return Err, not panic");
     let err = result.unwrap().unwrap_err();
@@ -453,7 +472,13 @@ fn pow_returns_error_on_shape_mismatch_instead_of_panicking() {
     let rhs = f64_tensor(vec![1], vec![3.0]);
     let mut backend = CpuBackend::new();
 
-    let result = catch_unwind(AssertUnwindSafe(|| backend.pow(&lhs, &rhs)));
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        backend
+            .with_backend_session(|__s| {
+                __s.pow_read(TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs))
+            })
+            .unwrap()
+    }));
 
     assert!(result.is_ok(), "pow should return Err, not panic");
     let err = result.unwrap().unwrap_err();
@@ -473,7 +498,11 @@ fn slice_returns_error_instead_of_panicking() {
         strides: vec![1],
     };
 
-    let result = catch_unwind(AssertUnwindSafe(|| backend.slice(&input, &config)));
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        backend
+            .with_backend_session(|__s| __s.slice(&input, &config))
+            .unwrap()
+    }));
 
     assert!(result.is_ok(), "slice should return Err, not panic");
     let err = result.unwrap().unwrap_err();
@@ -493,7 +522,11 @@ fn pad_returns_error_instead_of_panicking() {
         interior_padding: vec![0, 0],
     };
 
-    let result = catch_unwind(AssertUnwindSafe(|| backend.pad(&input, &config)));
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        backend
+            .with_backend_session(|__s| __s.pad(&input, &config))
+            .unwrap()
+    }));
 
     assert!(result.is_ok(), "pad should return Err, not panic");
     let err = result.unwrap().unwrap_err();
@@ -508,7 +541,11 @@ fn concatenate_returns_error_on_empty_inputs() {
     let mut backend = CpuBackend::new();
     let inputs: Vec<&Tensor> = vec![];
 
-    let result = catch_unwind(AssertUnwindSafe(|| backend.concatenate(&inputs, 0)));
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        backend
+            .with_backend_session(|__s| __s.concatenate(&inputs, 0))
+            .unwrap()
+    }));
 
     assert!(result.is_ok(), "concatenate should return Err, not panic");
     let err = result.unwrap().unwrap_err();
@@ -527,7 +564,11 @@ fn concatenate_returns_error_on_dtype_mismatch() {
     let a = f64_tensor(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]);
     let b = f32_tensor(vec![2, 2], vec![5.0f32, 6.0, 7.0, 8.0]);
 
-    let result = catch_unwind(AssertUnwindSafe(|| backend.concatenate(&[&a, &b], 0)));
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        backend
+            .with_backend_session(|__s| __s.concatenate(&[&a, &b], 0))
+            .unwrap()
+    }));
 
     assert!(
         result.is_ok(),
@@ -549,7 +590,11 @@ fn concatenate_returns_error_on_rank_mismatch() {
     let a = f64_tensor(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]);
     let b = f64_tensor(vec![2], vec![5.0, 6.0]);
 
-    let result = catch_unwind(AssertUnwindSafe(|| backend.concatenate(&[&a, &b], 0)));
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        backend
+            .with_backend_session(|__s| __s.concatenate(&[&a, &b], 0))
+            .unwrap()
+    }));
 
     assert!(
         result.is_ok(),
@@ -571,7 +616,11 @@ fn concatenate_returns_error_on_axis_out_of_bounds() {
     let a = f64_tensor(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]);
     let b = f64_tensor(vec![2, 2], vec![5.0, 6.0, 7.0, 8.0]);
 
-    let result = catch_unwind(AssertUnwindSafe(|| backend.concatenate(&[&a, &b], 5)));
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        backend
+            .with_backend_session(|__s| __s.concatenate(&[&a, &b], 5))
+            .unwrap()
+    }));
 
     assert!(
         result.is_ok(),
@@ -596,7 +645,11 @@ fn concatenate_returns_error_on_shape_mismatch() {
         vec![7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0],
     );
 
-    let result = catch_unwind(AssertUnwindSafe(|| backend.concatenate(&[&a, &b], 0)));
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        backend
+            .with_backend_session(|__s| __s.concatenate(&[&a, &b], 0))
+            .unwrap()
+    }));
 
     assert!(
         result.is_ok(),
@@ -618,7 +671,9 @@ fn concatenate_accepts_valid_inputs() {
     let a = f64_tensor(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]);
     let b = f64_tensor(vec![2, 2], vec![5.0, 6.0, 7.0, 8.0]);
 
-    let result = backend.concatenate(&[&a, &b], 0);
+    let result = backend
+        .with_backend_session(|__s| __s.concatenate(&[&a, &b], 0))
+        .unwrap();
 
     assert!(result.is_ok());
     let out = result.unwrap();
@@ -639,7 +694,8 @@ fn scatter_negative_start_indices_clamp_like_dynamic_slice() {
     };
 
     let out = backend
-        .scatter(&operand, &scatter_indices, &updates, &config)
+        .with_backend_session(|__s| __s.scatter(&operand, &scatter_indices, &updates, &config))
+        .unwrap()
         .unwrap();
 
     assert_eq!(

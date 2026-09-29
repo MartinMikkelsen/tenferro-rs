@@ -265,7 +265,10 @@ fn eager_tensor_einsum_ellipsis_backward_matches_expected_values() {
     .unwrap();
 
     let c = [&a, &b].einsum("...ij,...jk->...ik").unwrap();
-    let loss = c.reduce_sum(Some(&[0, 1, 2])).unwrap();
+    let loss = ctx
+        .with_eager_session(|s| s.reduce_sum(&c, Some(&[0, 1, 2])))
+        .unwrap()
+        .unwrap();
     let _ = loss.backward().unwrap();
 
     assert_eq!(
@@ -293,7 +296,10 @@ fn eager_tensor_einsum_backward_populates_input_grads() {
     .unwrap();
 
     let c = [&a, &b].einsum("ij,jk->ik").unwrap();
-    let loss = c.reduce_sum(Some(&[0, 1])).unwrap();
+    let loss = ctx
+        .with_eager_session(|s| s.reduce_sum(&c, Some(&[0, 1])))
+        .unwrap()
+        .unwrap();
     let _cotangents = loss.backward().unwrap();
 
     let grad_a = a.grad().unwrap().unwrap();
@@ -326,7 +332,10 @@ fn eager_tensor_einsum_repeated_backward_accumulates_across_calls() {
     .unwrap();
 
     let c = [&a, &b].einsum("ij,jk->ik").unwrap();
-    let loss = c.reduce_sum(Some(&[0, 1])).unwrap();
+    let loss = ctx
+        .with_eager_session(|s| s.reduce_sum(&c, Some(&[0, 1])))
+        .unwrap()
+        .unwrap();
     let _ = loss.backward().unwrap();
     assert_eq!(
         f64_data(&a.grad().unwrap().unwrap().to_tensor().unwrap()),
@@ -338,7 +347,10 @@ fn eager_tensor_einsum_repeated_backward_accumulates_across_calls() {
     );
 
     let c = [&a, &b].einsum("ij,jk->ik").unwrap();
-    let loss = c.reduce_sum(Some(&[0, 1])).unwrap();
+    let loss = ctx
+        .with_eager_session(|s| s.reduce_sum(&c, Some(&[0, 1])))
+        .unwrap()
+        .unwrap();
     let _ = loss.backward().unwrap();
     assert_eq!(
         f64_data(&a.grad().unwrap().unwrap().to_tensor().unwrap()),
@@ -365,7 +377,10 @@ fn eager_tensor_einsum_context_clear_grads_resets_all_live_leaves() {
     .unwrap();
 
     let c = [&a, &b].einsum("ij,jk->ik").unwrap();
-    let loss = c.reduce_sum(Some(&[0, 1])).unwrap();
+    let loss = ctx
+        .with_eager_session(|s| s.reduce_sum(&c, Some(&[0, 1])))
+        .unwrap()
+        .unwrap();
     let _ = loss.backward().unwrap();
 
     ctx.clear_grads().unwrap();
@@ -374,7 +389,10 @@ fn eager_tensor_einsum_context_clear_grads_resets_all_live_leaves() {
     assert!(b.grad().unwrap().is_none());
 
     let c = [&a, &b].einsum("ij,jk->ik").unwrap();
-    let loss = c.reduce_sum(Some(&[0, 1])).unwrap();
+    let loss = ctx
+        .with_eager_session(|s| s.reduce_sum(&c, Some(&[0, 1])))
+        .unwrap()
+        .unwrap();
     let _ = loss.backward().unwrap();
 
     assert_eq!(
@@ -384,5 +402,46 @@ fn eager_tensor_einsum_context_clear_grads_resets_all_live_leaves() {
     assert_eq!(
         f64_data(&b.grad().unwrap().unwrap().to_tensor().unwrap()),
         &[3.0, 7.0, 11.0, 3.0, 7.0, 11.0]
+    );
+}
+
+/// Binary, N-ary and borrowed-session einsum agree on the calling thread's
+/// grad mode: under an outer `no_grad` none of them records, and without it all
+/// of them do (the N-ary program now runs in one borrowed session).
+#[test]
+fn eager_einsum_paths_follow_the_calling_threads_no_grad() {
+    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
+    let leaf = |shape: Vec<usize>| {
+        let len = shape.iter().product();
+        EagerTensor::requires_grad_in(
+            Tensor::from_vec_col_major(shape, vec![1.0_f64; len]).unwrap(),
+            ctx.clone(),
+        )
+        .unwrap()
+    };
+    let (a, b, c) = (leaf(vec![2, 3]), leaf(vec![3, 4]), leaf(vec![4, 2]));
+
+    {
+        let _guard = ctx.no_grad();
+        let binary = [&a, &b].einsum("ij,jk->ik").unwrap();
+        let nary = [&a, &b, &c].einsum("ij,jk,kl->il").unwrap();
+        let session = ctx.with_eager_session(|s| s.neg(&a)).unwrap().unwrap();
+        assert!(!binary.tracks_grad());
+        assert!(!nary.tracks_grad());
+        assert!(!session.tracks_grad());
+    }
+
+    let nary = [&a, &b, &c].einsum("ij,jk,kl->il").unwrap();
+    assert!(nary.tracks_grad());
+    assert_eq!(f64_data(&nary.to_tensor().unwrap()), &[12.0; 4]);
+    let loss = ctx
+        .with_eager_session(|s| s.reduce_sum(&nary, Some(&[0, 1])))
+        .unwrap()
+        .unwrap();
+    let _ = loss.backward().unwrap();
+    // d(sum(a b c))/da[i, j] = sum_{k, l} b[j, k] c[k, l] = 8 for all-ones inputs.
+    assert_eq!(
+        f64_data(&a.grad().unwrap().unwrap().to_tensor().unwrap()),
+        &[8.0; 6]
     );
 }

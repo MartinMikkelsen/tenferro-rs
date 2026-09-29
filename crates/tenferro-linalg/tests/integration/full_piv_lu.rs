@@ -1,9 +1,11 @@
 use num_complex::{Complex32, Complex64};
 use tenferro_cpu::CpuBackend;
 use tenferro_linalg::LinalgBackend;
-use tenferro_tensor::{DType, DotGeneralConfig, Tensor, TensorDot, TensorStructural, TypedTensor};
+use tenferro_tensor::{DType, DotGeneralConfig, Tensor, TypedTensor};
 
 use super::support;
+use tenferro_tensor::BackendSessionHost;
+use tenferro_tensor::TensorRead;
 
 fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
     Tensor::from_typed::<f64>(TypedTensor::from_vec_col_major(shape, data).unwrap())
@@ -27,16 +29,19 @@ fn c32_data(tensor: &Tensor) -> &[Complex32] {
 
 fn matmul(backend: &mut CpuBackend, lhs: &Tensor, rhs: &Tensor) -> Tensor {
     backend
-        .dot_general(
-            lhs,
-            rhs,
-            &DotGeneralConfig {
-                lhs_contracting_dims: [1].as_slice().into(),
-                rhs_contracting_dims: [0].as_slice().into(),
-                lhs_batch_dims: [].as_slice().into(),
-                rhs_batch_dims: [].as_slice().into(),
-            },
-        )
+        .with_backend_session(|__s| {
+            __s.dot_general_read(
+                TensorRead::from_tensor(lhs),
+                TensorRead::from_tensor(rhs),
+                &DotGeneralConfig {
+                    lhs_contracting_dims: [1].as_slice().into(),
+                    rhs_contracting_dims: [0].as_slice().into(),
+                    lhs_batch_dims: [].as_slice().into(),
+                    rhs_batch_dims: [].as_slice().into(),
+                },
+            )
+        })
+        .unwrap()
         .unwrap()
 }
 
@@ -59,7 +64,10 @@ fn full_piv_lu_reconstructs_permuted_matrix() {
         support::with_cpu_linalg(&mut backend, |backend| backend.full_piv_lu(&a)).unwrap();
     let [p, l, u, q, parity]: [Tensor; 5] = outputs.try_into().unwrap();
     let pa = matmul(&mut backend, &p, &a);
-    let qt = backend.transpose(&q, &[1, 0]).unwrap();
+    let qt = backend
+        .with_backend_session(|__s| __s.transpose_read(TensorRead::from_tensor(&q), &[1, 0]))
+        .unwrap()
+        .unwrap();
     let paqt = matmul(&mut backend, &pa, &qt);
     let lu = matmul(&mut backend, &l, &u);
 

@@ -1106,9 +1106,9 @@ impl PreparedOperationExecutor for CountingPreparedOperation {
                 })?;
             return Ok(vec![output]);
         }
-        Ok(vec![backend.with_backend_session(|session| {
-            session.to_contiguous_read(inputs[0].clone())
-        })?])
+        Ok(vec![backend
+            .with_backend_session(|session| session.to_contiguous_read(inputs[0].clone()))
+            .unwrap()?])
     }
 }
 

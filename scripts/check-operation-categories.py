@@ -71,8 +71,7 @@ TRACED_REQUIRED = EAGER_REQUIRED | {
 }
 
 EAGER_SURFACE_FILES = [
-    pathlib.Path("crates/tenferro-ad/src/eager_ops.rs"),
-    pathlib.Path("crates/tenferro-ad/src/eager_ops_elementwise.rs"),
+    pathlib.Path("crates/tenferro-ad/src/eager.rs"),
     pathlib.Path("crates/tenferro-ad/src/shape_packing.rs"),
 ]
 
@@ -188,7 +187,7 @@ def matching_brace(text: str, open_brace: int) -> int | None:
 
 def inherent_public_functions_from_text(text: str, type_name: str) -> set[str]:
     names: set[str] = set()
-    impl_re = re.compile(rf"\bimpl\s+{re.escape(type_name)}\s*\{{")
+    impl_re = re.compile(rf"\bimpl\s+{re.escape(type_name)}(?:<[^{{}}]*>)?\s*\{{")
     for match in impl_re.finditer(text):
         open_brace = text.find("{", match.start())
         if open_brace == -1:
@@ -365,7 +364,7 @@ def check_forbidden_live_docs(include_rendered: bool) -> list[Finding]:
 def collect_findings(*, include_rendered: bool) -> list[Finding]:
     findings = []
     findings.extend(check_removed_tensor_modules())
-    findings.extend(check_surface("EagerTensor", EAGER_SURFACE_FILES, EAGER_REQUIRED))
+    findings.extend(check_surface("EagerSession", EAGER_SURFACE_FILES, EAGER_REQUIRED))
     findings.extend(check_surface("TracedTensor", TRACED_SURFACE_FILES, TRACED_REQUIRED))
     findings.extend(check_forbidden_live_docs(include_rendered))
     return findings

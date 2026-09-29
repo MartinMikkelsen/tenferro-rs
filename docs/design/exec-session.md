@@ -30,10 +30,10 @@ Runtime::run_compiled(program, inputs)
               └── fused backend segment
                     └── backend.with_backend_session(|exec| {
                             for inst in segment {
-                                exec.transpose(...)
+                                exec.transpose_read(...)?
                                 exec.reclaim_buffer(...)
                             }
-                        })
+                        })??
 ```
 
 ## Why Sessions
@@ -102,30 +102,62 @@ cuTENSOR/cuSOLVER/cuBLAS wrapper against the backend's `CudaRuntime`.
 GPU exec sessions run the closure on the calling thread, so `Send` is not
 needed for GPU; the trait still requires it because the CPU managed path does.
 Both GPU overrides call `with_session_entry_guard`
-(`crates/tenferro-tensor/src/backend.rs`), so nested entry is caught by the
-portable in-session guard — in **debug builds only**. Release-mode nested-entry
-enforcement for the GPU overrides is still open (see
-`session-oriented-concrete-apis.md`).
+(`crates/tenferro-tensor/src/backend.rs`), so a nested entry on the same thread
+is rejected with `SessionEntryError::Reentered` before its closure runs, in every
+build profile.
 
-### Default (no-op)
+Session entry is fallible (#1938 D6): `with_backend_session` returns
+`Result<R, SessionEntryError>`, and every rejection happens before the closure
+runs. CPU admission waits in FIFO order for a permit that another thread holds
+and reports only states waiting cannot resolve (same-thread reentry, a busy
+caller-managed domain, a scope-witness mismatch, poisoned arbiter state,
+executor-entry failure). The closure's own value, including its own `Result`, is
+returned unchanged inside `Ok`; see
+[`tensor-session-redesign-1938.md`](tensor-session-redesign-1938.md) D6.
 
-Backends that don't need session batching use the default implementation
-which wraps the backend itself as a `BackendSession` via `BackendSessionAdapter`.
+### Test and custom backends
+
+A backend without resource admission wraps its closure in the portable
+`with_session_entry_guard` and passes itself as the session (the pattern the
+test backends use). A custom session that composes a standard one forwards the
+operations it does not override; it exposes the standard session's native
+services only by forwarding `native_session()`.
 
 ## Trait Relationship
 
 ```
-TensorBackend          — factory: creates sessions, owns long-lived state
-  with_backend_session()  — creates execution scope
-  dot_general()        — standalone op (with per-op context entry)
-  ...
+BackendSessionHost      — owner: admission, long-lived resources
+  with_backend_session() -> Result<R, SessionEntryError>
+  with_backend_session_cached()  (runtime-cache-aware, hidden)
 
-BackendSession             — session surface: ops without context re-entry
-  dot_general()        — op within session (no install/set_device)
-  reclaim_buffer()     — return buffer to pool within session
-  ...
+BackendSession          — the only operation surface
+  add_read(), dot_general_read(), reduce_sum_read(), ...
+  *_into / *_read_into   — overwrite a caller-provided output
+  native_session() -> Option<NativeSessionRef<'_>>   (default None)
 ```
 
-`TensorBackend` methods remain for use outside `eval_exec_ir` (e.g.,
-standalone tensor operations, linalg `solve` multi-step logic).
-`BackendSession` is used only by the eval loop.
+Owners no longer carry one-shot operation methods (#1929); every operation,
+including standalone tensor operations, linalg multi-step logic, extension
+runtimes and eager execution, runs on a borrowed `BackendSession`.
+
+## Native services
+
+Backend-leaf services that are not part of the portable operation surface
+(the entered CPU execution context and buffer pool, the CubeCL client, the
+WebGPU device) are reached through the leaf's safe visitor:
+`tenferro_cpu::with_cpu_exec_session`, `tenferro_gpu::cuda::with_cuda_exec_session`
+and the WebGPU equivalent. Each visitor asks the session for its opaque
+`NativeSessionRef`, checks the leaf's crate-private marker, and performs the
+single audited cast inside the leaf; the recovered reference cannot outlive
+the session borrow. A token cannot be created in safe code and is not `Send`
+or `Clone` (#1938 D7).
+
+## Evaluation-wide scope (A2) is deferred
+
+Opening one CPU execution scope for a whole evaluation or backward pass (the
+`with_evaluation_scope` hook) is deliberately not implemented: a second
+same-domain handle proves neither the lock order against the eager backend
+owner nor single ownership of pools and caches. Operations use the existing
+borrowed session at named boundaries, and the session-entry audit keeps the
+hook at zero library call sites. See `explicit-session-boundary.md` and
+`tensor-session-redesign-1938.md` D12.

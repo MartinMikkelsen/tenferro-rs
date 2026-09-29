@@ -40,7 +40,7 @@ backend.with_backend_session(|session| {
     session.with_faer_parallelism(|parallel| {
         faer_operation(..., parallel)
     })
-})?;
+})??;
 ```
 
 This capability supplies the session-selected `faer::Par`: managed multi-thread

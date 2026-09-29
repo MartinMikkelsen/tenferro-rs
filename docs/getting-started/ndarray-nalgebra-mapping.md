@@ -105,8 +105,8 @@ backends are pushed into method signatures. Compare with `ndarray`'s
 
 | Tier | Tenferro | Notes |
 | --- | --- | --- |
-| Direct | `backend.with_backend_session(\|s\| a.matmul(&b, s))?` | explicit backend session argument |
-| Eager | `a.matmul(&b)?` | `EagerRuntime` owns the backend |
+| Direct | `backend.with_backend_session(\|s\| a.matmul(&b, s))??` | explicit backend session argument |
+| Eager | `runtime.with_eager_session(\|s\| s.matmul(&a, &b))??` | `EagerRuntime` owns the borrowed backend session |
 | Traced | `a.matmul(&b)?` | builds a graph; returns `Result` |
 
 <!-- snippet-source: docs/tutorial-code/src/bin/tenferro_compute_skill.rs#concrete-operation -->
@@ -125,7 +125,7 @@ let weights = TypedTensor::<f64>::from_vec_col_major(
     vec![3, 2],
     vec![0.5, -1.0, 1.5, 1.0, 2.0, -0.5],
 )?;
-let projected = backend.with_backend_session(|session| x.matmul(&weights, session))?;
+let projected = backend.with_backend_session(|session| x.matmul(&weights, session))??;
 assert_eq!(projected.shape(), &[2, 2]);
 assert_eq!(projected.host_data()?, &[3.0, 6.0, 3.5, 11.0]);
 ```

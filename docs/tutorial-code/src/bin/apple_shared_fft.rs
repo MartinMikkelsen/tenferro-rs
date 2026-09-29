@@ -42,18 +42,18 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut cpu = context.cpu_backend().clone();
     let cpu_first =
-        cpu.with_backend_session(|session| unified.rfft(None, 0, FftNorm::Backward, session))?;
+        cpu.with_backend_session(|session| unified.rfft(None, 0, FftNorm::Backward, session))??;
     assert_eq!(f32_identity(&unified), input_identity);
 
     let mut metal = context.metal_backend().clone();
-    let metal_result =
-        metal.with_backend_session(|session| unified.rfft(None, 0, FftNorm::Backward, session))?;
+    let metal_result = metal
+        .with_backend_session(|session| unified.rfft(None, 0, FftNorm::Backward, session))??;
     metal.synchronize()?;
     assert_eq!(f32_identity(&unified), input_identity);
 
     let mut cpu = context.cpu_backend().clone();
     let cpu_again =
-        cpu.with_backend_session(|session| unified.rfft(None, 0, FftNorm::Backward, session))?;
+        cpu.with_backend_session(|session| unified.rfft(None, 0, FftNorm::Backward, session))??;
     assert_eq!(f32_identity(&unified), input_identity);
 
     let (Some(cpu_first), Some(metal_result), Some(cpu_again)) = (
@@ -101,7 +101,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let after_c64_creation = context.transfer_stats();
     let mut cpu = context.cpu_backend().clone();
     let cpu_c64 =
-        cpu.with_backend_session(|session| c64.fft(None, 0, FftNorm::Backward, session))?;
+        cpu.with_backend_session(|session| c64.fft(None, 0, FftNorm::Backward, session))??;
     let Ok(cpu_c64) = cpu_c64.into_typed::<num_complex::Complex64>() else {
         panic!("C64 FFT must return C64")
     };
@@ -109,7 +109,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut metal = context.metal_backend().clone();
     let error = metal
-        .with_backend_session(|session| c64.fft(None, 0, FftNorm::Backward, session))
+        .with_backend_session(|session| c64.fft(None, 0, FftNorm::Backward, session))?
         .expect_err("Metal must reject C64");
     assert!(matches!(error, Error::Unsupported { .. }));
     assert_eq!(context.transfer_stats(), after_c64_creation);

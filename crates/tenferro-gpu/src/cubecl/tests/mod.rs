@@ -40,6 +40,7 @@ pub(crate) fn with_cuda_exec<R: Send>(
 ) -> R {
     backend
         .with_backend_session(|session| with_cuda_exec_session(session, f).expect("CUDA session"))
+        .unwrap()
 }
 
 fn cpu_backend() -> CpuBackend {

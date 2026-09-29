@@ -143,11 +143,22 @@ unsafe impl Send for CufftLibrary {}
 unsafe impl Sync for CufftLibrary {}
 
 impl CufftLibrary {
-    /// Load one cuFFT library and all symbols required by the FFT backend.
+    /// The process-wide cuFFT library with all symbols required by the FFT
+    /// backend, loaded on first success.
+    ///
+    /// Handles share one loaded library and never unload it, so creating and
+    /// dropping backends does not reload the vendor library each cycle
+    /// (#1924). A failed load is not cached, and `TENFERRO_CUFFT_PATH` is read
+    /// until the first success.
     pub(crate) fn load() -> Result<Arc<Self>, CudaFftError> {
-        Self::load_from_paths(cufft_library_candidates(
+        static LOADED: std::sync::OnceLock<Arc<CufftLibrary>> = std::sync::OnceLock::new();
+        if let Some(library) = LOADED.get() {
+            return Ok(Arc::clone(library));
+        }
+        let library = Self::load_from_paths(cufft_library_candidates(
             std::env::var_os("TENFERRO_CUFFT_PATH").as_deref(),
-        ))
+        ))?;
+        Ok(Arc::clone(LOADED.get_or_init(|| library)))
     }
 
     #[cfg(test)]

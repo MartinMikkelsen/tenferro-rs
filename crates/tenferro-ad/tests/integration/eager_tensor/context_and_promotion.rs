@@ -67,7 +67,13 @@ fn variable_from_creates_tracked_leaf() {
     assert_eq!(p.ctx_id(), ctx.id());
     assert!(p.tracks_grad());
     // backward should work on a tracked variable
-    let loss = p.exp().unwrap().reduce_sum(Some(&[0])).unwrap();
+    let loss = ctx
+        .with_eager_session(|session| {
+            let y = session.exp(&p)?;
+            session.reduce_sum(&y, Some(&[0]))
+        })
+        .unwrap()
+        .unwrap();
     let _ = loss.backward().unwrap();
     assert!(p.grad().unwrap().is_some());
 }
@@ -86,7 +92,7 @@ fn cross_context_add_rejected() {
         ctx_b,
     )
     .unwrap();
-    let msg = match x.add(&y) {
+    let msg = match x.runtime().with_eager_session(|s| s.add(&x, &y)).unwrap() {
         Err(e) => e.to_string(),
         Ok(_) => panic!("expected error"),
     };
@@ -107,7 +113,7 @@ fn cross_context_mul_rejected() {
         ctx_b,
     )
     .unwrap();
-    let msg = match x.mul(&y) {
+    let msg = match x.runtime().with_eager_session(|s| s.mul(&x, &y)).unwrap() {
         Err(e) => e.to_string(),
         Ok(_) => panic!("expected error"),
     };
@@ -128,7 +134,7 @@ fn cross_context_tracked_tensors_rejected() {
         ctx_b,
     )
     .unwrap();
-    let msg = match x.add(&y) {
+    let msg = match x.runtime().with_eager_session(|s| s.add(&x, &y)).unwrap() {
         Err(e) => e.to_string(),
         Ok(_) => panic!("expected error"),
     };
@@ -147,7 +153,7 @@ fn constant_from_can_cross_context() {
     let c = ctx
         .constant_from(Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]).unwrap())
         .unwrap();
-    let z = x.add(&c).unwrap();
+    let z = ctx.with_eager_session(|s| s.add(&x, &c)).unwrap().unwrap();
     assert_eq!(f64_data(&z.to_tensor().unwrap()), &[4.0, 6.0]);
 }
 
@@ -170,7 +176,11 @@ fn detach_into_different_context() {
         ctx_b,
     )
     .unwrap();
-    let z = d.add(&y).unwrap();
+    let z = d
+        .runtime()
+        .with_eager_session(|s| s.add(&d, &y))
+        .unwrap()
+        .unwrap();
     assert_eq!(f64_data(&z.to_tensor().unwrap()), &[4.0, 6.0]);
 }
 
@@ -185,7 +195,13 @@ fn detach_into_still_accessible_in_original_context() {
     .unwrap();
     let d = x.detach_into(&ctx_b).unwrap();
     // Original tensor still in ctx_a, should work fine
-    let loss = x.exp().unwrap().reduce_sum(Some(&[0])).unwrap();
+    let loss = ctx_a
+        .with_eager_session(|session| {
+            let y = session.exp(&x)?;
+            session.reduce_sum(&y, Some(&[0]))
+        })
+        .unwrap()
+        .unwrap();
     let _ = loss.backward().unwrap();
     assert!(x.grad().unwrap().is_some());
     // d is in ctx_b, x is in ctx_a
@@ -206,7 +222,7 @@ fn promote_i64_add_f64_eager() {
     )
     .unwrap();
     // I64 + F64 should promote to F64
-    let z = a.add(&b).unwrap();
+    let z = ctx.with_eager_session(|s| s.add(&a, &b)).unwrap().unwrap();
     assert_eq!(z.dtype(), DType::F64);
     assert_eq!(z.value().unwrap().as_slice::<f64>().unwrap(), &[1.5, 3.0]);
 }
@@ -225,7 +241,11 @@ fn promote_i64_mul_c64_eager() {
     )
     .unwrap();
     // I64 * C64 should promote to C64
-    let z = a.mul(&b).unwrap();
+    let z = a
+        .runtime()
+        .with_eager_session(|s| s.mul(&a, &b))
+        .unwrap()
+        .unwrap();
     assert_eq!(z.dtype(), DType::C64);
     assert_eq!(
         z.value().unwrap().as_slice::<Complex64>().unwrap(),
@@ -248,11 +268,14 @@ fn clamp_promotes_all_three_operands_to_common_dtype() {
     .unwrap();
     let upper = EagerTensor::from_tensor_in(
         Tensor::from_vec_col_major(vec![2], vec![1.5_f64, 1.5]).unwrap(),
-        ctx,
+        ctx.clone(),
     )
     .unwrap();
 
-    let out = input.clamp(&lower, &upper).unwrap();
+    let out = ctx
+        .with_eager_session(|session| session.clamp(&input, &lower, &upper))
+        .unwrap()
+        .unwrap();
 
     assert_eq!(out.dtype(), DType::F64);
     assert_eq!(out.value().unwrap().as_slice::<f64>().unwrap(), &[1.0, 1.5]);
@@ -272,7 +295,11 @@ fn promote_f32_add_f64_eager() {
     )
     .unwrap();
     // F32 + F64 should promote to F64
-    let z = a.add(&b).unwrap();
+    let z = a
+        .runtime()
+        .with_eager_session(|s| s.add(&a, &b))
+        .unwrap()
+        .unwrap();
     assert_eq!(z.dtype(), DType::F64);
     assert_eq!(z.value().unwrap().as_slice::<f64>().unwrap(), &[1.5, 3.0]);
 }
@@ -291,7 +318,11 @@ fn promote_same_dtype_no_conversion_penalty() {
         ctx,
     )
     .unwrap();
-    let z = a.add(&b).unwrap();
+    let z = a
+        .runtime()
+        .with_eager_session(|s| s.add(&a, &b))
+        .unwrap()
+        .unwrap();
     assert_eq!(z.dtype(), DType::F64);
     assert_eq!(z.value().unwrap().as_slice::<f64>().unwrap(), &[4.0, 6.0]);
 }
@@ -312,9 +343,9 @@ fn eager_input<T: TensorScalar>(ctx: &Arc<EagerRuntime>, data: &[T], tracked: bo
         EagerTensor::requires_grad_in(tensor, Arc::clone(ctx)).unwrap()
     } else {
         // Keep inactive operands on the active-edge path as lazy constants.
-        EagerTensor::from_tensor_in(tensor, Arc::clone(ctx))
+        let input = EagerTensor::from_tensor_in(tensor, Arc::clone(ctx)).unwrap();
+        ctx.with_eager_session(|s| s.reshape(&input, [data.len()]))
             .unwrap()
-            .reshape([data.len()])
             .unwrap()
     }
 }
@@ -342,11 +373,16 @@ fn run_mixed_add_case<R, C>(
             let ctx = test_ctx();
             let real = eager_input(&ctx, real_data, active_real);
             let complex = eager_input(&ctx, complex_data, !active_real);
-            let output = if real_first {
-                real.add(&complex).unwrap()
-            } else {
-                complex.add(&real).unwrap()
-            };
+            let output = ctx
+                .with_eager_session(|s| {
+                    if real_first {
+                        s.add(&real, &complex)
+                    } else {
+                        s.add(&complex, &real)
+                    }
+                })
+                .unwrap()
+                .unwrap();
             assert_eq!(output.dtype(), output_dtype);
             assert_exact_values(&output, expected_sum);
 
@@ -430,13 +466,17 @@ fn mixed_add_semantic_jvp_vjp_promotes_f64_c64_and_f32_c32_in_both_orders() {
 fn temporary_mixed_promotion_graph(ctx: &Arc<EagerRuntime>) -> (EagerTensor, EagerTensor) {
     let x = eager_input(ctx, &[-4.0_f64], true);
     let output = {
-        let magnitude_input = x.neg().unwrap();
+        let magnitude_input = ctx.with_eager_session(|s| s.neg(&x)).unwrap().unwrap();
         let magnitude = {
             let exponent = eager_input(ctx, &[0.5_f64], false);
-            magnitude_input.pow(&exponent).unwrap()
+            ctx.with_eager_session(|s| s.pow(&magnitude_input, &exponent))
+                .unwrap()
+                .unwrap()
         };
         let factor = eager_input(ctx, &[Complex64::new(0.0, 1.0)], false);
-        magnitude.mul(&factor).unwrap()
+        ctx.with_eager_session(|s| s.mul(&magnitude, &factor))
+            .unwrap()
+            .unwrap()
     };
     (x, output)
 }
@@ -445,7 +485,13 @@ fn temporary_mixed_promotion_graph(ctx: &Arc<EagerRuntime>) -> (EagerTensor, Eag
 fn temporary_constants_before_mixed_promotion_retain_metadata_for_derivatives() {
     let ctx = test_ctx();
     let (x, output) = temporary_mixed_promotion_graph(&ctx);
-    output.reduce_sum(Some(&[0])).unwrap().backward().unwrap();
+    output
+        .runtime()
+        .with_eager_session(|s| s.reduce_sum(&output, Some(&[0])))
+        .unwrap()
+        .unwrap()
+        .backward()
+        .unwrap();
     assert_eq!(
         x.grad().unwrap().unwrap().as_slice::<f64>().unwrap(),
         &[0.0_f64]
@@ -469,11 +515,14 @@ fn concatenate_with_temporary_exactified_input(
     ctx: &Arc<EagerRuntime>,
     tracked: &EagerTensor,
 ) -> EagerTensor {
-    let temporary = eager_input(ctx, &[3.0_f64, 4.0], false).neg().unwrap();
-    EagerTensor::concatenate(&[tracked, &temporary], 0)
-        .unwrap()
-        .neg()
-        .unwrap()
+    let input = eager_input(ctx, &[3.0_f64, 4.0], false);
+    ctx.with_eager_session(|session| {
+        let temporary = session.neg(&input)?;
+        let joined = session.concatenate(&[tracked, &temporary], 0)?;
+        session.neg(&joined)
+    })
+    .unwrap()
+    .unwrap()
 }
 
 #[test]
@@ -498,7 +547,10 @@ fn mixed_concatenate_semantic_replay_promotes_inputs() {
         &[Complex64::new(3.0, 0.5), Complex64::new(-4.0, -1.25)],
         true,
     );
-    let output = EagerTensor::concatenate(&[&real, &complex], 0).unwrap();
+    let output = ctx
+        .with_eager_session(|session| session.concatenate(&[&real, &complex], 0))
+        .unwrap()
+        .unwrap();
     assert_eq!(output.dtype(), DType::C64);
     assert_exact_values(
         &output,

@@ -13,9 +13,9 @@ use crate::provider::{
     CpuExecutionContext, CpuGemmProvider, CpuGemmRequest, CpuGroupedGemmRequest,
     CpuProviderOutcome, CpuUninitGemmProvider,
 };
-use crate::{
-    CpuDomainId, CpuPlacementGuarantee, CpuProviderBundle, ExternalCpuDomain, ResolvedCpuPlacement,
-};
+use crate::{CpuDomainId, CpuProviderBundle, ExternalCpuDomain, ResolvedCpuPlacement};
+use tenferro_tensor::BackendSessionHost;
+use tenferro_tensor::TensorRead;
 use tenferro_tensor::{DType, DotGeneralConfig};
 
 /// Build a CPU backend that runs a custom provider bundle on one managed
@@ -31,7 +31,6 @@ fn backend_with_bundle(bundle: CpuProviderBundle) -> CpuBackend {
             ResolvedCpuPlacement::AllAllowed { cpus },
             Arc::new(CpuContext::with_threads(1).unwrap()),
             NonZeroUsize::new(1).unwrap(),
-            CpuPlacementGuarantee::AdvisoryDeclared,
         )
         .unwrap()],
         bundle,
@@ -234,7 +233,16 @@ fn opted_out_gemm_provider_keeps_zeroed_dot_output_values() {
     let rhs = Tensor::from_typed::<f64>(
         TypedTensor::from_vec_col_major(vec![3, 2], vec![1.0, 5.0, 2.0, 6.0, 3.0, 7.0]).unwrap(),
     );
-    let output = backend.dot_general(&lhs, &rhs, &matmul_config()).unwrap();
+    let output = backend
+        .with_backend_session(|__s| {
+            __s.dot_general_read(
+                TensorRead::from_tensor(&lhs),
+                TensorRead::from_tensor(&rhs),
+                &matmul_config(),
+            )
+        })
+        .unwrap()
+        .unwrap();
 
     assert_eq!(output.as_slice::<f64>().unwrap(), &[17.0, 41.0, 33.0, 81.0]);
     // Without the witness the uninit path is never attempted; the zeroed path
@@ -258,7 +266,16 @@ fn opted_in_gemm_provider_unsupported_falls_back_to_zeroed_dot() {
     let rhs = Tensor::from_typed::<f64>(
         TypedTensor::from_vec_col_major(vec![3, 2], vec![1.0, 5.0, 2.0, 6.0, 3.0, 7.0]).unwrap(),
     );
-    let output = backend.dot_general(&lhs, &rhs, &matmul_config()).unwrap();
+    let output = backend
+        .with_backend_session(|__s| {
+            __s.dot_general_read(
+                TensorRead::from_tensor(&lhs),
+                TensorRead::from_tensor(&rhs),
+                &matmul_config(),
+            )
+        })
+        .unwrap()
+        .unwrap();
 
     assert_eq!(output.as_slice::<f64>().unwrap(), &[17.0, 41.0, 33.0, 81.0]);
     // The uninit attempt fired once and was discarded; the zeroed fallback
@@ -341,8 +358,26 @@ fn uninit_dot_path_values_match_zeroed_path_for_allocated_dots() {
     ];
 
     for (lhs, rhs, config) in cases {
-        let uninit_output = uninit_backend.dot_general(&lhs, &rhs, &config).unwrap();
-        let zeroed_output = zeroed_backend.dot_general(&lhs, &rhs, &config).unwrap();
+        let uninit_output = uninit_backend
+            .with_backend_session(|__s| {
+                __s.dot_general_read(
+                    TensorRead::from_tensor(&lhs),
+                    TensorRead::from_tensor(&rhs),
+                    &config,
+                )
+            })
+            .unwrap()
+            .unwrap();
+        let zeroed_output = zeroed_backend
+            .with_backend_session(|__s| {
+                __s.dot_general_read(
+                    TensorRead::from_tensor(&lhs),
+                    TensorRead::from_tensor(&rhs),
+                    &config,
+                )
+            })
+            .unwrap()
+            .unwrap();
         assert_eq!(uninit_output.shape(), zeroed_output.shape());
         assert_eq!(
             uninit_output.as_slice::<f64>().unwrap(),
@@ -377,10 +412,12 @@ fn uninit_dot_path_values_match_zeroed_path_for_allocated_dots() {
     );
     let config = matmul_config();
     let uninit_output = uninit_backend
-        .dot_general_with_conj(&lhs, &rhs, &config, true, true)
+        .with_backend_session(|__s| __s.dot_general_with_conj(&lhs, &rhs, &config, true, true))
+        .unwrap()
         .unwrap();
     let zeroed_output = zeroed_backend
-        .dot_general_with_conj(&lhs, &rhs, &config, true, true)
+        .with_backend_session(|__s| __s.dot_general_with_conj(&lhs, &rhs, &config, true, true))
+        .unwrap()
         .unwrap();
     assert_eq!(
         uninit_output.as_slice::<Complex64>().unwrap(),
@@ -390,4 +427,112 @@ fn uninit_dot_path_values_match_zeroed_path_for_allocated_dots() {
     // The executing witness handled every direct case above (the conjugated
     // complex dot included); only the zeroed fallback never fires.
     assert_eq!(uninit_calls.load(Ordering::Relaxed), 5);
+}
+
+fn allocated_dot(
+    backend: &mut CpuBackend,
+    lhs: &Tensor,
+    rhs: &Tensor,
+    config: &DotGeneralConfig,
+) -> Tensor {
+    backend
+        .with_backend_session(|__s| {
+            __s.dot_general_read(
+                TensorRead::from_tensor(lhs),
+                TensorRead::from_tensor(rhs),
+                config,
+            )
+        })
+        .unwrap()
+        .unwrap()
+}
+
+#[test]
+fn canonical_packing_contraction_writes_into_the_uninit_destination() {
+    let executing = Arc::new(ExecutingUninitGemmProvider {
+        gemm_calls: Arc::new(AtomicUsize::new(0)),
+        uninit_calls: Arc::new(AtomicUsize::new(0)),
+    });
+    let gemm_calls = Arc::clone(&executing.gemm_calls);
+    let uninit_calls = Arc::clone(&executing.uninit_calls);
+    let mut uninit_backend = backend_with_bundle(dot_bundle(executing));
+    let mut zeroed_backend = backend_with_bundle(dot_bundle(Arc::new(OptOutGemmProvider {
+        gemm_calls: Arc::new(AtomicUsize::new(0)),
+    })));
+
+    // lhs [2, 3, 2] contracts its middle axis, so its free axes 0 and 2 are not
+    // one fusable group and the direct plan needs canonical packing.
+    let lhs = Tensor::from_typed::<f64>(
+        TypedTensor::from_vec_col_major(vec![2, 3, 2], (1..=12).map(f64::from).collect()).unwrap(),
+    );
+    let rhs = Tensor::from_typed::<f64>(
+        TypedTensor::from_vec_col_major(vec![3, 2], vec![1.0, -1.0, 2.0, 0.5, 3.0, -2.0]).unwrap(),
+    );
+    let config = DotGeneralConfig {
+        lhs_contracting_dims: [1].as_slice().into(),
+        rhs_contracting_dims: [0].as_slice().into(),
+        lhs_batch_dims: [].as_slice().into(),
+        rhs_batch_dims: [].as_slice().into(),
+    };
+
+    let uninit_output = allocated_dot(&mut uninit_backend, &lhs, &rhs, &config);
+    let zeroed_output = allocated_dot(&mut zeroed_backend, &lhs, &rhs, &config);
+
+    assert_eq!(uninit_output.shape(), &[2, 2, 2]);
+    // Reference: out[i, l, n] = sum_j lhs[i, j, l] * rhs[j, n], column-major.
+    let lhs_data = lhs.as_slice::<f64>().unwrap();
+    let rhs_data = rhs.as_slice::<f64>().unwrap();
+    let mut expected = vec![0.0; 8];
+    for n in 0..2 {
+        for l in 0..2 {
+            for i in 0..2 {
+                expected[i + 2 * l + 4 * n] = (0..3)
+                    .map(|j| lhs_data[i + 2 * j + 6 * l] * rhs_data[j + 3 * n])
+                    .sum();
+            }
+        }
+    }
+    assert_eq!(
+        uninit_output.as_slice::<f64>().unwrap(),
+        expected.as_slice()
+    );
+    assert_eq!(
+        uninit_output.as_slice::<f64>().unwrap(),
+        zeroed_output.as_slice::<f64>().unwrap(),
+    );
+    // The packed operands ran through the uninit contract; the zeroed GEMM
+    // path was never taken.
+    assert_eq!(uninit_calls.load(Ordering::Relaxed), 1);
+    assert_eq!(gemm_calls.load(Ordering::Relaxed), 0);
+}
+
+#[test]
+fn all_batch_allocated_dot_skips_the_uninit_gemm() {
+    let executing = Arc::new(ExecutingUninitGemmProvider {
+        gemm_calls: Arc::new(AtomicUsize::new(0)),
+        uninit_calls: Arc::new(AtomicUsize::new(0)),
+    });
+    let gemm_calls = Arc::clone(&executing.gemm_calls);
+    let uninit_calls = Arc::clone(&executing.uninit_calls);
+    let mut backend = backend_with_bundle(dot_bundle(executing));
+
+    let lhs = Tensor::from_typed::<f64>(
+        TypedTensor::from_vec_col_major(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]).unwrap(),
+    );
+    let rhs = Tensor::from_typed::<f64>(
+        TypedTensor::from_vec_col_major(vec![2, 2], vec![5.0, 6.0, 7.0, 8.0]).unwrap(),
+    );
+    let config = DotGeneralConfig {
+        lhs_contracting_dims: [].as_slice().into(),
+        rhs_contracting_dims: [].as_slice().into(),
+        lhs_batch_dims: [0, 1].as_slice().into(),
+        rhs_batch_dims: [0, 1].as_slice().into(),
+    };
+
+    let output = allocated_dot(&mut backend, &lhs, &rhs, &config);
+
+    assert_eq!(output.as_slice::<f64>().unwrap(), &[5.0, 12.0, 21.0, 32.0]);
+    // An elementwise product, not one GEMM per element.
+    assert_eq!(uninit_calls.load(Ordering::Relaxed), 0);
+    assert_eq!(gemm_calls.load(Ordering::Relaxed), 0);
 }

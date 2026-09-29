@@ -35,15 +35,16 @@
 //! assert_eq!(a.shape(), &[2]);
 //! ```
 
-/// Lightweight backend-independent host tensor data model.
-///
-/// Execution-capable tensors and backends in this crate remain separate from
-/// the host-only core model during the crate-boundary split.
+/// Backend-independent rank/layout, dtype and scalar metadata re-exported from
+/// `tenferro-tensor-core`. The tensor types themselves live in this crate.
 pub mod core {
+    pub use crate::{
+        DefaultScalars, DefaultScalarsRef, DefaultScalarsView, HostTensor, HostTensorView,
+    };
     pub use tenferro_tensor_core::{
-        col_major_strides, DType, DynRank, ErrorKind, HostTensor, HostTensorView, IntoShapeVec,
-        Rank, Result, ShapeMismatch, ShapeVec, SliceSpec, StrideVec, Tensor, TensorLayout,
-        TensorRank, TensorRef, TensorScalar, TensorView, ValidationError, ValidationKind,
+        col_major_strides, DType, DynRank, ErrorKind, IntoShapeVec, Rank, Result, ShapeMismatch,
+        ShapeVec, SliceSpec, StrideVec, TensorLayout, TensorRank, TensorScalar, ValidationError,
+        ValidationKind,
     };
 }
 
@@ -74,8 +75,12 @@ pub type Complex64 = Complex<f64>;
 
 pub use tenferro_tensor_core::{
     ErrorKind, IntoRankShape, IntoShapeVec, ShapeMismatch, ShapeVec, SliceSpec, StrideVec,
-    TensorRef, ValidationError, ValidationKind,
+    ValidationError, ValidationKind,
 };
+
+mod erased_host;
+mod host_container;
+mod scalar_set;
 
 pub mod backend;
 pub mod cache;
@@ -83,15 +88,17 @@ pub mod capability;
 pub mod config;
 pub mod dispatch;
 pub mod error;
+mod native_session;
 pub mod prelude;
+mod session_entry;
 pub mod types;
 pub mod validate;
 
 pub use backend::{
-    default_backend_session, with_session_entry_guard, BackendCachedDot, BackendRuntimeCache,
-    BackendSession, BackendSessionHost, ContractionScalar, DotGeneralAccumulation,
-    ElementwiseReadOp, SessionCachedDot, TensorAnalytic, TensorBackend, TensorBackendOps,
-    TensorBuffer, TensorDeviceTransfer, TensorDot, TensorElementwise, TensorFusion, TensorIndexing,
+    with_session_entry_guard, BackendCachedDot, BackendRuntimeCache, BackendSession,
+    BackendSessionHost, ContractionScalar, DotGeneralAccumulation, ElementwiseReadOp,
+    SessionCachedDot, TensorAnalytic, TensorBackend, TensorBackendOps, TensorBuffer,
+    TensorDeviceTransfer, TensorDot, TensorElementwise, TensorFusion, TensorIndexing,
     TensorReduction, TensorStructural, TensorViewCanonicalization,
 };
 pub use cache::{CacheStats, RuntimeCacheControl};
@@ -102,15 +109,25 @@ pub use capability::{
 pub use config::{
     CompareDir, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig,
 };
+pub use erased_host::ErasedHostTensor;
 pub use error::{BoxError, Error, ReinterpretError, Result};
+pub use native_session::NativeSessionRef;
+pub use scalar_set::ScalarSet;
+pub use session_entry::SessionEntryError;
+
+pub use host_container::{
+    DefaultScalars, DefaultScalarsRef, DefaultScalarsView, HostTensor, HostTensorView,
+};
+
 pub use types::{
     col_major_strides, AllocationDomainId, AllocationId, BackendStorage, BackendStorageHandle,
     ColMajorView, ColMajorViewMut, CpuDomainId, DType, DeviceAccessError, DeviceAccessRequest,
-    DeviceId, DeviceKind, DynRank, GpuBackendKind, HostAccessError, HostReadGuard, HostWriteGuard,
-    MemoryKind, Placement, PreparedDeviceAccess, Rank, SharedTensorAllocationDomain, StorageBuffer,
-    StridedSliceSpec, Tensor, TensorLayout, TensorRank, TensorRead, TensorScalar, TensorStorageRef,
-    TensorStorageRefMut, TensorValue, TensorView, TensorViewMut, TensorWrite, TypedTensor,
-    TypedTensorView, TypedTensorViewMut, TypedTensorViewMutSplit, TypedTensorWrite,
+    DeviceId, DeviceKind, DynRank, Dynamic, Gpu, GpuBackendKind, Host, HostAccessError,
+    HostReadGuard, HostWriteGuard, MemoryKind, Placement, PreparedDeviceAccess, Rank,
+    Representation, SharedTensorAllocationDomain, StorageBuffer, StridedSliceSpec, Tensor,
+    TensorLayout, TensorRank, TensorRead, TensorScalar, TensorStorageRef, TensorStorageRefMut,
+    TensorValue, TensorView, TensorViewMut, TensorWrite, TypedTensor, TypedTensorView,
+    TypedTensorViewMut, TypedTensorViewMutSplit, TypedTensorWrite,
 };
 
 mod storage;

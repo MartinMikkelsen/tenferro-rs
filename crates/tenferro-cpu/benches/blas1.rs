@@ -26,6 +26,7 @@ fn bench_axpby(c: &mut Criterion) {
                                     TensorWrite::from_tensor(black_box(&mut fused)),
                                 )
                             })
+                            .unwrap()
                             .unwrap();
                     });
                 },

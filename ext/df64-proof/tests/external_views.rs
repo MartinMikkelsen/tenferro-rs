@@ -8,7 +8,7 @@
 use tenferro_cpu::scalar_fold;
 use tenferro_df64_proof::{Df64, Df64Add};
 use tenferro_tensor::{DType, Tensor};
-use tenferro_tensor_core::{ErasedHostTensor, HostTensor};
+use tenferro_tensor::{ErasedHostTensor, HostTensor};
 
 fn payload(values: &[Df64], shape: &[usize]) -> ErasedHostTensor {
     ErasedHostTensor::new(

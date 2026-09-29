@@ -97,21 +97,18 @@ fn eager_maximum_and_minimum_gradients_match_finite_diff() {
     )
     .unwrap();
 
-    let max_loss = x
-        .maximum(&y)
+    let loss = ctx
+        .with_eager_session(|session| {
+            let max = session.maximum(&x, &y)?;
+            let max_weighted = session.mul(&max, &max_weights_tensor)?;
+            let max_loss = session.reduce_sum(&max_weighted, Some(&[0]))?;
+            let min = session.minimum(&x, &y)?;
+            let min_weighted = session.mul(&min, &min_weights_tensor)?;
+            let min_loss = session.reduce_sum(&min_weighted, Some(&[0]))?;
+            session.add(&max_loss, &min_loss)
+        })
         .unwrap()
-        .mul(&max_weights_tensor)
-        .unwrap()
-        .reduce_sum(Some(&[0]))
         .unwrap();
-    let min_loss = x
-        .minimum(&y)
-        .unwrap()
-        .mul(&min_weights_tensor)
-        .unwrap()
-        .reduce_sum(Some(&[0]))
-        .unwrap();
-    let loss = max_loss.add(&min_loss).unwrap();
     let _ = loss.backward().unwrap();
 
     let grad_x = x.grad().unwrap().unwrap();
@@ -189,11 +186,13 @@ fn eager_select_gradients_match_finite_diff() {
     )
     .unwrap();
 
-    let loss = EagerTensor::select(&condition, &on_true, &on_false)
+    let loss = ctx
+        .with_eager_session(|session| {
+            let selected = session.select(&condition, &on_true, &on_false)?;
+            let weighted = session.mul(&selected, &weights_tensor)?;
+            session.reduce_sum(&weighted, Some(&[0]))
+        })
         .unwrap()
-        .mul(&weights_tensor)
-        .unwrap()
-        .reduce_sum(Some(&[0]))
         .unwrap();
     let _ = loss.backward().unwrap();
 
@@ -257,12 +256,13 @@ fn eager_clamp_gradients_match_finite_diff() {
     )
     .unwrap();
 
-    let loss = input
-        .clamp(&lower, &upper)
+    let loss = ctx
+        .with_eager_session(|session| {
+            let clamped = session.clamp(&input, &lower, &upper)?;
+            let weighted = session.mul(&clamped, &weights_tensor)?;
+            session.reduce_sum(&weighted, Some(&[0]))
+        })
         .unwrap()
-        .mul(&weights_tensor)
-        .unwrap()
-        .reduce_sum(Some(&[0]))
         .unwrap();
     let _ = loss.backward().unwrap();
 
@@ -313,12 +313,16 @@ fn eager_extract_diag_rectangular_gradient_matches_finite_diff() {
     )
     .unwrap();
 
-    let loss = input
-        .extract_diag(0, 1)
+    let diagonal = ctx
+        .with_eager_session(|session| session.extract_diag(&input, 0, 1))
         .unwrap()
-        .mul(&weights_tensor)
+        .unwrap();
+    let loss = ctx
+        .with_eager_session(|s| {
+            let weighted = s.mul(&diagonal, &weights_tensor)?;
+            s.reduce_sum(&weighted, Some(&[0]))
+        })
         .unwrap()
-        .reduce_sum(Some(&[0]))
         .unwrap();
     let _ = loss.backward().unwrap();
 
@@ -353,12 +357,16 @@ fn eager_embed_diag_shifted_axis_gradient_matches_finite_diff() {
     )
     .unwrap();
 
-    let loss = input
-        .embed_diag(1, 0)
+    let embedded = ctx
+        .with_eager_session(|session| session.embed_diag(&input, 1, 0))
         .unwrap()
-        .mul(&weights_tensor)
+        .unwrap();
+    let loss = ctx
+        .with_eager_session(|s| {
+            let weighted = s.mul(&embedded, &weights_tensor)?;
+            s.reduce_sum(&weighted, Some(&[0, 1, 2]))
+        })
         .unwrap()
-        .reduce_sum(Some(&[0, 1, 2]))
         .unwrap();
     let _ = loss.backward().unwrap();
 
@@ -410,11 +418,16 @@ fn eager_concatenate_gradients_match_finite_diff() {
     )
     .unwrap();
 
-    let concatenated = EagerTensor::concatenate(&[&left, &middle, &right], 0).unwrap();
-    let loss = concatenated
-        .mul(&weights_tensor)
+    let concatenated = ctx
+        .with_eager_session(|session| session.concatenate(&[&left, &middle, &right], 0))
         .unwrap()
-        .reduce_sum(Some(&[0]))
+        .unwrap();
+    let loss = ctx
+        .with_eager_session(|s| {
+            let weighted = s.mul(&concatenated, &weights_tensor)?;
+            s.reduce_sum(&weighted, Some(&[0]))
+        })
+        .unwrap()
         .unwrap();
     let _ = loss.backward().unwrap();
 
@@ -485,7 +498,10 @@ fn run_exact_concatenate_case<T>(
     let right = eager_input(&ctx, vec![2, 1], right_data, true);
     let cotangent = eager_input(&ctx, vec![2, 4], cotangent_data, false);
 
-    let output = EagerTensor::concatenate(&[&left, &middle, &right], 1).unwrap();
+    let output = ctx
+        .with_eager_session(|session| session.concatenate(&[&left, &middle, &right], 1))
+        .unwrap()
+        .unwrap();
     assert_values(&output, expected_output);
     assert_values(
         &ctx.vjp(&output, &left, &cotangent).unwrap(),
@@ -578,9 +594,13 @@ fn run_mixed_concatenate_case(tracked_first: bool) {
         false,
     );
     let output = if tracked_first {
-        EagerTensor::concatenate(&[&tracked, &inactive], 1).unwrap()
+        ctx.with_eager_session(|session| session.concatenate(&[&tracked, &inactive], 1))
+            .unwrap()
+            .unwrap()
     } else {
-        EagerTensor::concatenate(&[&inactive, &tracked], 1).unwrap()
+        ctx.with_eager_session(|session| session.concatenate(&[&inactive, &tracked], 1))
+            .unwrap()
+            .unwrap()
     };
 
     let expected_output = if tracked_first {
@@ -626,9 +646,13 @@ fn run_mixed_stack_case<T>(
     let tracked = eager_input(&ctx, vec![2], tracked_data, true);
     let inactive = eager_input(&ctx, vec![2], inactive_data, false);
     let output = if tracked_first {
-        EagerTensor::stack(&[&tracked, &inactive], dim).unwrap()
+        ctx.with_eager_session(|session| session.stack(&[&tracked, &inactive], dim))
+            .unwrap()
+            .unwrap()
     } else {
-        EagerTensor::stack(&[&inactive, &tracked], dim).unwrap()
+        ctx.with_eager_session(|session| session.stack(&[&inactive, &tracked], dim))
+            .unwrap()
+            .unwrap()
     };
     let cotangent = eager_input(&ctx, vec![2, 2], cotangent_data, false);
     let tangent = eager_input(&ctx, vec![2], tangent_data, false);
@@ -706,11 +730,16 @@ fn eager_mixed_stack_vjp_then_jvp_remains_composable() {
     let ctx = test_ctx();
     let tracked = eager_input(&ctx, vec![2], &[2.0_f64, 3.0], true);
     let inactive = eager_input(&ctx, vec![2], &[5.0_f64, 7.0], false);
-    let stacked = EagerTensor::stack(&[&tracked, &inactive], -1).unwrap();
-    let loss = stacked
-        .mul(&stacked)
+    let stacked = ctx
+        .with_eager_session(|session| session.stack(&[&tracked, &inactive], -1))
         .unwrap()
-        .reduce_sum(Some(&[0, 1]))
+        .unwrap();
+    let loss = ctx
+        .with_eager_session(|s| {
+            let squared = s.mul(&stacked, &stacked)?;
+            s.reduce_sum(&squared, Some(&[0, 1]))
+        })
+        .unwrap()
         .unwrap();
     let seed = eager_input(&ctx, vec![], &[1.0_f64], false);
 
@@ -729,7 +758,10 @@ fn eager_concatenate_cache_isolated_for_compatible_shapes() {
 
     let first_left = eager_input(&ctx, vec![2, 1], &[1.0_f64, 2.0], true);
     let first_right = eager_input(&ctx, vec![2, 2], &[3.0_f64, 4.0, 5.0, 6.0], true);
-    let first_output = EagerTensor::concatenate(&[&first_left, &first_right], 1).unwrap();
+    let first_output = ctx
+        .with_eager_session(|session| session.concatenate(&[&first_left, &first_right], 1))
+        .unwrap()
+        .unwrap();
     let first_cotangent = eager_input(
         &ctx,
         vec![2, 3],
@@ -745,7 +777,10 @@ fn eager_concatenate_cache_isolated_for_compatible_shapes() {
 
     let second_left = eager_input(&ctx, vec![2, 2], &[7.0_f64, 8.0, 9.0, 10.0], true);
     let second_right = eager_input(&ctx, vec![2, 1], &[11.0_f64, 12.0], true);
-    let second_output = EagerTensor::concatenate(&[&second_left, &second_right], 1).unwrap();
+    let second_output = ctx
+        .with_eager_session(|session| session.concatenate(&[&second_left, &second_right], 1))
+        .unwrap()
+        .unwrap();
     let second_cotangent = eager_input(
         &ctx,
         vec![2, 3],

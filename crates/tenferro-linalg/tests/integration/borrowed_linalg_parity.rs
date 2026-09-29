@@ -167,7 +167,8 @@ fn borrowed_eig_and_eigvals_match_the_owned_call_for_every_dtype() {
                     tol,
                     &format!("{provider}/{dtype:?} eigvals_read"),
                 );
-            });
+            })
+            .unwrap();
         }
     }
 }
@@ -224,7 +225,8 @@ fn borrowed_eig_consumes_strided_and_reversed_views_without_touching_the_source(
                     1.0e-9,
                     &format!("{provider}/{label} eig_read"),
                 );
-            });
+            })
+            .unwrap();
         }
 
         assert_eq!(
@@ -258,7 +260,8 @@ fn borrowed_eig_falls_back_for_batched_views_and_keeps_batch_shapes() {
                 1.0e-9,
                 provider,
             );
-        });
+        })
+        .unwrap();
     }
 }
 
@@ -277,7 +280,8 @@ fn borrowed_eig_keeps_empty_shapes() {
             let (values, vectors) = TensorRead::from_tensor(&input).eig_read(session).unwrap();
             assert_eq!(values.shape(), &[0]);
             assert_eq!(vectors.shape(), &[0, 0]);
-        });
+        })
+        .unwrap();
     }
 }
 
@@ -295,7 +299,8 @@ fn borrowed_eigvals_rejects_unsupported_dtypes_before_provider_entry() {
                 ErrorKind::Unsupported,
                 "{provider}: integer eigenvalues must be refused"
             );
-        });
+        })
+        .unwrap();
     }
 }
 
@@ -314,24 +319,28 @@ fn faer_eig_view_path_does_not_pool_an_input_copy() {
 
     let mut view_host =
         CpuBackend::with_threads_and_kind(1, CpuBackendKind::Faer).expect("faer CPU backend");
-    view_host.with_backend_session(|session| {
-        TensorRead::from_tensor(&owned)
-            .eigvals_read(session)
-            .unwrap();
-    });
+    view_host
+        .with_backend_session(|session| {
+            TensorRead::from_tensor(&owned)
+                .eigvals_read(session)
+                .unwrap();
+        })
+        .unwrap();
     let view_stats = view_host.buffer_pool_stats().unwrap();
 
     let mut packed_host =
         CpuBackend::with_threads_and_kind(1, CpuBackendKind::Faer).expect("faer CPU backend");
-    packed_host.with_backend_session(|session| {
-        let reversed = base
-            .as_view()
-            .try_slice(&[StridedSliceSpec::reverse(), StridedSliceSpec::reverse()])
-            .unwrap();
-        TensorRead::from_view(TensorView::F64(reversed))
-            .eigvals_read(session)
-            .unwrap();
-    });
+    packed_host
+        .with_backend_session(|session| {
+            let reversed = base
+                .as_view()
+                .try_slice(&[StridedSliceSpec::reverse(), StridedSliceSpec::reverse()])
+                .unwrap();
+            TensorRead::from_view(TensorView::F64(reversed))
+                .eigvals_read(session)
+                .unwrap();
+        })
+        .unwrap();
     let packed_stats = packed_host.buffer_pool_stats().unwrap();
 
     let input_copy_bytes = n * n * std::mem::size_of::<f64>();
@@ -429,7 +438,8 @@ fn borrowed_rank_revealing_qr_matches_the_owned_call() {
                     );
                 }
             }
-        });
+        })
+        .unwrap();
     }
 
     assert_eq!(
@@ -453,7 +463,8 @@ fn borrowed_rank_revealing_qr_keeps_the_zero_and_non_finite_guards() {
             assert_eq!(result.rank.as_slice::<i64>().unwrap(), &[0], "{provider}");
             assert_eq!(result.q.shape(), &[3, 2]);
             assert_eq!(result.r.shape(), &[2, 2]);
-        });
+        })
+        .unwrap();
 
         let non_finite =
             TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![1.0, f64::NAN, 0.0, 1.0])
@@ -468,7 +479,8 @@ fn borrowed_rank_revealing_qr_keeps_the_zero_and_non_finite_guards() {
                 ErrorKind::NumericalFailure,
                 "{provider}: non-finite input must be refused"
             );
-        });
+        })
+        .unwrap();
     }
 }
 
@@ -528,7 +540,8 @@ fn borrowed_triangular_solve_matches_the_owned_call_on_both_sides() {
                         "{provider}: borrowed and owned triangular solve disagree"
                     );
                 }
-            });
+            })
+            .unwrap();
         }
 
         // Right-side solve `X A = B` with a strided `A` view.
@@ -565,7 +578,8 @@ fn borrowed_triangular_solve_matches_the_owned_call_on_both_sides() {
                     "{provider}: right-side borrowed solve disagrees"
                 );
             }
-        });
+        })
+        .unwrap();
     }
 
     assert_eq!(a_base.host_data().unwrap(), a_original.as_slice());
@@ -602,6 +616,7 @@ fn borrowed_triangular_solve_rejects_a_vector_right_hand_side_like_the_owned_cal
                 borrowed.kind(),
                 "{provider}: owned and borrowed triangular solve must refuse alike"
             );
-        });
+        })
+        .unwrap();
     }
 }

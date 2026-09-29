@@ -100,6 +100,15 @@ name = "grouped_gemm"
 harness = false
 
 [[bench]]
+name = "route_matrix"
+harness = false
+
+[[bench]]
+name = "strided_batch_route"
+harness = false
+required-features = ["cpu-blas"]
+
+[[bench]]
 name = "numa_execution"
 harness = false
 required-features = ["cpu-faer"]

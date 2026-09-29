@@ -3,7 +3,7 @@
 use num_complex::{Complex32, Complex64};
 use tenferro_ad::{EagerRuntime, EagerTensor};
 use tenferro_gpu::{apple::AppleContext, webgpu::upload_webgpu_tensor, webgpu::WebGpuRuntime};
-use tenferro_linalg::{EagerTensorLinalgExt, LinalgBackend, TracedTensorLinalgExt};
+use tenferro_linalg::{EagerSessionLinalgExt, LinalgBackend, TracedTensorLinalgExt};
 use tenferro_runtime::{GraphCompiler, TracedTensor};
 use tenferro_tensor::{HostAccessError, Tensor};
 
@@ -181,8 +181,13 @@ fn eager_cholesky_preserves_apple_domain_without_transfers() {
     let before = context.transfer_stats();
     let runtime = EagerRuntime::with_cpu_backend(context.cpu_backend().clone()).unwrap();
     let input_id = f32_ids(&input).1;
-    let eager_input = EagerTensor::from_tensor_in(input, runtime).unwrap();
-    let eager = eager_input.cholesky().unwrap().to_tensor().unwrap();
+    let eager_input = EagerTensor::from_tensor_in(input, runtime.clone()).unwrap();
+    let eager = runtime
+        .with_eager_session(|session| session.cholesky(&eager_input))
+        .unwrap()
+        .unwrap()
+        .to_tensor()
+        .unwrap();
     assert_cholesky_result(input_id, &eager, &context, before);
 }
 

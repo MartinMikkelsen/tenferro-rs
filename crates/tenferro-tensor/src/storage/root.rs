@@ -1082,24 +1082,37 @@ impl OwnedStorage {
         Ok(())
     }
 
-    pub(crate) fn into_host_vec<T: TensorScalar>(mut self) -> Result<Vec<T>, AccessError> {
-        let allocation = self
-            .pin
-            .as_any_mut()
-            .downcast_mut::<HostAllocation<T>>()
-            .ok_or(AccessError::Unsupported {
-                backend: "non-host",
-            })?;
-        // SAFETY: the move-only root pin proves there are no other owners, so
-        // taking the vector cannot race with a provider mapping.
-        let crate::StorageBuffer::Host(data) = (unsafe { &mut *allocation.data.get() }) else {
-            return Err(AccessError::Unsupported {
-                backend: "non-host",
-            });
+    // INVARIANT: a rejected host export must return the unchanged root owner, so
+    // the wide `(Self, AccessError)` pair is the ownership contract.
+    #[allow(clippy::result_large_err)]
+    pub(crate) fn into_host_vec<T: 'static>(mut self) -> Result<Vec<T>, (Self, AccessError)> {
+        let extracted = {
+            match self.pin.as_any_mut().downcast_mut::<HostAllocation<T>>() {
+                Some(allocation) => {
+                    // SAFETY: the move-only root pin proves there are no other
+                    // owners, so taking the vector cannot race with a provider
+                    // mapping.
+                    match unsafe { &mut *allocation.data.get() } {
+                        crate::StorageBuffer::Host(data) => {
+                            let data = std::mem::take(data);
+                            allocation.recycler = None;
+                            Some(data)
+                        }
+                        crate::StorageBuffer::Backend(_) => None,
+                    }
+                }
+                None => None,
+            }
         };
-        let data = std::mem::take(data);
-        allocation.recycler = None;
-        Ok(data)
+        match extracted {
+            Some(data) => Ok(data),
+            None => Err((
+                self,
+                AccessError::Unsupported {
+                    backend: "non-host",
+                },
+            )),
+        }
     }
 }
 

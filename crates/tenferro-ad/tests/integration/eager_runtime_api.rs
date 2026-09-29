@@ -44,7 +44,13 @@ fn eager_runtime_replaces_eager_context_public_name() {
         runtime.clone(),
     )
     .unwrap();
-    let loss = x.mul(&x).unwrap().reduce_sum(Some(&[0])).unwrap();
+    let loss = runtime
+        .with_eager_session(|s| {
+            let squared = s.mul(&x, &x)?;
+            s.reduce_sum(&squared, Some(&[0]))
+        })
+        .unwrap()
+        .unwrap();
 
     loss.backward().unwrap();
 

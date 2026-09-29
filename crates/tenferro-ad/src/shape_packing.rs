@@ -1,10 +1,8 @@
 use std::ops::Range;
 
-use tenferro_tensor::{
-    GatherConfig, SliceConfig, Tensor, TensorDeviceTransfer, TensorRead, TypedTensor,
-};
+use tenferro_tensor::{GatherConfig, SliceConfig, Tensor, TypedTensor};
 
-use crate::eager::EagerTensor;
+use crate::eager::{EagerSession, EagerTensor};
 use crate::error::{Error, Result};
 
 fn normalize_existing_axis(op: &'static str, axis: isize, rank: usize) -> Result<usize> {
@@ -206,7 +204,7 @@ fn apply_slice_axis_config(
 ///     Tensor::from_vec_col_major(vec![3, 4], vec![0.0_f64; 12]).unwrap(),
 ///     ctx,
 /// ).unwrap();
-/// let y = x.slice_builder().axis(0, 0..2).axis_step(1, 0..4, 2).apply().unwrap();
+/// let y = x.runtime().with_eager_session(|s| x.slice_builder().axis(0, 0..2).axis_step(1, 0..4, 2).apply(s))??;
 /// assert_eq!(y.shape(), &[2, 2]);
 /// # Ok::<(), tenferro_ad::Error>(())
 /// ```
@@ -236,7 +234,7 @@ impl<'a> EagerSliceBuilder<'a> {
     ///     Tensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap(),
     ///     ctx,
     /// ).unwrap();
-    /// let y = x.slice_builder().axis(0, 1..3).apply().unwrap();
+    /// let y = x.runtime().with_eager_session(|s| x.slice_builder().axis(0, 1..3).apply(s))??;
     /// assert_eq!(y.shape(), &[2]);
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
@@ -261,7 +259,7 @@ impl<'a> EagerSliceBuilder<'a> {
     ///     Tensor::from_vec_col_major(vec![5], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0]).unwrap(),
     ///     ctx,
     /// ).unwrap();
-    /// let y = x.slice_builder().axis_step(0, 0..5, 2).apply().unwrap();
+    /// let y = x.runtime().with_eager_session(|s| x.slice_builder().axis_step(0, 0..5, 2).apply(s))??;
     /// assert_eq!(y.shape(), &[3]);
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
@@ -283,7 +281,7 @@ impl<'a> EagerSliceBuilder<'a> {
     ///     Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]).unwrap(),
     ///     ctx,
     /// ).unwrap();
-    /// let y = x.slice_builder().take_axis(0, &[2, 0]).apply().unwrap();
+    /// let y = x.runtime().with_eager_session(|s| x.slice_builder().take_axis(0, &[2, 0]).apply(s))??;
     /// assert_eq!(y.shape(), &[2]);
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
@@ -307,7 +305,7 @@ impl<'a> EagerSliceBuilder<'a> {
     ///     Tensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap(),
     ///     ctx,
     /// ).unwrap();
-    /// let y = x.slice_builder().axis(0, 1..4).apply().unwrap();
+    /// let y = x.runtime().with_eager_session(|s| x.slice_builder().axis(0, 1..4).apply(s))??;
     /// assert_eq!(y.shape(), &[3]);
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
@@ -317,7 +315,8 @@ impl<'a> EagerSliceBuilder<'a> {
     /// `DuplicateAxis` when selections address an invalid/repeated axis,
     /// `InvalidArgument` for zero steps or out-of-bounds ranges, or a typed
     /// backend/runtime-state error while applying the selections.
-    pub fn apply(self) -> Result<EagerTensor> {
+    pub fn apply(self, session: &mut EagerSession<'_>) -> Result<EagerTensor> {
+        session.ensure_runtime(self.tensor)?;
         let shape = self.tensor.shape().to_vec();
         let mut seen = vec![false; shape.len()];
         for selection in &self.selections {
@@ -329,11 +328,11 @@ impl<'a> EagerSliceBuilder<'a> {
 
         let mut output = self.tensor.clone();
         if let Some(config) = apply_slice_axis_config("slice_builder", &shape, &self.selections)? {
-            output = output.slice(config)?;
+            output = session.slice(&output, config)?;
         }
         for selection in self.selections {
             if let AxisSelection::Take { axis, indices } = selection {
-                output = output.take_axis(axis, &indices)?;
+                output = session.take_axis(&output, axis, &indices)?;
             }
         }
         Ok(output)
@@ -341,31 +340,6 @@ impl<'a> EagerSliceBuilder<'a> {
 }
 
 impl EagerTensor {
-    /// Slice one axis with an exclusive-end range, keeping all other axes.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
-    ///
-    /// let ctx = EagerRuntime::new()?;
-    /// let x = EagerTensor::from_tensor_in(
-    ///     Tensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap(),
-    ///     ctx,
-    /// ).unwrap();
-    /// let y = x.slice_axis(0, 1..3).unwrap();
-    /// assert_eq!(y.shape(), &[2]);
-    /// # Ok::<(), tenferro_ad::Error>(())
-    /// ```
-    /// # Errors
-    ///
-    /// Returns [`tenferro_tensor::ValidationError::AxisOutOfBounds`] when `axis` is not
-    /// present, `InvalidArgument` when `range` exceeds the axis extent, or a
-    /// typed backend/runtime-state error.
-    pub fn slice_axis(&self, axis: usize, range: Range<usize>) -> Result<Self> {
-        self.slice_builder().axis(axis, range).apply()
-    }
-
     /// Start a rank-preserving slicing builder for this tensor.
     ///
     /// # Examples
@@ -378,41 +352,65 @@ impl EagerTensor {
     ///     Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]).unwrap(),
     ///     ctx,
     /// ).unwrap();
-    /// let y = x.slice_builder().axis(0, 0..2).apply().unwrap();
+    /// let y = x.runtime().with_eager_session(|s| x.slice_builder().axis(0, 0..2).apply(s))??;
     /// assert_eq!(y.shape(), &[2]);
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
     pub fn slice_builder(&self) -> EagerSliceBuilder<'_> {
         EagerSliceBuilder::new(self)
     }
+}
 
-    /// Select entries from one axis using host-known indices.
-    ///
-    /// The index list is primal metadata: gradients flow to `self`, including
-    /// accumulation for repeated indices, but not to the selected positions.
+impl EagerSession<'_> {
+    /// Select positions from one axis using a borrowed session.
     ///
     /// # Examples
-    ///
-    /// ```
-    /// use tenferro_cpu::CpuBackend;
-    /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
-    ///
-    /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
-    /// let x = EagerTensor::from_tensor_in(
-    ///     Tensor::from_vec_col_major(vec![3], vec![10.0_f64, 20.0, 30.0]).unwrap(),
-    ///     ctx,
-    /// ).unwrap();
-    /// let y = x.take_axis(0, &[2, 0]).unwrap();
-    ///
-    /// assert_eq!(y.value().unwrap().as_slice::<f64>().unwrap(), &[30.0, 10.0]);
+    /// ```rust
+    /// use tenferro_ad::{EagerRuntime, Tensor};
+    /// let ctx = EagerRuntime::new()?;
+    /// let result = ctx.with_eager_session(|s| {
+    ///     let x = s.constant_from(Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0])?)?;
+    ///     s.index_select(&x, -1, &[2, 0])
+    /// })??;
+    /// assert_eq!(result.value()?.as_slice::<f64>()?, &[3.0, 1.0]);
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
     /// # Errors
+    /// Returns a typed foreign-runtime, invalid-axis/index, or backend error.
+    pub fn index_select(
+        &mut self,
+        tensor: &EagerTensor,
+        axis: isize,
+        positions: &[usize],
+    ) -> Result<EagerTensor> {
+        self.ensure_runtime(tensor)?;
+        let (indices, config) = index_select_config(tensor.shape(), axis, positions)?;
+        let indices = self.constant_from_host(indices)?;
+        self.gather(tensor, &indices, config)
+    }
+
+    /// Select entries from an axis by host-known positions.
     ///
-    /// Returns [`tenferro_tensor::ValidationError::AxisOutOfBounds`] for an invalid axis,
-    /// `InvalidArgument` when an index is outside the axis extent or cannot fit
-    /// in the backend index dtype, or a typed backend/runtime-state error.
-    pub fn take_axis(&self, axis: usize, indices: &[usize]) -> Result<Self> {
+    /// # Examples
+    /// ```rust
+    /// use tenferro_ad::{EagerRuntime, Tensor};
+    /// let ctx = EagerRuntime::new()?;
+    /// let result = ctx.with_eager_session(|s| {
+    ///     let x = s.constant_from(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?)?;
+    ///     s.take_axis(&x, 0, &[1])
+    /// })??;
+    /// assert_eq!(result.value()?.as_slice::<f64>()?, &[2.0]);
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
+    /// # Errors
+    /// Returns a typed foreign-runtime, invalid-axis/index, or backend error.
+    pub fn take_axis(
+        &mut self,
+        tensor: &EagerTensor,
+        axis: usize,
+        positions: &[usize],
+    ) -> Result<EagerTensor> {
+        self.ensure_runtime(tensor)?;
         let axis = isize::try_from(axis).map_err(|_| {
             Error::TensorRuntime(tenferro_tensor::Error::invalid_argument(
                 "take_axis",
@@ -420,156 +418,113 @@ impl EagerTensor {
                 format!("{axis} cannot be represented as isize"),
             ))
         })?;
-        self.index_select(axis, indices)
+        self.index_select(tensor, axis, positions)
     }
 
-    /// Select matrix rows using host-known row indices.
+    /// Select matrix rows by host-known positions.
     ///
     /// # Examples
-    ///
-    /// ```
-    /// use tenferro_cpu::CpuBackend;
-    /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
-    ///
-    /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
-    /// let x = EagerTensor::from_tensor_in(
-    ///     Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap(),
-    ///     ctx,
-    /// ).unwrap();
-    /// let y = x.take_rows(&[1]).unwrap();
-    ///
-    /// assert_eq!(y.shape(), &[1, 2]);
-    /// assert_eq!(y.value().unwrap().as_slice::<f64>().unwrap(), &[2.0, 4.0]);
+    /// ```rust
+    /// use tenferro_ad::{EagerRuntime, Tensor};
+    /// let ctx = EagerRuntime::new()?;
+    /// let result = ctx.with_eager_session(|s| {
+    ///     let x = s.constant_from(Tensor::from_vec_col_major(vec![2, 1], vec![1.0_f64, 2.0])?)?;
+    ///     s.take_rows(&x, &[1])
+    /// })??;
+    /// assert_eq!(result.value()?.as_slice::<f64>()?, &[2.0]);
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
     /// # Errors
-    ///
-    /// Returns [`tenferro_tensor::ValidationError::InvalidArgument`] for a row index
-    /// outside the matrix, or [`Error::Validation`] for a non-matrix input;
-    /// backend/runtime-state failures retain their typed source.
-    pub fn take_rows(&self, rows: &[usize]) -> Result<Self> {
-        self.take_axis(0, rows)
+    /// Returns a typed foreign-runtime, invalid-row, or backend error.
+    pub fn take_rows(&mut self, tensor: &EagerTensor, rows: &[usize]) -> Result<EagerTensor> {
+        self.take_axis(tensor, 0, rows)
     }
 
-    /// Select matrix columns using host-known column indices.
+    /// Select matrix columns by host-known positions.
     ///
     /// # Examples
-    ///
-    /// ```
-    /// use tenferro_cpu::CpuBackend;
-    /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
-    ///
-    /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
-    /// let x = EagerTensor::from_tensor_in(
-    ///     Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap(),
-    ///     ctx,
-    /// ).unwrap();
-    /// let y = x.take_cols(&[1]).unwrap();
-    ///
-    /// assert_eq!(y.shape(), &[2, 1]);
-    /// assert_eq!(y.value().unwrap().as_slice::<f64>().unwrap(), &[3.0, 4.0]);
+    /// ```rust
+    /// use tenferro_ad::{EagerRuntime, Tensor};
+    /// let ctx = EagerRuntime::new()?;
+    /// let result = ctx.with_eager_session(|s| {
+    ///     let x = s.constant_from(Tensor::from_vec_col_major(vec![1, 2], vec![1.0_f64, 2.0])?)?;
+    ///     s.take_cols(&x, &[1])
+    /// })??;
+    /// assert_eq!(result.value()?.as_slice::<f64>()?, &[2.0]);
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
     /// # Errors
-    ///
-    /// Returns [`tenferro_tensor::ValidationError::InvalidArgument`] for a column index
-    /// outside the matrix, or [`Error::Validation`] for a non-matrix input;
-    /// backend/runtime-state failures retain their typed source.
-    pub fn take_cols(&self, cols: &[usize]) -> Result<Self> {
-        self.take_axis(1, cols)
+    /// Returns a typed foreign-runtime, invalid-column, or backend error.
+    pub fn take_cols(&mut self, tensor: &EagerTensor, cols: &[usize]) -> Result<EagerTensor> {
+        self.take_axis(tensor, 1, cols)
     }
 
-    /// Select a matrix block using host-known row and column indices.
-    ///
-    /// This is a convenience wrapper over row selection followed by column
-    /// selection. The row and column lists, plus the approximation rank implied
-    /// by their lengths, are fixed primal metadata.
+    /// Select a matrix block by host-known row and column positions.
     ///
     /// # Examples
-    ///
-    /// ```
-    /// use tenferro_cpu::CpuBackend;
-    /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
-    ///
-    /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
-    /// let x = EagerTensor::from_tensor_in(
-    ///     Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap(),
-    ///     ctx,
-    /// ).unwrap();
-    /// let y = x.take_block(&[1], &[0]).unwrap();
-    ///
-    /// assert_eq!(y.shape(), &[1, 1]);
-    /// assert_eq!(y.value().unwrap().as_slice::<f64>().unwrap(), &[2.0]);
+    /// ```rust
+    /// use tenferro_ad::{EagerRuntime, Tensor};
+    /// let ctx = EagerRuntime::new()?;
+    /// let result = ctx.with_eager_session(|s| {
+    ///     let x = s.constant_from(Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0])?)?;
+    ///     s.take_block(&x, &[1], &[0])
+    /// })??;
+    /// assert_eq!(result.value()?.as_slice::<f64>()?, &[2.0]);
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
     /// # Errors
-    ///
-    /// Propagates [`tenferro_tensor::ValidationError::InvalidArgument`] for an out of
-    /// bounds row or column and [`Error::Validation`] for a non-matrix input;
-    /// backend/runtime-state failures retain their typed source.
-    pub fn take_block(&self, rows: &[usize], cols: &[usize]) -> Result<Self> {
-        self.take_rows(rows)?.take_cols(cols)
+    /// Returns a typed foreign-runtime, invalid-row/column, or backend error.
+    pub fn take_block(
+        &mut self,
+        tensor: &EagerTensor,
+        rows: &[usize],
+        cols: &[usize],
+    ) -> Result<EagerTensor> {
+        let rows = self.take_rows(tensor, rows)?;
+        self.take_cols(&rows, cols)
     }
 
-    /// Select entries from one axis using host-known positions.
+    /// Slice one axis using an exclusive-end range in this borrowed session.
     ///
     /// # Examples
-    ///
-    /// ```
-    /// use tenferro_cpu::CpuBackend;
-    /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
-    ///
-    /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
-    /// let x = EagerTensor::from_tensor_in(
-    ///     Tensor::from_vec_col_major(vec![3], vec![10.0_f64, 20.0, 30.0]).unwrap(),
-    ///     ctx,
-    /// ).unwrap();
-    /// let y = x.index_select(-1, &[2, 0]).unwrap();
-    ///
-    /// assert_eq!(y.value().unwrap().as_slice::<f64>().unwrap(), &[30.0, 10.0]);
+    /// ```rust
+    /// use tenferro_ad::{EagerRuntime, Tensor};
+    /// let ctx = EagerRuntime::new()?;
+    /// let result = ctx.with_eager_session(|s| {
+    ///     let x = s.constant_from(Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0])?)?;
+    ///     s.slice_axis(&x, 0, 1..3)
+    /// })??;
+    /// assert_eq!(result.value()?.as_slice::<f64>()?, &[2.0, 3.0]);
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
     /// # Errors
-    ///
-    /// Returns [`tenferro_tensor::ValidationError::AxisOutOfBounds`] for an invalid
-    /// signed axis, `InvalidArgument` for an out-of-range position or integer
-    /// conversion overflow, or a typed backend/runtime-state error.
-    pub fn index_select(&self, axis: isize, positions: &[usize]) -> Result<Self> {
-        let (indices, config) = index_select_config(self.shape(), axis, positions)?;
-        let indices = {
-            let mut backend = self.ctx.lock_backend()?;
-            backend.upload_host_tensor(TensorRead::from_tensor(&indices))?
-        };
-        let indices = self.ctx.constant_from(indices)?;
-        self.gather(&indices, config)
+    /// Returns a typed foreign-runtime, invalid-axis/range, or backend error.
+    pub fn slice_axis(
+        &mut self,
+        tensor: &EagerTensor,
+        axis: usize,
+        range: Range<usize>,
+    ) -> Result<EagerTensor> {
+        tensor.slice_builder().axis(axis, range).apply(self)
     }
 
-    /// Stack tensors along a newly inserted axis.
-    ///
-    /// The returned tensor uses the context of the first input, matching
-    /// [`Self::concatenate`]. All inputs must belong to that same context.
+    /// Stack eager tensors along a new axis in this borrowed session.
     ///
     /// # Examples
-    ///
-    /// ```
-    /// use tenferro_cpu::CpuBackend;
-    /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
-    ///
-    /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
-    /// let a = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![], vec![1.0_f64]).unwrap(), ctx.clone()).unwrap();
-    /// let b = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![], vec![2.0_f64]).unwrap(), ctx).unwrap();
-    /// let out = EagerTensor::stack(&[&a, &b], -1).unwrap();
-    ///
-    /// assert_eq!(out.shape(), &[2]);
-    /// assert_eq!(out.value().unwrap().as_slice::<f64>().unwrap(), &[1.0, 2.0]);
+    /// ```rust
+    /// use tenferro_ad::{EagerRuntime, Tensor};
+    /// let ctx = EagerRuntime::new()?;
+    /// let result = ctx.with_eager_session(|s| {
+    ///     let a = s.constant_from(Tensor::from_vec_col_major(vec![], vec![1.0_f64])?)?;
+    ///     let b = s.constant_from(Tensor::from_vec_col_major(vec![], vec![2.0_f64])?)?;
+    ///     s.stack(&[&a, &b], -1)
+    /// })??;
+    /// assert_eq!(result.value()?.as_slice::<f64>()?, &[1.0, 2.0]);
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
     /// # Errors
-    ///
-    /// Returns [`tenferro_tensor::ValidationError::InvalidArgument`] when `tensors` is
-    /// empty or `dim` is outside the insertion rank, `ShapeMismatch` when
-    /// inputs differ in shape, or a typed context/backend/runtime-state error.
-    pub fn stack(tensors: &[&Self], dim: isize) -> Result<Self> {
+    /// Returns a typed empty-input, invalid-axis/shape, foreign-runtime, or backend error.
+    pub fn stack(&mut self, tensors: &[&EagerTensor], dim: isize) -> Result<EagerTensor> {
         let first = tensors.first().copied().ok_or_else(|| {
             Error::TensorRuntime(tenferro_tensor::Error::invalid_argument(
                 "stack",
@@ -582,17 +537,15 @@ impl EagerTensor {
             .map(|tensor| tensor.shape())
             .collect::<Vec<_>>();
         validate_stack_shapes("stack", &shapes)?;
-
         let axis = normalize_insert_axis("stack", dim, first.shape().len())?;
         let mut expanded_shape = first.shape().to_vec();
         expanded_shape.insert(axis, 1);
-
         let expanded = tensors
             .iter()
-            .map(|tensor| tensor.reshape(&expanded_shape))
+            .map(|tensor| self.reshape(tensor, &expanded_shape))
             .collect::<Result<Vec<_>>>()?;
         let refs = expanded.iter().collect::<Vec<_>>();
-        Self::concatenate(&refs, axis)
+        self.concatenate(&refs, axis)
     }
 }
 

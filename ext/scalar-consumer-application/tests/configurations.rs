@@ -26,7 +26,7 @@ use tenferro_runtime::extension::apply;
 use tenferro_runtime::{EngineId, Error, ErrorPhase, GraphCompiler, Runtime, TracedTensor};
 use tenferro_scalar_consumer_algorithm::{factor_norm_gradient, ScalarSupport};
 use tenferro_tensor::{DType, Tensor};
-use tenferro_tensor_core::{ErasedHostTensor, HostTensor};
+use tenferro_tensor::{ErasedHostTensor, HostTensor};
 
 /// Canonical standard support.
 struct Standard;
@@ -165,8 +165,7 @@ fn two_owner_runtime() -> Option<Runtime> {
     use std::sync::Arc;
 
     use tenferro_cpu::{
-        discover_cpu_topology, CpuContext, CpuPlacementGuarantee, CpuSet, ExternalCpuDomain,
-        ResolvedCpuPlacement,
+        discover_cpu_topology, CpuContext, CpuSet, ExternalCpuDomain, ResolvedCpuPlacement,
     };
     use tenferro_tensor::CpuDomainId;
 
@@ -195,7 +194,6 @@ fn two_owner_runtime() -> Option<Runtime> {
             },
             Arc::new(CpuContext::with_threads(1).expect("CPU context")),
             NonZeroUsize::new(1).expect("nonzero"),
-            CpuPlacementGuarantee::AdvisoryDeclared,
         )
         .map_err(|error| eprintln!("two owners: domain {domain} rejected: {error}"))
         .ok()?;

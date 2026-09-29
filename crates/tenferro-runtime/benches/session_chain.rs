@@ -30,18 +30,52 @@ fn operand_b() -> Tensor {
 
 /// 10 ops inside one backend session (1 entry).
 fn run_chain_one_session(a: &Tensor, b: &Tensor, backend: &mut CpuBackend) -> Tensor {
-    backend.with_backend_session(|session| {
-        let x = a.add(b, session).expect("add 1");
-        let x = x.exp(session).expect("exp 1");
-        let x = x.mul(a, session).expect("mul 1");
-        let x = x.add(b, session).expect("add 2");
-        let x = x.exp(session).expect("exp 2");
-        let x = x.mul(a, session).expect("mul 2");
-        let x = x.add(b, session).expect("add 3");
-        let x = x.exp(session).expect("exp 3");
-        let x = x.mul(a, session).expect("mul 3");
-        x.reduce_sum(&[0], session).expect("reduce_sum")
-    })
+    backend
+        .with_backend_session(|session| {
+            let x = a.add(b, session).expect("add 1");
+            let x = x.exp(session).expect("exp 1");
+            let x = x.mul(a, session).expect("mul 1");
+            let x = x.add(b, session).expect("add 2");
+            let x = x.exp(session).expect("exp 2");
+            let x = x.mul(a, session).expect("mul 2");
+            let x = x.add(b, session).expect("add 3");
+            let x = x.exp(session).expect("exp 3");
+            let x = x.mul(a, session).expect("mul 3");
+            x.reduce_sum(&[0], session).expect("reduce_sum")
+        })
+        .unwrap()
+}
+
+/// The same 10-op chain through one execution scope wrapping one session entry.
+///
+/// Written as `with_execution_scope` + `with_backend_session` so that it
+/// survives the route/API unification of issue #1926: both spellings remain
+/// public boundaries, while the one-shot operation methods do not. The scope
+/// holds the resource permit and this single entry reuses it. Because the chain
+/// runs on the session surface, it also supports the broadcast operand set.
+fn run_chain_execution_scope(
+    a: &Tensor,
+    b: &Tensor,
+    owner: &CpuBackend,
+    ops: &mut CpuBackend,
+) -> Tensor {
+    owner
+        .with_execution_scope(|| {
+            ops.with_backend_session(|session| {
+                let x = a.add(b, session).expect("add 1");
+                let x = x.exp(session).expect("exp 1");
+                let x = x.mul(a, session).expect("mul 1");
+                let x = x.add(b, session).expect("add 2");
+                let x = x.exp(session).expect("exp 2");
+                let x = x.mul(a, session).expect("mul 2");
+                let x = x.add(b, session).expect("add 3");
+                let x = x.exp(session).expect("exp 3");
+                let x = x.mul(a, session).expect("mul 3");
+                x.reduce_sum(&[0], session).expect("reduce_sum")
+            })
+            .unwrap()
+        })
+        .expect("scope admission should succeed")
 }
 
 fn bench_session_chain(c: &mut Criterion) {
@@ -49,20 +83,44 @@ fn bench_session_chain(c: &mut Criterion) {
         let mut group = c.benchmark_group(format!("session_chain/{arm}"));
         let a = operand_a(broadcast);
         let b = operand_b();
-        let mut backend = CpuBackend::new();
+        // One explicit worker, per the repository dispatch/overhead rule.
+        let mut backend = CpuBackend::with_threads(1).expect("one-worker backend");
+        let mut ops = backend.clone();
 
         // Validation outside the timed region: the chain must reduce to a
-        // finite scalar.
+        // finite scalar, and both registered arms must agree.
+        //
+        // The `one_shot` arm that measured the deleted per-operation entry
+        // spelling is gone with that spelling (issue #1926); its baseline
+        // numbers remain in docs/testing/session-route-baseline.json as
+        // before-only references.
         let one_session = run_chain_one_session(&a, &b, &mut backend);
-        assert!(
-            one_session.shape().is_empty(),
-            "chain must reduce to a scalar"
+        let scope = run_chain_execution_scope(&a, &b, &backend, &mut ops);
+        for (name, out) in [("one_session", &one_session), ("scope", &scope)] {
+            assert!(
+                out.shape().is_empty(),
+                "{name}: chain must reduce to a scalar"
+            );
+            assert!(
+                out.as_slice::<f64>().unwrap()[0].is_finite(),
+                "{name}: finite"
+            );
+        }
+        assert_eq!(
+            one_session.as_slice::<f64>().unwrap()[0],
+            scope.as_slice::<f64>().unwrap()[0],
+            "one_session and scope must agree"
         );
-        assert!(one_session.as_slice::<f64>().unwrap()[0].is_finite());
-
         group.bench_function("one_session", |bench| {
             bench.iter(|| {
                 let out = run_chain_one_session(black_box(&a), black_box(&b), &mut backend);
+                black_box(out);
+            });
+        });
+        group.bench_function("execution_scope", |bench| {
+            bench.iter(|| {
+                let out =
+                    run_chain_execution_scope(black_box(&a), black_box(&b), &backend, &mut ops);
                 black_box(out);
             });
         });
@@ -135,24 +193,26 @@ impl Phase1Operands {
 
 /// 10 ops inside one backend session (1 entry).
 fn run_phase1_chain_one_session(ops: &Phase1Operands, backend: &mut CpuBackend) -> Tensor {
-    backend.with_backend_session(|session| {
-        let x = ops.a.sub(&ops.b, session).expect("sub");
-        let x = x.log(session).expect("log");
-        let x = x.pow(&ops.power, session).expect("pow");
-        let x = x.maximum(&ops.max, session).expect("maximum");
-        let x = x.neg(session).expect("neg");
-        let x = x.reshape(&[4, 1], session).expect("reshape");
-        let x = x.transpose(&[1, 0], session).expect("transpose");
-        let x = x.clamp(&ops.lower, &ops.upper, session).expect("clamp");
-        let x = x.matmul(&ops.rhs, session).expect("matmul");
-        x.cast(tenferro_runtime::DType::F32, session).expect("cast")
-    })
+    backend
+        .with_backend_session(|session| {
+            let x = ops.a.sub(&ops.b, session).expect("sub");
+            let x = x.log(session).expect("log");
+            let x = x.pow(&ops.power, session).expect("pow");
+            let x = x.maximum(&ops.max, session).expect("maximum");
+            let x = x.neg(session).expect("neg");
+            let x = x.reshape(&[4, 1], session).expect("reshape");
+            let x = x.transpose(&[1, 0], session).expect("transpose");
+            let x = x.clamp(&ops.lower, &ops.upper, session).expect("clamp");
+            let x = x.matmul(&ops.rhs, session).expect("matmul");
+            x.cast(tenferro_runtime::DType::F32, session).expect("cast")
+        })
+        .unwrap()
 }
 
 fn bench_session_chain_phase1(c: &mut Criterion) {
     let mut group = c.benchmark_group("session_chain/phase1");
     let ops = Phase1Operands::new();
-    let mut backend = CpuBackend::new();
+    let mut backend = CpuBackend::with_threads(1).expect("one-worker backend");
 
     // Validation outside the timed region: the known scalar result -8.0
     // (see the chain comment above).

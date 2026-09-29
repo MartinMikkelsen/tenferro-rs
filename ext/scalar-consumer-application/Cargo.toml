@@ -12,6 +12,9 @@ name = "tenferro_scalar_consumer_application"
 [dependencies]
 tenferro-df64-proof = { path = "../df64-proof" }
 tenferro-tensor-core = { path = "../../crates/tenferro-tensor-core" }
+# The scalar-set declaration macro names the canonical host container, so the
+# library (not only its tests) depends on the tensor crate.
+tenferro-tensor = { path = "../../crates/tenferro-tensor" }
 
 [dev-dependencies]
 tenferro-scalar-consumer-algorithm = { path = "../scalar-consumer-algorithm" }
@@ -19,4 +22,3 @@ tenferro-cpu = { path = "../../crates/tenferro-cpu" }
 tenferro-ad = { path = "../../crates/tenferro-ad" }
 tenferro-linalg = { path = "../../crates/tenferro-linalg", features = ["autodiff"] }
 tenferro-runtime = { path = "../../crates/tenferro-runtime" }
-tenferro-tensor = { path = "../../crates/tenferro-tensor" }

@@ -37,6 +37,7 @@ fn cpu_fft_spec_rejects_changed_dtype_and_shape_before_execution() {
                 })
                 .unwrap()
             })
+            .unwrap()
             .unwrap_err();
         assert!(matches!(error, tenferro_tensor::Error::Validation { .. }));
     }
@@ -56,6 +57,7 @@ fn cpu_fft_spec_rejects_changed_dtype_and_shape_before_execution() {
             })
             .unwrap()
         })
+        .unwrap()
         .unwrap_err();
     assert!(matches!(error, tenferro_tensor::Error::Validation { .. }));
     assert_eq!(backend.buffer_pool_stats().unwrap().buffers, 0);
@@ -85,15 +87,17 @@ fn assert_real_close(actual: &[f64], expected: &[f64]) {
 fn public_tensor_fft_ext_executes_real_and_complex_transforms() {
     let mut backend = CpuBackend::new();
     let real = Tensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap();
-    let (full, onesided, recovered, recovered_real) = backend.with_backend_session(|session| {
-        let full = real.fft(None, -1, FftNorm::Backward, session).unwrap();
-        let onesided = real.rfft(None, -1, FftNorm::Backward, session).unwrap();
-        let recovered = full.ifft(None, -1, FftNorm::Backward, session).unwrap();
-        let recovered_real = onesided
-            .irfft(Some(4), -1, FftNorm::Backward, session)
-            .unwrap();
-        (full, onesided, recovered, recovered_real)
-    });
+    let (full, onesided, recovered, recovered_real) = backend
+        .with_backend_session(|session| {
+            let full = real.fft(None, -1, FftNorm::Backward, session).unwrap();
+            let onesided = real.rfft(None, -1, FftNorm::Backward, session).unwrap();
+            let recovered = full.ifft(None, -1, FftNorm::Backward, session).unwrap();
+            let recovered_real = onesided
+                .irfft(Some(4), -1, FftNorm::Backward, session)
+                .unwrap();
+            (full, onesided, recovered, recovered_real)
+        })
+        .unwrap();
 
     assert_eq!(full.shape(), &[4]);
     assert_complex_close(
@@ -138,15 +142,17 @@ fn public_tensor_read_fft_ext_accepts_strided_host_views() {
     let view = TypedTensorView::from_slice([4], [2], 0, &data).unwrap();
     let input = TensorRead::from_view(TensorView::F64(view));
 
-    let (full, onesided) = backend.with_backend_session(|session| {
-        let full = input
-            .fft_read(None, -1, FftNorm::Backward, session)
-            .unwrap();
-        let onesided = input
-            .rfft_read(None, -1, FftNorm::Backward, session)
-            .unwrap();
-        (full, onesided)
-    });
+    let (full, onesided) = backend
+        .with_backend_session(|session| {
+            let full = input
+                .fft_read(None, -1, FftNorm::Backward, session)
+                .unwrap();
+            let onesided = input
+                .rfft_read(None, -1, FftNorm::Backward, session)
+                .unwrap();
+            (full, onesided)
+        })
+        .unwrap();
 
     assert_complex_close(
         full.as_slice::<Complex64>().unwrap(),
@@ -181,13 +187,15 @@ fn public_tensor_fft_ext_reports_invalid_dtype_and_shape_errors() {
     )
     .unwrap();
 
-    let (dtype_err, shape_err) = backend.with_backend_session(|session| {
-        let dtype_err = bools.fft(None, -1, FftNorm::Backward, session).unwrap_err();
-        let shape_err = spectrum
-            .irfft(Some(6), -1, FftNorm::Backward, session)
-            .unwrap_err();
-        (dtype_err, shape_err)
-    });
+    let (dtype_err, shape_err) = backend
+        .with_backend_session(|session| {
+            let dtype_err = bools.fft(None, -1, FftNorm::Backward, session).unwrap_err();
+            let shape_err = spectrum
+                .irfft(Some(6), -1, FftNorm::Backward, session)
+                .unwrap_err();
+            (dtype_err, shape_err)
+        })
+        .unwrap();
 
     assert!(matches!(
         dtype_err,
@@ -280,20 +288,22 @@ fn caller_owned_fft_executor_reuses_plans() {
     let input = Tensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap();
     let mut executor = FftExecutor::default();
 
-    backend.with_backend_session(|session| {
-        let full = executor
-            .fft(&input, None, -1, FftNorm::Backward, session)
-            .unwrap();
-        executor
-            .ifft(&full, None, -1, FftNorm::Backward, session)
-            .unwrap();
-        let onesided = executor
-            .rfft(&input, None, -1, FftNorm::Backward, session)
-            .unwrap();
-        executor
-            .irfft(&onesided, Some(4), -1, FftNorm::Backward, session)
-            .unwrap();
-    });
+    backend
+        .with_backend_session(|session| {
+            let full = executor
+                .fft(&input, None, -1, FftNorm::Backward, session)
+                .unwrap();
+            executor
+                .ifft(&full, None, -1, FftNorm::Backward, session)
+                .unwrap();
+            let onesided = executor
+                .rfft(&input, None, -1, FftNorm::Backward, session)
+                .unwrap();
+            executor
+                .irfft(&onesided, Some(4), -1, FftNorm::Backward, session)
+                .unwrap();
+        })
+        .unwrap();
 
     assert_eq!(executor.cache_stats().entries, 2);
     assert_eq!(executor.plan_cache().stats().entries, 2);
@@ -314,18 +324,20 @@ fn configured_fft_executor_validates_each_public_operation_before_dispatch() {
     )
     .unwrap();
 
-    backend.with_backend_session(|session| {
-        assert!(executor
-            .fft(&real, Some(0), -1, FftNorm::Backward, session)
-            .is_err());
-        assert!(executor
-            .ifft(&real, None, -1, FftNorm::Backward, session)
-            .is_err());
-        assert!(executor
-            .rfft(&complex, None, -1, FftNorm::Backward, session)
-            .is_err());
-        assert!(executor
-            .irfft(&complex, Some(0), -1, FftNorm::Backward, session)
-            .is_err());
-    });
+    backend
+        .with_backend_session(|session| {
+            assert!(executor
+                .fft(&real, Some(0), -1, FftNorm::Backward, session)
+                .is_err());
+            assert!(executor
+                .ifft(&real, None, -1, FftNorm::Backward, session)
+                .is_err());
+            assert!(executor
+                .rfft(&complex, None, -1, FftNorm::Backward, session)
+                .is_err());
+            assert!(executor
+                .irfft(&complex, Some(0), -1, FftNorm::Backward, session)
+                .is_err());
+        })
+        .unwrap();
 }

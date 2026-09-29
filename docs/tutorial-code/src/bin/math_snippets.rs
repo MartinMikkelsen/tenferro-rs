@@ -25,7 +25,7 @@ use tenferro_runtime::Tensor;
 let a = Tensor::from_vec_col_major(vec![2, 2], vec![4.0_f64, 0.0, 0.0, 9.0])?;
 let b = Tensor::from_vec_col_major(vec![2, 1], vec![8.0_f64, 27.0])?;
 let mut backend = CpuBackend::new();
-let x = backend.with_backend_session(|session| a.solve(&b, session))?;
+let x = backend.with_backend_session(|session| a.solve(&b, session))??;
 
 assert_eq!(x.shape(), &[2, 1]);
 assert_eq!(x.as_slice::<f64>()?, &[2.0, 3.0]);
@@ -59,7 +59,7 @@ let (factor, reconstructed) = backend.with_backend_session(|session| -> tenferro
     let factor_t = factor.transpose(&[1, 0], session)?;
     let reconstructed = factor.matmul(&factor_t, session)?;
     Ok((factor, reconstructed))
-})?;
+})??;
 
 assert_eq!(factor.shape(), &[2, 2]);
 assert_eq!(a.shape(), &[2, 2]);
@@ -103,7 +103,7 @@ fn max_abs_diff(lhs: &Tensor, rhs: &Tensor) -> Result<f64, tenferro_tensor::Erro
 }
 let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 3.0, 2.0, 4.0])?;
 let mut backend = CpuBackend::new();
-let (u, s, vt) = backend.with_backend_session(|session| a.svd(session))?;
+let (u, s, vt) = backend.with_backend_session(|session| a.svd(session))??;
 
 assert_eq!(u.shape(), &[2, 2]);
 assert_eq!(vt.shape(), &[2, 2]);
@@ -117,7 +117,7 @@ let (reconstructed,) = backend.with_backend_session(|session| -> tenferro_tensor
     let us = u.matmul(&sigma, session)?;
     let reconstructed = us.matmul(&vt, session)?;
     Ok((reconstructed,))
-})?;
+})??;
 
 assert_eq!(a.shape(), &[2, 2]);
 assert!(max_abs_diff(&reconstructed, &a)? < 1.0e-12);
@@ -269,7 +269,7 @@ let (q, r) = backend.with_backend_session(|session| {
         QrOptions::default().gauge(QrGauge::PositiveDiagonal),
         session,
     )
-})?;
+})??;
 
 let identity = Tensor::from_vec_col_major(
     vec![3, 3],
@@ -280,7 +280,7 @@ let (reconstructed, qtq) = backend.with_backend_session(|session| -> tenferro_te
     let qt = q.transpose(&[1, 0], session)?;
     let qtq = qt.matmul(&q, session)?;
     Ok((reconstructed, qtq))
-})?;
+})??;
 
 assert_eq!(q.shape(), &[4, 3]);
 assert_eq!(r.shape(), &[3, 3]);
@@ -318,7 +318,7 @@ let (q, r, reconstructed) = backend.with_backend_session(|session| {
     let r = state.r(options, session)?;
     let reconstructed = q.matmul(&r, session)?;
     Ok::<_, tenferro_runtime::Error>((q, r, reconstructed))
-})?;
+})??;
 
 assert_eq!(q.shape(), &[3, 3]);
 assert_eq!(r.shape(), &[3, 3]);
@@ -354,7 +354,7 @@ fn max_abs_diff(lhs: &Tensor, rhs: &Tensor) -> Result<f64, tenferro_tensor::Erro
 }
 let a = Tensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 1.0, 1.0, 2.0])?;
 let mut backend = CpuBackend::new();
-let (values, vectors) = backend.with_backend_session(|session| a.eigh(session))?;
+let (values, vectors) = backend.with_backend_session(|session| a.eigh(session))??;
 
 assert_eq!(values.shape(), &[2]);
 assert_eq!(vectors.shape(), &[2, 2]);
@@ -369,7 +369,7 @@ let (reconstructed,) = backend.with_backend_session(|session| -> tenferro_tensor
     let vt = vectors.transpose(&[1, 0], session)?;
     let reconstructed = vd.matmul(&vt, session)?;
     Ok((reconstructed,))
-})?;
+})??;
 
 assert_eq!(a.shape(), &[2, 2]);
 assert!(max_abs_diff(&reconstructed, &a)? < 1.0e-12);
@@ -473,15 +473,15 @@ let a = Tensor::from_vec_col_major(
 )?;
 let b = Tensor::from_vec_col_major(vec![4, 1], vec![1.0_f64, 2.0, 3.0, 4.0])?;
 
-let (p, l, u, q, parity) = backend.with_backend_session(|session| a.full_piv_lu(session))?;
+let (p, l, u, q, parity) = backend.with_backend_session(|session| a.full_piv_lu(session))??;
 let (reconstructed,) = backend.with_backend_session(|session| -> tenferro_tensor::Result<(Tensor,)> {
     let pt = p.transpose(&[1, 0], session)?;
     let pt_l = pt.matmul(&l, session)?;
     let pt_lu = pt_l.matmul(&u, session)?;
     let reconstructed = pt_lu.matmul(&q, session)?;
     Ok((reconstructed,))
-})?;
-let x = backend.with_backend_session(|session| a.full_piv_lu_solve(&b, session))?;
+})??;
+let x = backend.with_backend_session(|session| a.full_piv_lu_solve(&b, session))??;
 
 assert_eq!(p.shape(), &[4, 4]);
 assert_eq!(a.shape(), &[4, 4]);
@@ -525,7 +525,7 @@ let rhs = Tensor::from_vec_col_major(
 let mut backend = CpuBackend::new();
 let product = backend.with_backend_session(|session| {
     [&lhs, &rhs].einsum("ij,jk->ik", session)
-})?;
+})??;
 assert_eq!(product.as_slice::<f64>()?, &[22.0, 28.0, 49.0, 64.0]);
 
 let mut product_out = Tensor::from_vec_col_major(vec![2, 2], vec![0.0_f64; 4])?;
@@ -535,7 +535,7 @@ backend.with_backend_session(|session| {
         session,
         TensorWrite::from_tensor(&mut product_out),
     )
-})?;
+})??;
 assert_eq!(product_out.as_slice::<f64>()?, &[22.0, 28.0, 49.0, 64.0]);
 
 let complex_lhs = TypedTensor::<Complex64>::from_vec_col_major(
@@ -553,7 +553,7 @@ let complex_rhs = TypedTensor::<Complex64>::from_vec_col_major(
 )?;
 let complex = backend.with_backend_session(|session| {
     [&complex_lhs, &complex_rhs].einsum("ij,jk->ik", session)
-})?;
+})??;
 assert_eq!(
     complex.as_slice()?,
     &[Complex64::new(23.0, 2.0), Complex64::new(36.0, 3.0)],
@@ -570,7 +570,7 @@ backend.with_backend_session(|session| {
         session,
         TypedTensorWrite::from_view(borrowed_out),
     )
-})?;
+})??;
 assert_eq!(
     [borrowed_storage[1], borrowed_storage[3]],
     [Complex64::new(23.0, 2.0), Complex64::new(36.0, 3.0)],
@@ -600,10 +600,10 @@ let notation = EinsumNotation::new(
 let mut backend = CpuBackend::new();
 let string_result = backend.with_backend_session(|session| {
     [&lhs, &rhs].einsum("...ij,...jk->...ik", session)
-})?;
+})??;
 let programmatic_result = backend.with_backend_session(|session| {
     [&lhs, &rhs].einsum_notation(&notation, session)
-})?;
+})??;
 assert_eq!(string_result.shape(), &[2, 2, 2]);
 assert_eq!(string_result.as_slice::<f64>()?, &[3.0; 8]);
 assert_eq!(programmatic_result.as_slice::<f64>()?, &[3.0; 8]);
@@ -631,12 +631,12 @@ let inputs = [
 let mut backend = CpuBackend::new();
 let result = backend.with_backend_session(|session| {
     inputs.einsum_read("ij,j->i", session)
-})?;
+})??;
 assert_eq!(result.as_slice::<f64>()?, &[140.0, 320.0]);
 
 let plan = ConcreteEinsumPlan::prepare_read(inputs.clone(), "ij,j->i")?;
 let planned = backend
-    .with_backend_session(|session| plan.execute_read(inputs, session))?;
+    .with_backend_session(|session| plan.execute_read(inputs, session))??;
 assert_eq!(planned.as_slice::<f64>()?, &[140.0, 320.0]);
 
 let mut planned_out = Tensor::from_vec_col_major(vec![2], vec![0.0_f64; 2])?;
@@ -651,7 +651,7 @@ backend.with_backend_session(|session| {
         session,
         TensorWrite::from_tensor(&mut planned_out),
     )
-})?;
+})??;
 assert_eq!(planned_out.as_slice::<f64>()?, &[140.0, 320.0]);
         // snippet-end:einsum_13
         Ok(())
@@ -993,7 +993,7 @@ backend.with_backend_session(|session| -> Result<(), tenferro_tensor::Error> {
         Complex64::new(10.0, 0.0),
     );
     Ok(())
-})?;
+})??;
 // snippet-end:tenferro_fft_22
 
         Ok(())
@@ -1008,14 +1008,18 @@ backend.with_backend_session(|session| -> Result<(), tenferro_tensor::Error> {
         // snippet-start:tenferro_fft_23
 use num_complex::Complex64;
 use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
-use tenferro_fft::{EagerTensorFftExt, FftNorm};
+use tenferro_fft::{EagerSessionFftExt, FftNorm};
 
+let runtime = EagerRuntime::new()?;
 let x = EagerTensor::from_tensor_in(
     Tensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0])?,
-    EagerRuntime::new()?,
+    runtime.clone(),
 )?;
-let spectrum = x.rfft(None, -1, FftNorm::Backward)?;
-let restored = spectrum.irfft(Some(4), -1, FftNorm::Backward)?;
+let (spectrum, restored) = runtime.with_eager_session(|session| {
+    let spectrum = session.rfft(&x, None, -1, FftNorm::Backward)?;
+    let restored = session.irfft(&spectrum, Some(4), -1, FftNorm::Backward)?;
+    Ok::<_, tenferro_ad::Error>((spectrum, restored))
+})??;
 
 assert_eq!(spectrum.shape(), &[3]);
 assert_eq!(restored.to_tensor()?.as_slice::<f64>()?, &[1.0, 2.0, 3.0, 4.0]);
@@ -1044,11 +1048,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut cpu = context.cpu_backend().clone();
     let cpu_spectrum = cpu
-        .with_backend_session(|session| managed.rfft(None, 0, FftNorm::Backward, session))?;
+        .with_backend_session(|session| managed.rfft(None, 0, FftNorm::Backward, session))??;
 
     let mut metal = context.metal_backend().clone();
     let metal_spectrum = metal
-        .with_backend_session(|session| managed.rfft(None, 0, FftNorm::Backward, session))?;
+        .with_backend_session(|session| managed.rfft(None, 0, FftNorm::Backward, session))??;
     metal.synchronize()?;
 
     assert_eq!(cpu_spectrum.shape(), metal_spectrum.shape());

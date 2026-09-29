@@ -1,13 +1,32 @@
 use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
 use std::time::Duration;
+use tenferro_tensor::DotGeneralConfig;
 
 use super::*;
+use tenferro_tensor::TensorRead;
+use tenferro_tensor::{BackendSessionHost, SessionEntryError};
 
+mod batch_policy;
 mod execution_scope;
 mod external_managed;
 mod output_affinity;
 #[cfg(feature = "cpu-blas")]
 mod provider_session;
+
+/// Assert that `error` is the typed CPU reentry rejection.
+fn assert_reentered(error: &crate::Error) {
+    assert!(
+        matches!(
+            error,
+            crate::Error::SessionEntry {
+                source: SessionEntryError::Reentered {
+                    backend: CPU_BACKEND
+                }
+            }
+        ),
+        "{error}"
+    );
+}
 
 fn panic_message(payload: Box<dyn std::any::Any + Send>) -> String {
     if let Some(message) = payload.downcast_ref::<String>() {
@@ -97,7 +116,7 @@ fn fresh_tagging_is_field_only_and_has_no_dynamic_lookup_or_metadata_clone() {
 }
 
 #[test]
-fn provider_bundle_installation_validates_lazy_exact_numa_domains_at_the_source_boundary() {
+fn provider_bundle_installation_validates_lazy_numa_domains_at_the_source_boundary() {
     let backend = include_str!("../backend.rs");
     let validation = backend
         .split_once("fn validate_provider_bundle_for_domains")
@@ -111,7 +130,7 @@ fn provider_bundle_installation_validates_lazy_exact_numa_domains_at_the_source_
         "CpuEngineRegistry::ManagedLazy",
         "topology.nodes()",
         "node_domain_ids",
-        "CpuPlacementGuarantee::ExactDeclared",
+        "CpuProviderDomainContract::CooperativeCpuSet",
     ] {
         assert!(
             validation.contains(required),
@@ -338,14 +357,25 @@ fn direct_and_cached_sessions_share_the_installed_provider_slot() {
         rhs_batch_dims: [].as_slice().into(),
     };
 
-    backend.dot_general(&lhs, &rhs, &config).unwrap();
+    backend
+        .with_backend_session(|__s| {
+            __s.dot_general_read(
+                TensorRead::from_tensor(&lhs),
+                TensorRead::from_tensor(&rhs),
+                &config,
+            )
+        })
+        .unwrap()
+        .unwrap();
     assert_eq!(calls.load(AtomicOrdering::Relaxed), 1);
 
-    backend.with_backend_session(|session| {
-        session
-            .dot_general_cached(None, &lhs, &rhs, &config)
-            .unwrap();
-    });
+    backend
+        .with_backend_session(|session| {
+            session
+                .dot_general_cached(None, &lhs, &rhs, &config)
+                .unwrap();
+        })
+        .unwrap();
     assert_eq!(calls.load(AtomicOrdering::Relaxed), 2);
 }
 
@@ -566,19 +596,21 @@ fn execution_info_exposes_stable_kind_and_placement_contract() {
 #[cfg(feature = "cpu-blas")]
 fn single_thread_blas_session_reuses_context_with_sequential_policy() {
     let mut backend = CpuBackend::with_threads_and_kind(1, CpuBackendKind::Blas).unwrap();
-    backend.with_backend_session(|session| {
-        crate::with_cpu_exec_session(session, |cpu| {
-            assert!(cpu.entered.is_some());
-            cpu.with_linalg_pool(|context, _| {
-                // Linux placement may use a pinned worker even at one thread.
-                // The contract is sequential native policy, not caller-thread identity.
-                assert_eq!(context.parallel_mode(), crate::ParallelMode::Sequential);
-                Ok(())
+    backend
+        .with_backend_session(|session| {
+            crate::with_cpu_exec_session(session, |cpu| {
+                assert!(cpu.entered.is_some());
+                cpu.with_linalg_pool(|context, _| {
+                    // Linux placement may use a pinned worker even at one thread.
+                    // The contract is sequential native policy, not caller-thread identity.
+                    assert_eq!(context.parallel_mode(), crate::ParallelMode::Sequential);
+                    Ok(())
+                })
+                .unwrap();
             })
             .unwrap();
         })
         .unwrap();
-    });
 }
 
 #[test]
@@ -615,19 +647,14 @@ fn independently_constructed_backends_share_global_provider_exclusion() {
 fn direct_nested_clone_install_is_rejected_in_a_managed_scope() {
     let backend = CpuBackend::with_threads_and_kind(2, CpuBackendKind::Faer).unwrap();
     let nested = backend.clone();
+    let mut inner_ran = false;
 
-    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        backend.install(|| nested.install(|| 7_u32))
-    }));
+    let nested_result = backend
+        .install(|| nested.install(|| inner_ran = true))
+        .unwrap();
 
-    let message = outcome
-        .err()
-        .map(panic_message)
-        .expect("nesting should panic");
-    assert!(
-        message.contains("another CPU backend execution"),
-        "{message}"
-    );
+    assert_reentered(&nested_result.unwrap_err());
+    assert!(!inner_ran);
 }
 
 #[test]
@@ -636,18 +663,9 @@ fn direct_nested_independent_engine_is_rejected_in_a_managed_scope() {
     let outer = CpuBackend::with_threads_and_kind(2, CpuBackendKind::Faer).unwrap();
     let middle = CpuBackend::with_threads_and_kind(2, CpuBackendKind::Faer).unwrap();
 
-    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        outer.install(|| middle.install(|| 11_u32))
-    }));
+    let nested_result = outer.install(|| middle.install(|| 11_u32)).unwrap();
 
-    let message = outcome
-        .err()
-        .map(panic_message)
-        .expect("nesting should panic");
-    assert!(
-        message.contains("another CPU backend execution"),
-        "{message}"
-    );
+    assert_reentered(&nested_result.unwrap_err());
 }
 
 #[test]
@@ -657,25 +675,16 @@ fn cross_pool_wait_cannot_misclassify_a_scheduled_sibling_as_direct_nesting() {
     let middle = CpuBackend::from_context(Arc::new(CpuContext::with_threads(2).unwrap()));
     let sibling = outer.clone();
 
-    let (_, sibling_outcome) = outer.install(move || {
-        rayon::join(
-            || {
-                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    middle.install(|| std::thread::sleep(Duration::from_millis(50)))
-                }))
-            },
-            || std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| sibling.install(|| ()))),
-        )
-    });
+    let (_, sibling_outcome) = outer
+        .install(move || {
+            rayon::join(
+                || middle.install(|| std::thread::sleep(Duration::from_millis(50))),
+                || sibling.install(|| ()),
+            )
+        })
+        .unwrap();
 
-    let message = sibling_outcome
-        .err()
-        .map(panic_message)
-        .expect("scheduled sibling reentry should panic");
-    assert!(
-        message.contains("another CPU backend execution"),
-        "{message}"
-    );
+    assert_reentered(&sibling_outcome.unwrap_err());
 }
 
 #[test]
@@ -686,28 +695,23 @@ fn stolen_rayon_child_task_backend_reentry_is_rejected() {
     let (completed_tx, completed_rx) = std::sync::mpsc::channel();
 
     std::thread::spawn(move || {
-        outer.install(|| {
-            rayon::scope(|scope| {
-                let completed_tx = completed_tx.clone();
-                scope.spawn(move |_| {
-                    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        nested.install(|| 13_u32)
-                    }));
-                    completed_tx.send(outcome.err().map(panic_message)).unwrap();
+        outer
+            .install(|| {
+                rayon::scope(|scope| {
+                    let completed_tx = completed_tx.clone();
+                    scope.spawn(move |_| {
+                        completed_tx.send(nested.install(|| 13_u32)).unwrap();
+                    });
+                    std::thread::sleep(Duration::from_millis(100));
                 });
-                std::thread::sleep(Duration::from_millis(100));
-            });
-        });
+            })
+            .unwrap();
     });
 
-    let message = completed_rx
+    let outcome = completed_rx
         .recv_timeout(Duration::from_secs(2))
-        .expect("parallel child reentry should fail without deadlocking")
-        .expect("parallel child reentry should panic");
-    assert!(
-        message.contains("another CPU backend execution"),
-        "{message}"
-    );
+        .expect("parallel child reentry should fail without deadlocking");
+    assert_reentered(&outcome.unwrap_err());
 }
 
 #[test]
@@ -718,30 +722,25 @@ fn parallel_rayon_sibling_backend_reentry_is_rejected() {
     let second = outer.clone();
     let (completed_tx, completed_rx) = std::sync::mpsc::channel();
 
-    outer.install(|| {
-        rayon::scope(|scope| {
-            for nested in [first, second] {
-                let completed_tx = completed_tx.clone();
-                scope.spawn(move |_| {
-                    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        nested.install(|| ())
-                    }));
-                    completed_tx.send(outcome.err().map(panic_message)).unwrap();
-                });
-            }
-            std::thread::sleep(Duration::from_millis(100));
-        });
-    });
+    outer
+        .install(|| {
+            rayon::scope(|scope| {
+                for nested in [first, second] {
+                    let completed_tx = completed_tx.clone();
+                    scope.spawn(move |_| {
+                        completed_tx.send(nested.install(|| ())).unwrap();
+                    });
+                }
+                std::thread::sleep(Duration::from_millis(100));
+            });
+        })
+        .unwrap();
 
     for _ in 0..2 {
-        let message = completed_rx
+        let outcome = completed_rx
             .recv_timeout(Duration::from_secs(2))
-            .expect("parallel sibling reentry should fail without deadlocking")
-            .expect("parallel sibling reentry should panic");
-        assert!(
-            message.contains("another CPU backend execution"),
-            "{message}"
-        );
+            .expect("parallel sibling reentry should fail without deadlocking");
+        assert_reentered(&outcome.unwrap_err());
     }
 }
 
@@ -752,24 +751,23 @@ fn shared_context_work_is_not_mistaken_for_backend_reentry() {
     let backend = CpuBackend::from_context(Arc::clone(&context));
     let nested = backend.clone();
 
-    let message = backend.install(|| {
-        let (completed_tx, completed_rx) = std::sync::mpsc::channel();
-        std::thread::spawn(move || {
-            let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                context.install(|| nested.install(|| ()))
-            }));
-            completed_tx.send(outcome.err().map(panic_message)).unwrap();
-        });
-        completed_rx
-            .recv_timeout(Duration::from_secs(2))
-            .expect("shared-context work should fail without deadlocking")
-            .expect("shared-context work should not bypass backend exclusion")
-    });
+    let outcome = backend
+        .install(|| {
+            let (completed_tx, completed_rx) = std::sync::mpsc::channel();
+            std::thread::spawn(move || {
+                completed_tx
+                    .send(context.install(|| nested.install(|| ())))
+                    .unwrap();
+            });
+            completed_rx
+                .recv_timeout(Duration::from_secs(2))
+                .expect("shared-context work should fail without deadlocking")
+        })
+        .unwrap();
 
-    assert!(
-        message.contains("another CPU backend execution"),
-        "{message}"
-    );
+    // Work on the shared context's pool is still inside the backend's
+    // execution, so it cannot bypass backend exclusion.
+    assert_reentered(&outcome.unwrap_err());
 }
 
 #[test]
@@ -778,11 +776,11 @@ fn shared_execution_scope_is_cleared_after_panic() {
     let backend = CpuBackend::with_threads_and_kind(2, CpuBackendKind::Faer).unwrap();
 
     let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        backend.install(|| panic!("forced nested execution panic"));
+        let _ = backend.install(|| panic!("forced nested execution panic"));
     }));
 
     assert!(panic.is_err());
-    assert_eq!(backend.install(|| 17_u32), 17);
+    assert_eq!(backend.install(|| 17_u32).unwrap(), 17);
 }
 
 #[test]
@@ -792,19 +790,35 @@ fn nested_clone_tensor_operation_is_rejected_in_a_managed_scope() {
     let mut nested = backend.clone();
     let lhs = Tensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
     let rhs = Tensor::from_vec_col_major(vec![1], vec![3.0_f64]).unwrap();
+    let mut inner_ran = false;
 
-    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        backend.with_backend_session(|_| nested.add(&lhs, &rhs))
-    }));
+    let nested_entry = backend
+        .with_backend_session(|_| {
+            nested.with_backend_session(|__s| {
+                inner_ran = true;
+                __s.add_read(TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs))
+            })
+        })
+        .unwrap();
 
-    let message = outcome
-        .err()
-        .map(panic_message)
-        .expect("nesting should panic");
     assert!(
-        message.contains("another CPU backend execution"),
-        "{message}"
+        matches!(
+            nested_entry,
+            Err(SessionEntryError::Reentered {
+                backend: CPU_BACKEND
+            })
+        ),
+        "{nested_entry:?}"
     );
+    assert!(!inner_ran);
+    // The outer session released its permit; the backend is reusable.
+    let sum = backend
+        .with_backend_session(|__s| {
+            __s.add_read(TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs))
+        })
+        .unwrap()
+        .unwrap();
+    assert_eq!(sum.as_slice::<f64>().unwrap(), &[5.0]);
 }
 
 #[test]
@@ -814,17 +828,23 @@ fn nested_provider_session_is_rejected() {
     let mut nested = backend.clone();
     let lhs = Tensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
     let rhs = Tensor::from_vec_col_major(vec![1], vec![3.0_f64]).unwrap();
-    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        backend.with_backend_session(|_| nested.add(&lhs, &rhs))
-    }));
 
-    let message = outcome
-        .err()
-        .map(panic_message)
-        .expect("nesting should panic");
+    let nested_result = backend
+        .with_backend_session(|_| {
+            nested.with_backend_session(|__s| {
+                __s.add_read(TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs))
+            })
+        })
+        .unwrap();
+
     assert!(
-        message.contains("another CPU backend execution"),
-        "{message}"
+        matches!(
+            nested_result,
+            Err(SessionEntryError::Reentered {
+                backend: CPU_BACKEND
+            })
+        ),
+        "{nested_result:?}"
     );
 }
 
@@ -837,30 +857,25 @@ fn parallel_rayon_siblings_cannot_bypass_provider_exclusion() {
     let second = provider;
     let (completed_tx, completed_rx) = std::sync::mpsc::channel();
 
-    outer.install(|| {
-        rayon::scope(|scope| {
-            for nested in [first, second] {
-                let completed_tx = completed_tx.clone();
-                scope.spawn(move |_| {
-                    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        nested.install(|| ())
-                    }));
-                    completed_tx.send(outcome.err().map(panic_message)).unwrap();
-                });
-            }
-            std::thread::sleep(Duration::from_millis(100));
-        });
-    });
+    outer
+        .install(|| {
+            rayon::scope(|scope| {
+                for nested in [first, second] {
+                    let completed_tx = completed_tx.clone();
+                    scope.spawn(move |_| {
+                        completed_tx.send(nested.install(|| ())).unwrap();
+                    });
+                }
+                std::thread::sleep(Duration::from_millis(100));
+            });
+        })
+        .unwrap();
 
     for _ in 0..2 {
-        let message = completed_rx
+        let outcome = completed_rx
             .recv_timeout(Duration::from_secs(2))
-            .expect("provider sibling reentry should fail without deadlocking")
-            .expect("provider sibling reentry should panic");
-        assert!(
-            message.contains("another CPU backend execution"),
-            "{message}"
-        );
+            .expect("provider sibling reentry should fail without deadlocking");
+        assert_reentered(&outcome.unwrap_err());
     }
 }
 
@@ -931,13 +946,25 @@ fn unavailable_blas_backend_kind_reports_config_errors() {
     let mut cache = gemm::GemmAnalysisCache::default();
 
     for result in [
-        backend.dot_general_cached(&mut cache, Some(0), &lhs, &rhs, &config),
-        backend.dot_general_with_conj_cached(&mut cache, Some(1), &lhs, &rhs, &config, false, true),
-        backend.dot_general_read(
-            TensorRead::from_tensor(&lhs),
-            TensorRead::from_tensor(&rhs),
-            &config,
-        ),
+        backend
+            .with_backend_session_cached(&mut cache, |__s| {
+                __s.dot_general_cached(Some(0), &lhs, &rhs, &config)
+            })
+            .unwrap(),
+        backend
+            .with_backend_session_cached(&mut cache, |__s| {
+                __s.dot_general_with_conj_cached(Some(1), &lhs, &rhs, &config, false, true)
+            })
+            .unwrap(),
+        backend
+            .with_backend_session(|__s| {
+                __s.dot_general_read(
+                    TensorRead::from_tensor(&lhs),
+                    TensorRead::from_tensor(&rhs),
+                    &config,
+                )
+            })
+            .unwrap(),
     ] {
         let err = result.unwrap_err();
         assert_eq!(err.kind(), tenferro_tensor::ErrorKind::Unsupported);
@@ -1064,7 +1091,11 @@ fn cached_dot_dispatch_reports_dtype_mismatches() {
         rhs_batch_dims: [].as_slice().into(),
     };
 
-    let dot_error = backend.dot_general_cached(&mut cache, Some(0), &lhs, &rhs, &config);
+    let dot_error = backend
+        .with_backend_session_cached(&mut cache, |__s| {
+            __s.dot_general_cached(Some(0), &lhs, &rhs, &config)
+        })
+        .unwrap();
     assert!(matches!(
         dot_error,
         Err(crate::Error::Validation {
@@ -1073,8 +1104,11 @@ fn cached_dot_dispatch_reports_dtype_mismatches() {
         })
     ));
 
-    let dot_conj_error =
-        backend.dot_general_with_conj_cached(&mut cache, Some(1), &lhs, &rhs, &config, true, false);
+    let dot_conj_error = backend
+        .with_backend_session_cached(&mut cache, |__s| {
+            __s.dot_general_with_conj_cached(Some(1), &lhs, &rhs, &config, true, false)
+        })
+        .unwrap();
     assert!(matches!(
         dot_conj_error,
         Err(crate::Error::Validation {
@@ -1208,4 +1242,28 @@ fn explicit_managed_affinity_reports_engine_construction_error_when_unsupported(
         }
     ));
     assert!(error.to_string().contains("unsupported on this platform"));
+}
+
+#[test]
+fn elementwise_into_fallback_returns_its_staged_result_to_the_pool() {
+    let mut buffers = BufferPool::new();
+    let ctx = ExecContext::default();
+    // The fallback (taken when the one-shot kernel does not apply) stages the
+    // sum before copying it into `out`.
+    let lhs = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap();
+    let rhs = Tensor::from_vec_col_major(vec![2, 2], vec![10.0_f64, 20.0, 30.0, 40.0]).unwrap();
+    let mut out = Tensor::from_vec_col_major(vec![2, 2], vec![0.0_f64; 4]).unwrap();
+    assert_eq!(buffers.len(), 0);
+
+    elementwise_read_into_fallback_with_pool(
+        &mut buffers,
+        &ctx,
+        ElementwiseReadOp::Add,
+        &[TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs)],
+        TensorWrite::from_tensor(&mut out),
+    )
+    .unwrap();
+
+    assert_eq!(out.as_slice::<f64>().unwrap(), &[11.0, 22.0, 33.0, 44.0]);
+    assert_eq!(buffers.len(), 1, "the staged result must be reclaimed");
 }

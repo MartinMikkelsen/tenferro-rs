@@ -57,9 +57,11 @@ Terminology:
   access capability or proof of ownership. A `RootBoundSpan` is the checked
   range form and carries the exact `RootResourceIdentity` from which it was
   derived.
-- **Owner**: the unique, non-cloneable ownership token for an allocation span
-  (`OwnedStorage`, or a tensor/group wrapping it); this is the umbrella's
-  one-owner rule.
+- **Owner**: the unique ownership token for an allocation span (a tensor or
+  group wrapping the crate-private `OwnedStorage`); this is the umbrella's
+  one-owner rule. Since #1938 a `Host`-represented `TypedTensor` owns a plain
+  `Vec<T>` with no root or group; it is `Clone` because cloning copies the
+  elements into a second, independent allocation.
 - **Capability**: the right to access storage, expressed as Rust
   ownership/borrows: shared (`StorageRef`, views), exclusive (`StorageMut`,
   mutable views), or owning (consuming APIs); Rust borrowing is the write
@@ -1265,7 +1267,14 @@ struct TypedTensorViewMut<'a, T, R: TensorRank = DynRank> {
 ```
 
 The sketches are normative in shape, while names remain provisional until
-their owning implementation phase. `TensorLayoutRef` denotes a borrowed
+their owning implementation phase. #1938 (D1) added a third representation
+parameter, `TypedTensor<T, R, D = Dynamic>`: `D::Storage` is a plain or pooled
+`Vec<T>` for `Host`, the group-backed root for `Gpu`, and their union for
+`Dynamic`, with shape and placement stored on the tensor. The views carry the
+same `D` as a marker but keep the concrete `TensorStorageRef` /
+`TensorStorageRefMut` buffer, because selecting the buffer through an
+associated type would make the view invariant in `'a` (see
+`tensor-session-redesign-1938.md`, D1). `TensorLayoutRef` denotes a borrowed
 metadata representation: an ordinary `as_view()` or `as_view_mut()` is O(1),
 allocation-free, and does not clone heap-backed dynamic shape/stride metadata,
 clone or increment a storage/provider reference count, resolve a provider,

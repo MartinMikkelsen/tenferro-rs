@@ -1,6 +1,6 @@
 use tenferro_cpu::{scalar_binary_into, scalar_fold, AddOp};
 use tenferro_df64_proof::{Df64, Df64Add};
-use tenferro_tensor_core::HostTensor;
+use tenferro_tensor::HostTensor;
 use tenferro_tensor_core::{ad_admission, AdAdmissionError, ScalarArithmetic, ScalarDomain};
 
 fn df64(values: &[f64]) -> HostTensor<Df64> {
@@ -159,7 +159,8 @@ fn external_scalar_reaches_the_shared_admission_query() {
 #[test]
 fn external_crate_defines_its_own_scalar_set() {
     use tenferro_df64_proof::{ExtendedSet, ExtendedTag};
-    use tenferro_tensor_core::{HostTensor, ScalarSet};
+    use tenferro_tensor::HostTensor;
+    use tenferro_tensor::ScalarSet;
 
     let value = ExtendedSet::Df64(
         HostTensor::from_vec_col_major(vec![1], vec![Df64::from_f64(2.0)]).unwrap(),
@@ -172,7 +173,7 @@ fn external_crate_defines_its_own_scalar_set() {
 
     // The external set and the set tenferro ships coexist without sharing a type.
     assert_eq!(
-        <tenferro_tensor_core::DefaultScalars as ScalarSet>::TAGS.len(),
+        <tenferro_tensor::DefaultScalars as ScalarSet>::TAGS.len(),
         7
     );
     assert_eq!(<ExtendedSet as ScalarSet>::TAGS.len(), 2);
@@ -180,7 +181,7 @@ fn external_crate_defines_its_own_scalar_set() {
 
 #[test]
 fn erased_values_carry_a_scalar_tenferro_does_not_define() {
-    use tenferro_tensor_core::{ErasedHostTensor, HostTensor};
+    use tenferro_tensor::{ErasedHostTensor, HostTensor};
 
     let low = 2f64.powi(-80);
     let mut values = [
@@ -219,7 +220,7 @@ fn erased_values_carry_a_scalar_tenferro_does_not_define() {
 #[test]
 fn two_sets_containing_the_same_scalar_share_one_numerical_instantiation() {
     use tenferro_df64_proof::ExtendedSet;
-    use tenferro_tensor_core::{DefaultScalars, HostTensor};
+    use tenferro_tensor::{DefaultScalars, HostTensor};
 
     // Extract the same f64 scalar from two different sets. The default set's
     // payload is opaque, so it is read back through the typed accessor.
@@ -245,7 +246,7 @@ fn two_sets_containing_the_same_scalar_share_one_numerical_instantiation() {
 #[test]
 fn an_external_set_promotes_within_its_own_lattice() {
     use tenferro_df64_proof::{ExtendedSet, ExtendedTag};
-    use tenferro_tensor_core::ScalarSet;
+    use tenferro_tensor::ScalarSet;
 
     // Double precision and the external scalar are both real floats, so the
     // higher-ranked member represents both. tenferro's own lattice is untouched.

@@ -19,9 +19,7 @@ use tenferro_tensor::{
 };
 
 use crate::error::ErrorPhase;
-use crate::exec::{
-    DispatchMode, ExecInstruction, ExecProgram, ExecSlot, ExtensionExecutionDispatch,
-};
+use crate::exec::{ExecInstruction, ExecProgram, ExecSlot, ExtensionExecutionDispatch};
 use crate::extension_cache::{ExtensionCacheSelector, ExtensionCacheStore};
 use crate::graph::CompiledGraph;
 use crate::runtime::schedule::{
@@ -1255,7 +1253,81 @@ where
             caches: extension_caches,
         };
 
-        if matches!(output_mode, RuntimeOutputMode::Value)
+        // One session per instruction. The terminal-value probe, the execution and
+        // the last-use reclaim all share a single entry; opening one each cost two
+        // extra session constructions per instruction (issue #1929 measurement: a
+        // two-instruction compiled graph paid ~+14 us).
+        let value_mode = matches!(output_mode, RuntimeOutputMode::Value);
+        if crate::exec::is_host_instruction(instruction) {
+            backend.with_backend_session(|exec| -> crate::Result<()> {
+                if value_mode
+                    && crate::exec::try_execute_terminal_value_instruction(
+                        exec,
+                        slots,
+                        instruction,
+                        terminal_slots,
+                    )?
+                {
+                    crate::exec::reclaim_last_use_inputs_exec(slots, instruction, exec);
+                    return Ok(());
+                }
+                crate::exec::execute_host_instruction_exec(exec, slots, instruction)?;
+                crate::exec::reclaim_last_use_inputs_exec(slots, instruction, exec);
+                Ok(())
+            })??;
+        } else if crate::exec::is_ffi_instruction(instruction) {
+            if crate::exec::needs_owner_extension_fallback(instruction, Some(&extension_dispatch)) {
+                // The extension entry forms its own session; no operation runs
+                // on the owner. Its probe and reclaim cannot join that session,
+                // so this path keeps its own entries.
+                if !(value_mode
+                    && crate::exec::instruction_may_be_terminal_value(instruction, terminal_slots)
+                    && backend.with_backend_session(|exec| {
+                        crate::exec::try_execute_terminal_value_instruction(
+                            exec,
+                            slots,
+                            instruction,
+                            terminal_slots,
+                        )
+                    })??)
+                {
+                    crate::exec::execute_owner_extension_fallback(
+                        backend,
+                        slots,
+                        instruction,
+                        Some(&mut extension_dispatch),
+                    )?;
+                }
+                crate::exec::reclaim_last_use_inputs_via_session(backend, slots, instruction);
+            } else {
+                backend.with_backend_session_cached(
+                    backend_cache,
+                    |exec| -> crate::Result<()> {
+                        if value_mode
+                            && crate::exec::try_execute_terminal_value_instruction(
+                                exec,
+                                slots,
+                                instruction,
+                                terminal_slots,
+                            )?
+                        {
+                            crate::exec::reclaim_last_use_inputs_exec(slots, instruction, exec);
+                            return Ok(());
+                        }
+                        crate::exec::execute_ffi_instruction_exec(
+                            exec,
+                            slots,
+                            instruction,
+                            Some(instruction_index),
+                            Some(&mut extension_dispatch),
+                        )?;
+                        crate::exec::reclaim_last_use_inputs_exec(slots, instruction, exec);
+                        Ok(())
+                    },
+                )??;
+            }
+        } else if value_mode
+            && crate::exec::instruction_may_be_terminal_value(instruction, terminal_slots)
             && backend.with_backend_session(|exec| {
                 crate::exec::try_execute_terminal_value_instruction(
                     exec,
@@ -1263,28 +1335,18 @@ where
                     instruction,
                     terminal_slots,
                 )
-            })?
+            })??
         {
             // Already handled as a metadata-only TensorValue.
-        } else if crate::exec::is_host_instruction(instruction) {
-            crate::exec::execute_host_instruction(backend, slots, instruction)?;
-        } else if crate::exec::is_ffi_instruction(instruction) {
-            crate::exec::execute_ffi_instruction_cached(
-                backend,
-                backend_cache,
-                slots,
-                instruction,
-                DispatchMode::Unsegmented,
-                Some(instruction_index),
-                Some(&mut extension_dispatch),
-            )?;
+            crate::exec::reclaim_last_use_inputs_via_session(backend, slots, instruction);
         } else {
-            let result = backend.with_backend_session(|exec| {
-                crate::exec::execute_backend_op(exec, slots, instruction)
-            })?;
-            slots[instruction.output_slots[0]] = Some(ExecSlot::Owned(result));
+            backend.with_backend_session(|exec| -> crate::Result<()> {
+                let result = crate::exec::execute_backend_op(exec, slots, instruction)?;
+                slots[instruction.output_slots[0]] = Some(ExecSlot::Owned(result));
+                crate::exec::reclaim_last_use_inputs_exec(slots, instruction, exec);
+                Ok(())
+            })??;
         }
-        crate::exec::reclaim_last_use_inputs_backend(slots, instruction, backend);
         Ok(())
     }
 
@@ -1321,7 +1383,7 @@ where
                     let read = slots[slot].as_ref().map(ExecSlot::as_read).ok_or_else(|| {
                         crate::Error::from(tenferro_tensor::Error::MissingValue { slot })
                     })?;
-                    backend.with_backend_session(|exec| exec.to_contiguous_read(read))?
+                    backend.with_backend_session(|exec| exec.to_contiguous_read(read))??
                 };
                 slots[slot] = Some(ExecSlot::Owned(tensor));
             }
@@ -1342,8 +1404,8 @@ where
 
         let mut lease = self.lease_state("Runtime::run_prepared elementwise region")?;
         let backend = &mut lease.state_mut().backend;
-        let outputs =
-            backend.with_backend_session(|exec| exec.execute_elementwise_fusion(&inputs, plan))?;
+        let outputs = backend
+            .with_backend_session(|exec| exec.execute_elementwise_fusion(&inputs, plan))??;
         let Some(outputs) = outputs else {
             return Ok(false);
         };
@@ -1363,13 +1425,13 @@ where
     fn materialize_slot<'input>(&self, slot: ExecSlot<'input>) -> Result<Tensor> {
         let mut lease = self.lease_state("Runtime::run_compiled collect outputs")?;
         let backend = &mut lease.state_mut().backend;
-        backend.with_backend_session(|exec| slot.into_tensor(exec))
+        backend.with_backend_session(|exec| slot.into_tensor(exec))?
     }
 
     fn materialize_slot_value<'input>(&self, slot: ExecSlot<'input>) -> Result<TensorValue> {
         let mut lease = self.lease_state("Runtime::run_compiled_values collect outputs")?;
         let backend = &mut lease.state_mut().backend;
-        backend.with_backend_session(|exec| slot.into_value(exec))
+        backend.with_backend_session(|exec| slot.into_value(exec))?
     }
 }
 
@@ -3343,7 +3405,7 @@ mod tests {
                 })?;
             Ok(vec![backend.with_backend_session(|exec| {
                 exec.to_contiguous_read(inputs[0].clone())
-            })?])
+            })??])
         }
     }
 
@@ -3450,8 +3512,8 @@ mod tests {
                 .map_err(|source| {
                     Error::runtime_state_source("reentrant_probe", ErrorPhase::Execution, source)
                 })?;
-            let materialized =
-                backend.with_backend_session(|exec| exec.to_contiguous_read(inputs[0].clone()))?;
+            let materialized = backend
+                .with_backend_session(|exec| exec.to_contiguous_read(inputs[0].clone()))??;
             self.probe_reentrant_call(materialized.duplicate()?);
             Ok(vec![materialized])
         }

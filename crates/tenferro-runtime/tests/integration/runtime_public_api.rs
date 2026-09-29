@@ -120,6 +120,7 @@ fn tensor_extension_trait_covers_eager_runtime_paths() {
                 Ok((converted, casted, reshaped, transposed, summed))
             },
         )
+        .unwrap()
         .unwrap();
     assert_eq!(converted.dtype(), DType::F64);
     assert_eq!(converted.as_slice::<f64>().unwrap(), &[1.0, 2.0]);
@@ -141,6 +142,7 @@ fn concrete_tensor_matmul_rejects_non_matrix_inputs_without_rank_underflow() {
 
     let err = backend
         .with_backend_session(|session| scalar.matmul(&vector, session))
+        .unwrap()
         .unwrap_err();
 
     assert!(matches!(

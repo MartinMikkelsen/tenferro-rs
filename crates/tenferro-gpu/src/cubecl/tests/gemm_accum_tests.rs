@@ -5,8 +5,8 @@ use num_complex::Complex64;
 use crate::DotGeneralConfig;
 use crate::Tensor;
 use tenferro_tensor::{
-    ContractionScalar, DotGeneralAccumulation, TensorDot, TensorRead, TensorView, TensorViewMut,
-    TensorWrite, TypedTensorView,
+    BackendSessionHost, ContractionScalar, DotGeneralAccumulation, TensorRead, TensorView,
+    TensorViewMut, TensorWrite, TypedTensorView,
 };
 
 use super::{
@@ -36,25 +36,31 @@ fn run_accum_case(
     let mut gpu = gpu_backend();
 
     let mut expected = out_init.duplicate().expect("host output duplication");
-    cpu.dot_general_read_into_accum(
-        TensorRead::from_tensor(&lhs),
-        TensorRead::from_tensor(&rhs),
-        &config,
-        accumulation,
-        TensorWrite::from_tensor(&mut expected),
-    )
+    cpu.with_backend_session(|__s| {
+        __s.dot_general_read_into_accum(
+            TensorRead::from_tensor(&lhs),
+            TensorRead::from_tensor(&rhs),
+            &config,
+            accumulation,
+            TensorWrite::from_tensor(&mut expected),
+        )
+    })
+    .unwrap()
     .unwrap();
 
     let gpu_lhs = upload(&gpu, &lhs);
     let gpu_rhs = upload(&gpu, &rhs);
     let mut gpu_out = upload(&gpu, &out_init);
-    gpu.dot_general_read_into_accum(
-        TensorRead::from_tensor(&gpu_lhs),
-        TensorRead::from_tensor(&gpu_rhs),
-        &config,
-        accumulation,
-        TensorWrite::from_tensor(&mut gpu_out),
-    )
+    gpu.with_backend_session(|__s| {
+        __s.dot_general_read_into_accum(
+            TensorRead::from_tensor(&gpu_lhs),
+            TensorRead::from_tensor(&gpu_rhs),
+            &config,
+            accumulation,
+            TensorWrite::from_tensor(&mut gpu_out),
+        )
+    })
+    .unwrap()
     .unwrap();
     let actual = download(&gpu, &gpu_out);
 
@@ -151,18 +157,22 @@ fn test_accum_dtype_mismatch_rejected() {
     let lhs = upload(&gpu, &tensor_f64(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]));
     let rhs = upload(&gpu, &tensor_f64(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]));
     let mut out = upload(&gpu, &tensor_f64(vec![2, 2], vec![0.0; 4]));
-    let result = gpu.dot_general_read_into_accum(
-        TensorRead::from_tensor(&lhs),
-        TensorRead::from_tensor(&rhs),
-        &matmul_config(),
-        DotGeneralAccumulation {
-            lhs_conj: false,
-            rhs_conj: false,
-            alpha: ContractionScalar::F32(1.0),
-            beta: ContractionScalar::F64(0.0),
-        },
-        TensorWrite::from_tensor(&mut out),
-    );
+    let result = gpu
+        .with_backend_session(|__s| {
+            __s.dot_general_read_into_accum(
+                TensorRead::from_tensor(&lhs),
+                TensorRead::from_tensor(&rhs),
+                &matmul_config(),
+                DotGeneralAccumulation {
+                    lhs_conj: false,
+                    rhs_conj: false,
+                    alpha: ContractionScalar::F32(1.0),
+                    beta: ContractionScalar::F64(0.0),
+                },
+                TensorWrite::from_tensor(&mut out),
+            )
+        })
+        .unwrap();
     assert!(
         result.is_err(),
         "f32 alpha with f64 operands must be rejected"
@@ -180,18 +190,22 @@ fn test_accum_view_output_is_explicit_error() {
     let mut out_host = vec![0.0_f64; 4];
     let shape = [2usize, 2usize];
     let view = tenferro_tensor::TensorViewMut::f64(&shape, &mut out_host).unwrap();
-    let result = gpu.dot_general_read_into_accum(
-        TensorRead::from_tensor(&lhs),
-        TensorRead::from_tensor(&rhs),
-        &matmul_config(),
-        DotGeneralAccumulation {
-            lhs_conj: false,
-            rhs_conj: false,
-            alpha: ContractionScalar::F64(1.0),
-            beta: ContractionScalar::F64(0.0),
-        },
-        TensorWrite::from_view(view),
-    );
+    let result = gpu
+        .with_backend_session(|__s| {
+            __s.dot_general_read_into_accum(
+                TensorRead::from_tensor(&lhs),
+                TensorRead::from_tensor(&rhs),
+                &matmul_config(),
+                DotGeneralAccumulation {
+                    lhs_conj: false,
+                    rhs_conj: false,
+                    alpha: ContractionScalar::F64(1.0),
+                    beta: ContractionScalar::F64(0.0),
+                },
+                TensorWrite::from_view(view),
+            )
+        })
+        .unwrap();
     assert!(result.is_err(), "view output must be an explicit error");
 }
 
@@ -204,35 +218,43 @@ fn test_accum_zero_contraction_rejects_cpu_tensors() {
     let lhs = tensor_f64(vec![2, 0], vec![]);
     let rhs = tensor_f64(vec![0, 2], vec![]);
     let mut gpu_out = upload(&gpu, &tensor_f64(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]));
-    let result = gpu.dot_general_read_into_accum(
-        TensorRead::from_tensor(&lhs),
-        TensorRead::from_tensor(&rhs),
-        &matmul_config(),
-        DotGeneralAccumulation {
-            lhs_conj: false,
-            rhs_conj: false,
-            alpha: ContractionScalar::F64(1.0),
-            beta: ContractionScalar::F64(1.0),
-        },
-        TensorWrite::from_tensor(&mut gpu_out),
-    );
+    let result = gpu
+        .with_backend_session(|__s| {
+            __s.dot_general_read_into_accum(
+                TensorRead::from_tensor(&lhs),
+                TensorRead::from_tensor(&rhs),
+                &matmul_config(),
+                DotGeneralAccumulation {
+                    lhs_conj: false,
+                    rhs_conj: false,
+                    alpha: ContractionScalar::F64(1.0),
+                    beta: ContractionScalar::F64(1.0),
+                },
+                TensorWrite::from_tensor(&mut gpu_out),
+            )
+        })
+        .unwrap();
     assert!(result.is_err(), "CPU operands must be rejected");
 
     let gpu_lhs = upload(&gpu, &lhs);
     let gpu_rhs = upload(&gpu, &rhs);
     let mut cpu_out = tensor_f64(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]);
-    let result = gpu.dot_general_read_into_accum(
-        TensorRead::from_tensor(&gpu_lhs),
-        TensorRead::from_tensor(&gpu_rhs),
-        &matmul_config(),
-        DotGeneralAccumulation {
-            lhs_conj: false,
-            rhs_conj: false,
-            alpha: ContractionScalar::F64(1.0),
-            beta: ContractionScalar::F64(1.0),
-        },
-        TensorWrite::from_tensor(&mut cpu_out),
-    );
+    let result = gpu
+        .with_backend_session(|__s| {
+            __s.dot_general_read_into_accum(
+                TensorRead::from_tensor(&gpu_lhs),
+                TensorRead::from_tensor(&gpu_rhs),
+                &matmul_config(),
+                DotGeneralAccumulation {
+                    lhs_conj: false,
+                    rhs_conj: false,
+                    alpha: ContractionScalar::F64(1.0),
+                    beta: ContractionScalar::F64(1.0),
+                },
+                TensorWrite::from_tensor(&mut cpu_out),
+            )
+        })
+        .unwrap();
     assert!(result.is_err(), "CPU output must be rejected");
 }
 
@@ -340,18 +362,21 @@ fn test_accum_view_operands_offset_regions_f64() {
     let out_view = out_t
         .backend_region_view_mut(vec![2, 2], vec![1, 4], 3)
         .unwrap();
-    gpu.dot_general_read_into_accum(
-        TensorRead::from_view(TensorView::F64(lhs_view)),
-        TensorRead::from_view(TensorView::F64(rhs_view)),
-        &matmul_config(),
-        DotGeneralAccumulation {
-            lhs_conj: false,
-            rhs_conj: false,
-            alpha: ContractionScalar::F64(alpha),
-            beta: ContractionScalar::F64(beta),
-        },
-        TensorWrite::from_view(TensorViewMut::F64(out_view)),
-    )
+    gpu.with_backend_session(|__s| {
+        __s.dot_general_read_into_accum(
+            TensorRead::from_view(TensorView::F64(lhs_view)),
+            TensorRead::from_view(TensorView::F64(rhs_view)),
+            &matmul_config(),
+            DotGeneralAccumulation {
+                lhs_conj: false,
+                rhs_conj: false,
+                alpha: ContractionScalar::F64(alpha),
+                beta: ContractionScalar::F64(beta),
+            },
+            TensorWrite::from_view(TensorViewMut::F64(out_view)),
+        )
+    })
+    .unwrap()
     .unwrap();
 
     // The updated region matches the host reference and every element outside
@@ -384,11 +409,14 @@ fn test_read_view_operands_allocating_f64() {
         .map(|i| region_get(&rhs_host, 7, &[1, 3], &[i % 3, i / 3]))
         .collect();
     let expected = cpu
-        .dot_general(
-            &tensor_f64(vec![2, 3], lhs_compact),
-            &tensor_f64(vec![3, 2], rhs_compact),
-            &matmul_config(),
-        )
+        .with_backend_session(|__s| {
+            __s.dot_general_read(
+                TensorRead::from_tensor(&tensor_f64(vec![2, 3], lhs_compact)),
+                TensorRead::from_tensor(&tensor_f64(vec![3, 2], rhs_compact)),
+                &matmul_config(),
+            )
+        })
+        .unwrap()
         .unwrap();
 
     let lhs_gpu = upload(&gpu, &tensor_f64(vec![32], lhs_host));
@@ -403,11 +431,14 @@ fn test_read_view_operands_allocating_f64() {
         .backend_region_view(vec![3, 2], vec![1, 3], 7)
         .unwrap();
     let actual = gpu
-        .dot_general_read(
-            TensorRead::from_view(TensorView::F64(lhs_view)),
-            TensorRead::from_view(TensorView::F64(rhs_view)),
-            &matmul_config(),
-        )
+        .with_backend_session(|__s| {
+            __s.dot_general_read(
+                TensorRead::from_view(TensorView::F64(lhs_view)),
+                TensorRead::from_view(TensorView::F64(rhs_view)),
+                &matmul_config(),
+            )
+        })
+        .unwrap()
         .unwrap();
 
     let actual = download(&gpu, &actual);
@@ -472,18 +503,21 @@ fn test_accum_block_diagonal_regions_of_one_buffer_f64() {
         let out_view = out_t
             .backend_region_view_mut(vec![2, 2], vec![1, 4], offset)
             .unwrap();
-        gpu.dot_general_read_into_accum(
-            TensorRead::from_tensor(lhs),
-            TensorRead::from_tensor(rhs),
-            &matmul_config(),
-            DotGeneralAccumulation {
-                lhs_conj: false,
-                rhs_conj: false,
-                alpha: ContractionScalar::F64(alpha),
-                beta: ContractionScalar::F64(beta),
-            },
-            TensorWrite::from_view(TensorViewMut::F64(out_view)),
-        )
+        gpu.with_backend_session(|__s| {
+            __s.dot_general_read_into_accum(
+                TensorRead::from_tensor(lhs),
+                TensorRead::from_tensor(rhs),
+                &matmul_config(),
+                DotGeneralAccumulation {
+                    lhs_conj: false,
+                    rhs_conj: false,
+                    alpha: ContractionScalar::F64(alpha),
+                    beta: ContractionScalar::F64(beta),
+                },
+                TensorWrite::from_view(TensorViewMut::F64(out_view)),
+            )
+        })
+        .unwrap()
         .unwrap();
     }
 
@@ -506,18 +540,22 @@ fn test_accum_host_view_operand_rejected() {
     let lhs_view = TypedTensorView::from_col_major(&[2, 2], &lhs_host).unwrap();
     let rhs = upload(&gpu, &tensor_f64(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]));
     let mut out = upload(&gpu, &tensor_f64(vec![2, 2], vec![0.0; 4]));
-    let result = gpu.dot_general_read_into_accum(
-        TensorRead::from_view(TensorView::F64(lhs_view)),
-        TensorRead::from_tensor(&rhs),
-        &matmul_config(),
-        DotGeneralAccumulation {
-            lhs_conj: false,
-            rhs_conj: false,
-            alpha: ContractionScalar::F64(1.0),
-            beta: ContractionScalar::F64(0.0),
-        },
-        TensorWrite::from_tensor(&mut out),
-    );
+    let result = gpu
+        .with_backend_session(|__s| {
+            __s.dot_general_read_into_accum(
+                TensorRead::from_view(TensorView::F64(lhs_view)),
+                TensorRead::from_tensor(&rhs),
+                &matmul_config(),
+                DotGeneralAccumulation {
+                    lhs_conj: false,
+                    rhs_conj: false,
+                    alpha: ContractionScalar::F64(1.0),
+                    beta: ContractionScalar::F64(0.0),
+                },
+                TensorWrite::from_tensor(&mut out),
+            )
+        })
+        .unwrap();
     assert!(result.is_err(), "host view operand must be rejected");
 }
 
@@ -536,18 +574,22 @@ fn test_accum_negative_stride_view_rejected() {
         .unwrap();
     let rhs = upload(&gpu, &tensor_f64(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]));
     let mut out = upload(&gpu, &tensor_f64(vec![2, 2], vec![0.0; 4]));
-    let result = gpu.dot_general_read_into_accum(
-        TensorRead::from_view(TensorView::F64(lhs_view)),
-        TensorRead::from_tensor(&rhs),
-        &matmul_config(),
-        DotGeneralAccumulation {
-            lhs_conj: false,
-            rhs_conj: false,
-            alpha: ContractionScalar::F64(1.0),
-            beta: ContractionScalar::F64(0.0),
-        },
-        TensorWrite::from_tensor(&mut out),
-    );
+    let result = gpu
+        .with_backend_session(|__s| {
+            __s.dot_general_read_into_accum(
+                TensorRead::from_view(TensorView::F64(lhs_view)),
+                TensorRead::from_tensor(&rhs),
+                &matmul_config(),
+                DotGeneralAccumulation {
+                    lhs_conj: false,
+                    rhs_conj: false,
+                    alpha: ContractionScalar::F64(1.0),
+                    beta: ContractionScalar::F64(0.0),
+                },
+                TensorWrite::from_tensor(&mut out),
+            )
+        })
+        .unwrap();
     let err = result.unwrap_err();
     assert!(
         err.to_string().contains("stride"),
@@ -574,18 +616,22 @@ fn test_accum_zero_contraction_view_output_beta_error() {
         let out_view = out_t
             .backend_region_view_mut(vec![2, 2], vec![1, 4], 1)
             .unwrap();
-        let result = gpu.dot_general_read_into_accum(
-            TensorRead::from_tensor(&lhs),
-            TensorRead::from_tensor(&rhs),
-            &matmul_config(),
-            DotGeneralAccumulation {
-                lhs_conj: false,
-                rhs_conj: false,
-                alpha: ContractionScalar::F64(1.0),
-                beta: ContractionScalar::F64(beta),
-            },
-            TensorWrite::from_view(TensorViewMut::F64(out_view)),
-        );
+        let result = gpu
+            .with_backend_session(|__s| {
+                __s.dot_general_read_into_accum(
+                    TensorRead::from_tensor(&lhs),
+                    TensorRead::from_tensor(&rhs),
+                    &matmul_config(),
+                    DotGeneralAccumulation {
+                        lhs_conj: false,
+                        rhs_conj: false,
+                        alpha: ContractionScalar::F64(1.0),
+                        beta: ContractionScalar::F64(beta),
+                    },
+                    TensorWrite::from_view(TensorViewMut::F64(out_view)),
+                )
+            })
+            .unwrap();
         assert_eq!(result.is_ok(), expect_ok, "beta = {beta}: {result:?}");
     }
 
@@ -614,9 +660,25 @@ fn test_workspace_retirement_defers_eviction_barrier_f64() {
         let lhs_gpu = upload(&gpu, &lhs);
         let rhs_gpu = upload(&gpu, &rhs);
         let actual = gpu
-            .dot_general(&lhs_gpu, &rhs_gpu, &matmul_config())
+            .with_backend_session(|__s| {
+                __s.dot_general_read(
+                    TensorRead::from_tensor(&lhs_gpu),
+                    TensorRead::from_tensor(&rhs_gpu),
+                    &matmul_config(),
+                )
+            })
+            .unwrap()
             .unwrap();
-        let reference = cpu.dot_general(&lhs, &rhs, &matmul_config()).unwrap();
+        let reference = cpu
+            .with_backend_session(|__s| {
+                __s.dot_general_read(
+                    TensorRead::from_tensor(&lhs),
+                    TensorRead::from_tensor(&rhs),
+                    &matmul_config(),
+                )
+            })
+            .unwrap()
+            .unwrap();
         results.push((actual, reference));
     }
 

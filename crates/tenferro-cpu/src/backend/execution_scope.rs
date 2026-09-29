@@ -5,12 +5,13 @@ use std::marker::PhantomData;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use super::{CpuBackend, CpuRuntimeIdentity};
-use crate::arbiter::{has_active_execution, inherited_or_new_execution_owner, ResourcePermit};
+use super::{CpuBackend, CpuRuntimeIdentity, CPU_BACKEND};
+use crate::arbiter::{fresh_execution_owner, has_active_execution, ResourcePermit};
 use crate::engine::CpuEngine;
 use crate::provider::CpuOperationEntry;
 use crate::resource_domain::CpuResourceDomain;
 use crate::CpuDomainOwnership;
+use tenferro_tensor::SessionEntryError;
 
 struct Scope {
     identity: CpuRuntimeIdentity,
@@ -85,14 +86,18 @@ impl CpuBackend {
     ///
     /// ```
     /// use tenferro_cpu::CpuBackend;
-    /// use tenferro_tensor::{Tensor, TensorElementwise};
+    /// use tenferro_tensor::{BackendSessionHost, Tensor, TensorRead};
     ///
     /// let owner = CpuBackend::with_threads(1)?;
     /// let mut operations = owner.clone();
     /// let x = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 3.0])?;
-    /// let y = owner.with_execution_scope(|| {
-    ///     let y = operations.add(&x, &x)?;
-    ///     operations.add(&y, &x)
+    /// let y = owner.with_execution_scope(|| -> Result<_, tenferro_tensor::Error> {
+    ///     let y = operations.with_backend_session(|session| {
+    ///         session.add_read(TensorRead::from_tensor(&x), TensorRead::from_tensor(&x))
+    ///     })??;
+    ///     Ok(operations.with_backend_session(|session| {
+    ///         session.add_read(TensorRead::from_tensor(&y), TensorRead::from_tensor(&x))
+    ///     })??)
     /// })??;
     /// assert_eq!(y.as_slice::<f64>()?, &[3.0, 9.0]);
     /// # Ok::<(), Box<dyn std::error::Error>>(())
@@ -102,15 +107,20 @@ impl CpuBackend {
     ///
     /// Returns [`crate::Error::RuntimeState`] if a scope or CPU execution is
     /// already active, or [`crate::Error::Unsupported`] for an externally managed
-    /// executor. Executor admission errors retain their typed source in
-    /// [`crate::Error::BackendSource`]. A callback's return value, including its
-    /// own error result, is returned unchanged inside this method's result.
+    /// executor. Poisoned admission state is reported as
+    /// [`crate::Error::SessionEntry`]. Executor admission errors retain their
+    /// typed source in [`crate::Error::BackendSource`]. A callback's return value,
+    /// including its own error result, is returned unchanged inside this
+    /// method's result.
+    ///
+    /// Sessions opened inside the callback with a different backend witness fail
+    /// with [`tenferro_tensor::SessionEntryError::IncompatibleContext`], and a
+    /// session opened from inside another session fails with
+    /// [`tenferro_tensor::SessionEntryError::Reentered`]; neither runs its
+    /// callback.
     ///
     /// # Panics
     ///
-    /// Existing infallible backend-session APIs still panic on invalid nested
-    /// entry or a different backend witness. Do not enter backend operations from
-    /// inside an active borrowed session/provider operation or from other workers.
     /// A panic in the callback propagates after releasing the scope and permit.
     pub fn with_execution_scope<R: Send>(
         &self,
@@ -129,9 +139,12 @@ impl CpuBackend {
                 "shared execution scopes require a Tenferro-managed CPU domain; use ordinary operation entry for external domains",
             ));
         }
-        let owner = inherited_or_new_execution_owner();
-        let permit = Arc::new(self.acquire_execution_permit(owner));
-        let entry = CpuOperationEntry::new(self.engine.domain(), &permit);
+        let owner = fresh_execution_owner().ok_or(SessionEntryError::Reentered {
+            backend: CPU_BACKEND,
+        })?;
+        let permit = Arc::new(self.acquire_execution_permit(owner)?);
+        let entry = CpuOperationEntry::new(self.engine.domain(), &permit)
+            .with_batch_policy(self.batch_policy);
         entry
             .enter(entry.preferred_engine_mode(), |_| {
                 SCOPE.with(|slot| {
@@ -148,21 +161,29 @@ impl CpuBackend {
             .map_err(|error| crate::Error::backend_source(OP, error))
     }
 
-    pub(super) fn execution_admission(&self) -> crate::Result<ExecutionAdmission> {
+    /// Admit one CPU operation or session, before any user callback runs.
+    ///
+    /// Inside an active execution scope this reuses the scope's permit; outside
+    /// one it acquires a fresh permit, waiting in FIFO order behind other
+    /// threads that hold overlapping CPU resources.
+    pub(super) fn execution_admission(&self) -> Result<ExecutionAdmission, SessionEntryError> {
         let shared = SCOPE.with(|slot| {
             let mut slot = slot.borrow_mut();
             let Some(scope) = slot.as_mut() else {
                 return Ok(None);
             };
             if scope.operation_active {
-                // Preserve the original backend/session nested-entry guard.
+                // An operation of this scope is running; nested entry falls
+                // through to the reentry check below.
                 return Ok(None);
             }
             if scope.identity != self.runtime_identity {
-                return Err(crate::Error::runtime_state(
-                    "CPU execution scope",
-                    "operation backend does not match the scope; use a clone of its backend witness",
-                ));
+                return Err(SessionEntryError::IncompatibleContext {
+                    backend: CPU_BACKEND,
+                    message: "operation backend does not match the active execution scope; \
+                              use a clone of the scope's backend witness"
+                        .to_owned(),
+                });
             }
             scope.operation_active = true;
             Ok(Some(ExecutionAdmission::Shared(
@@ -173,16 +194,11 @@ impl CpuBackend {
         if let Some(shared) = shared {
             return Ok(shared);
         }
-        let owner = inherited_or_new_execution_owner();
+        let owner = fresh_execution_owner().ok_or(SessionEntryError::Reentered {
+            backend: CPU_BACKEND,
+        })?;
         Ok(ExecutionAdmission::Standalone(
-            self.acquire_execution_permit(owner),
+            self.acquire_execution_permit(owner)?,
         ))
-    }
-
-    pub(super) fn infallible_execution_admission(&self) -> ExecutionAdmission {
-        // INVARIANT: BackendSessionHost and install have existing infallible
-        // callback contracts; invalid scope entry retains their panic boundary.
-        self.execution_admission()
-            .unwrap_or_else(|error| panic!("{error}"))
     }
 }

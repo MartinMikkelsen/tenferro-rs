@@ -332,11 +332,12 @@ fn webgpu_provider_keeps_runtime_transfer_and_gemm_boundaries_split() {
 
 #[test]
 fn webgpu_materialization_does_not_inherit_host_defaults() {
-    let webgpu_mod = repo_file("crates/tenferro-gpu/src/webgpu/mod.rs");
+    // The operation implementations live on the execution session now.
+    let session = repo_file("crates/tenferro-gpu/src/webgpu/exec_session.rs");
     let structural = repo_file("crates/tenferro-gpu/src/webgpu/structural.rs");
     assert!(
-        webgpu_mod.contains("fn to_contiguous_read")
-            && webgpu_mod.contains("structural::to_contiguous_read(self, input)"),
+        session.contains("fn to_contiguous_read")
+            && session.contains("structural::to_contiguous_read(self.backend, input)"),
         "WebGPU materialization must delegate to its device-native structural module"
     );
     assert!(
@@ -347,8 +348,7 @@ fn webgpu_materialization_does_not_inherit_host_defaults() {
         "WebGPU materialization must validate and consume resident device views without hidden transfer"
     );
     assert!(
-        webgpu_mod.contains("fn copy_read_into")
-            && webgpu_mod.contains("WebGpuBackend::copy_read_into"),
+        session.contains("fn copy_read_into") && session.contains("WebGpuBackend::copy_read_into"),
         "unsupported WebGPU copy-into must remain an explicit rejection instead of inheriting host defaults"
     );
 }
@@ -372,7 +372,13 @@ fn cubecl_output_allocations_use_checked_shape_products() {
 
 #[test]
 fn cubecl_structural_shape_arithmetic_is_checked() {
-    let cubecl_mod = repo_file("crates/tenferro-gpu/src/cubecl/mod.rs");
+    // The structural bodies moved to `ops.rs`; the module still holds the shared
+    // shape helpers, so both files are checked for the arithmetic contract.
+    let cubecl_mod = format!(
+        "{}\n{}",
+        repo_file("crates/tenferro-gpu/src/cubecl/mod.rs"),
+        repo_file("crates/tenferro-gpu/src/cubecl/ops.rs")
+    );
     assert!(
         cubecl_mod.contains("checked_dim_product(\"reshape\", \"input shape\", input.shape())?")
             && cubecl_mod.contains("checked_dim_product(\"reshape\", \"output shape\", shape)?"),
@@ -489,19 +495,20 @@ fn cubecl_copy_into_reports_typed_shape_mismatch() {
 #[test]
 fn cubecl_runtime_materialization_and_copy_stay_device_owned_and_typed() {
     let cubecl_mod = repo_file("crates/tenferro-gpu/src/cubecl/mod.rs");
-    let structural = cubecl_mod
-        .split_once("impl TensorStructural for CudaBackend")
+    let cubecl_ops = repo_file("crates/tenferro-gpu/src/cubecl/ops.rs");
+    let structural = cubecl_ops
+        .split_once("pub(super) fn transpose_read(")
         .expect("CUDA structural implementation must exist")
         .1
-        .split_once("impl TensorReduction for CudaBackend")
+        .split_once("pub(super) fn reduce_sum_read(")
         .expect("CUDA structural implementation must precede reductions")
         .0;
     let runtime_methods = structural
-        .split_once("fn to_contiguous_read(")
+        .split_once("pub(super) fn to_contiguous_read(")
         .expect("CUDA runtime materialization override must exist")
         .1
-        .split_once("fn transpose(")
-        .expect("CUDA runtime methods must precede transpose")
+        .split_once("pub(super) fn cast(")
+        .expect("CUDA runtime methods must precede the typed structural entries")
         .0;
 
     for method in ["fn to_contiguous_read(", "fn copy_read_into("] {

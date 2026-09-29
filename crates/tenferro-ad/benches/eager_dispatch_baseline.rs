@@ -61,13 +61,21 @@ fn bench_lazy(c: &mut Criterion) {
         let axes = [0_usize];
 
         group.bench_with_input(BenchmarkId::new("neg_f64", len), &len, |b, _| {
-            b.iter(|| consume_lazy(black_box(&lhs).neg().expect("neg should succeed")));
+            b.iter(|| {
+                consume_lazy(
+                    runtime
+                        .with_eager_session(|session| session.neg(black_box(&lhs)))
+                        .expect("borrow eager session")
+                        .expect("neg should succeed"),
+                )
+            });
         });
         group.bench_with_input(BenchmarkId::new("add_f64", len), &len, |b, _| {
             b.iter(|| {
                 consume_lazy(
-                    black_box(&lhs)
-                        .add(black_box(&rhs))
+                    runtime
+                        .with_eager_session(|session| session.add(black_box(&lhs), black_box(&rhs)))
+                        .expect("borrow eager session")
                         .expect("add should succeed"),
                 )
             });
@@ -75,8 +83,11 @@ fn bench_lazy(c: &mut Criterion) {
         group.bench_with_input(BenchmarkId::new("reduce_sum_f64", len), &len, |b, _| {
             b.iter(|| {
                 consume_lazy(
-                    black_box(&lhs)
-                        .reduce_sum(Some(&axes))
+                    runtime
+                        .with_eager_session(|session| {
+                            session.reduce_sum(black_box(&lhs), Some(&axes))
+                        })
+                        .expect("borrow eager session")
                         .expect("reduce_sum should succeed"),
                 )
             });
@@ -89,8 +100,11 @@ fn bench_lazy(c: &mut Criterion) {
         group.bench_with_input(BenchmarkId::new("slice_f64", len), &len, |b, _| {
             b.iter(|| {
                 consume_lazy(
-                    black_box(&lhs)
-                        .slice(black_box(slice.clone()))
+                    runtime
+                        .with_eager_session(|session| {
+                            session.slice(black_box(&lhs), black_box(slice.clone()))
+                        })
+                        .expect("borrow eager session")
                         .expect("slice should succeed"),
                 )
             });
@@ -104,8 +118,15 @@ fn bench_lazy(c: &mut Criterion) {
         group.bench_with_input(BenchmarkId::new("dot_general_f64", size), &size, |b, _| {
             b.iter(|| {
                 consume_lazy(
-                    black_box(&lhs)
-                        .dot_general(black_box(&rhs), black_box(config.clone()))
+                    runtime
+                        .with_eager_session(|session| {
+                            session.dot_general(
+                                black_box(&lhs),
+                                black_box(&rhs),
+                                black_box(config.clone()),
+                            )
+                        })
+                        .expect("borrow eager session")
                         .expect("dot_general should succeed"),
                 )
             });
@@ -124,13 +145,21 @@ fn bench_materialized(c: &mut Criterion) {
         let axes = [0_usize];
 
         group.bench_with_input(BenchmarkId::new("neg_f64", len), &len, |b, _| {
-            b.iter(|| consume_materialized(black_box(&lhs).neg().expect("neg should succeed")));
+            b.iter(|| {
+                consume_materialized(
+                    runtime
+                        .with_eager_session(|session| session.neg(black_box(&lhs)))
+                        .expect("borrow eager session")
+                        .expect("neg should succeed"),
+                )
+            });
         });
         group.bench_with_input(BenchmarkId::new("add_f64", len), &len, |b, _| {
             b.iter(|| {
                 consume_materialized(
-                    black_box(&lhs)
-                        .add(black_box(&rhs))
+                    runtime
+                        .with_eager_session(|session| session.add(black_box(&lhs), black_box(&rhs)))
+                        .expect("borrow eager session")
                         .expect("add should succeed"),
                 )
             });
@@ -138,8 +167,11 @@ fn bench_materialized(c: &mut Criterion) {
         group.bench_with_input(BenchmarkId::new("reduce_sum_f64", len), &len, |b, _| {
             b.iter(|| {
                 consume_materialized(
-                    black_box(&lhs)
-                        .reduce_sum(Some(&axes))
+                    runtime
+                        .with_eager_session(|session| {
+                            session.reduce_sum(black_box(&lhs), Some(&axes))
+                        })
+                        .expect("borrow eager session")
                         .expect("reduce_sum should succeed"),
                 )
             });
@@ -152,8 +184,11 @@ fn bench_materialized(c: &mut Criterion) {
         group.bench_with_input(BenchmarkId::new("slice_f64", len), &len, |b, _| {
             b.iter(|| {
                 consume_materialized(
-                    black_box(&lhs)
-                        .slice(black_box(slice.clone()))
+                    runtime
+                        .with_eager_session(|session| {
+                            session.slice(black_box(&lhs), black_box(slice.clone()))
+                        })
+                        .expect("borrow eager session")
                         .expect("slice should succeed"),
                 )
             });
@@ -167,8 +202,15 @@ fn bench_materialized(c: &mut Criterion) {
         group.bench_with_input(BenchmarkId::new("dot_general_f64", size), &size, |b, _| {
             b.iter(|| {
                 consume_materialized(
-                    black_box(&lhs)
-                        .dot_general(black_box(&rhs), black_box(config.clone()))
+                    runtime
+                        .with_eager_session(|session| {
+                            session.dot_general(
+                                black_box(&lhs),
+                                black_box(&rhs),
+                                black_box(config.clone()),
+                            )
+                        })
+                        .expect("borrow eager session")
                         .expect("dot_general should succeed"),
                 )
             });

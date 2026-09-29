@@ -37,7 +37,7 @@ fn compact_real_reads_roundtrip_on_all_axes_and_thread_counts() {
                                 .map(|(a, b)| (a.re - *b).abs().max(a.im.abs()))
                                 .fold(0.0 as $real, <$real>::max);
                             assert!(error < $tolerance, "full roundtrip threads={threads} axis={axis} norm={norm:?} max_error={error}");
-                        });
+                        }).unwrap();
                     }
                 }
             }
@@ -54,13 +54,17 @@ fn explicit_reclaim_to_another_backend_does_not_also_return_to_origin() {
     let mut destination = CpuBackend::with_threads(1).unwrap();
     let output = origin
         .with_backend_session(|s| input.fft(None, 0, FftNorm::Backward, s))
+        .unwrap()
         .unwrap();
     let pointer = output.as_slice::<Complex64>().unwrap().as_ptr();
-    destination.with_backend_session(|s| s.reclaim_buffer(output));
+    destination
+        .with_backend_session(|s| s.reclaim_buffer(output))
+        .unwrap();
     assert_eq!(origin.buffer_pool_stats().unwrap().buffers, 0);
     assert_eq!(destination.buffer_pool_stats().unwrap().buffers, 1);
     let reused = destination
         .with_backend_session(|s| input.fft(None, 0, FftNorm::Backward, s))
+        .unwrap()
         .unwrap();
     assert_eq!(reused.as_slice::<Complex64>().unwrap().as_ptr(), pointer);
     assert_eq!(destination.buffer_pool_stats().unwrap().buffers, 0);
@@ -73,25 +77,27 @@ fn explicit_reclaim_to_another_backend_does_not_also_return_to_origin() {
 fn output_drop_recycles_while_session_remains_active() {
     let input = Tensor::from_vec_col_major([32, 32], vec![Complex64::new(1., 0.); 1024]).unwrap();
     let mut backend = CpuBackend::with_threads(1).unwrap();
-    backend.with_backend_session(|session| {
-        let first = input.fft(None, 0, FftNorm::Backward, session).unwrap();
-        let first_pointer = first.as_slice::<Complex64>().unwrap().as_ptr();
-        let second = input.fft(None, 0, FftNorm::Backward, session).unwrap();
-        assert_ne!(
-            second.as_slice::<Complex64>().unwrap().as_ptr(),
-            first_pointer
-        );
-        drop(first);
-        let third = input.fft(None, 0, FftNorm::Backward, session).unwrap();
-        assert_eq!(
-            third.as_slice::<Complex64>().unwrap().as_ptr(),
-            first_pointer
-        );
-        assert_eq!(
-            second.as_slice::<Complex64>().unwrap(),
-            third.as_slice::<Complex64>().unwrap()
-        );
-    });
+    backend
+        .with_backend_session(|session| {
+            let first = input.fft(None, 0, FftNorm::Backward, session).unwrap();
+            let first_pointer = first.as_slice::<Complex64>().unwrap().as_ptr();
+            let second = input.fft(None, 0, FftNorm::Backward, session).unwrap();
+            assert_ne!(
+                second.as_slice::<Complex64>().unwrap().as_ptr(),
+                first_pointer
+            );
+            drop(first);
+            let third = input.fft(None, 0, FftNorm::Backward, session).unwrap();
+            assert_eq!(
+                third.as_slice::<Complex64>().unwrap().as_ptr(),
+                first_pointer
+            );
+            assert_eq!(
+                second.as_slice::<Complex64>().unwrap(),
+                third.as_slice::<Complex64>().unwrap()
+            );
+        })
+        .unwrap();
     assert!(backend.buffer_pool_stats().unwrap().buffers >= 2);
 }
 
@@ -100,23 +106,21 @@ fn nested_fft_session_is_rejected_and_backend_remains_usable() {
     let mut backend = CpuBackend::with_threads(8).unwrap();
     let mut nested = backend.clone();
     let input = Tensor::from_vec_col_major([2], vec![Complex64::new(1., 0.); 2]).unwrap();
-    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        backend.with_backend_session(|_| {
+    let nested_entry = backend
+        .with_backend_session(|_| {
             nested.with_backend_session(|s| input.fft(None, 0, FftNorm::Backward, s))
         })
-    }));
-    let payload = outcome.expect_err("CPU admission must reject a nested execution");
-    let message = payload
-        .downcast_ref::<String>()
-        .map(String::as_str)
-        .or_else(|| payload.downcast_ref::<&str>().copied())
         .unwrap();
     assert!(
-        message.contains("another CPU backend execution"),
-        "{message}"
+        matches!(
+            nested_entry,
+            Err(tenferro_tensor::SessionEntryError::Reentered { .. })
+        ),
+        "CPU admission must reject a nested execution: {nested_entry:?}"
     );
     let result = backend
         .with_backend_session(|s| input.fft(None, 0, FftNorm::Backward, s))
+        .unwrap()
         .unwrap();
     assert_eq!(
         result.as_slice::<Complex64>().unwrap(),
@@ -138,9 +142,11 @@ fn uneven_parallel_lane_partition_matches_serial() {
     let mut parallel = CpuBackend::with_threads(8).unwrap();
     let expected = serial
         .with_backend_session(|s| input.fft(None, 2, FftNorm::Backward, s))
+        .unwrap()
         .unwrap();
     let actual = parallel
         .with_backend_session(|s| input.fft(None, 2, FftNorm::Backward, s))
+        .unwrap()
         .unwrap();
     assert_eq!(
         actual.as_slice::<Complex64>().unwrap(),
@@ -168,9 +174,11 @@ fn parallel_lanes_match_serial_on_every_axis_with_padding_and_truncation() {
             for norm in [FftNorm::Backward, FftNorm::Forward, FftNorm::Ortho] {
                 let expected = serial
                     .with_backend_session(|s| input.fft(n, axis as isize, norm, s))
+                    .unwrap()
                     .unwrap();
                 let actual = parallel
                     .with_backend_session(|s| input.fft(n, axis as isize, norm, s))
+                    .unwrap()
                     .unwrap();
                 assert_eq!(
                     actual.as_slice::<Complex64>().unwrap(),
@@ -179,9 +187,11 @@ fn parallel_lanes_match_serial_on_every_axis_with_padding_and_truncation() {
                 );
                 let expected = serial
                     .with_backend_session(|s| input.ifft(n, axis as isize, norm, s))
+                    .unwrap()
                     .unwrap();
                 let actual = parallel
                     .with_backend_session(|s| input.ifft(n, axis as isize, norm, s))
+                    .unwrap()
                     .unwrap();
                 assert_eq!(
                     actual.as_slice::<Complex64>().unwrap(),

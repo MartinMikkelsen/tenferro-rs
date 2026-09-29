@@ -42,10 +42,58 @@ fn recycled_output_returns_only_after_final_group_owner_drops() {
 fn recycled_drop_during_another_checkout_does_not_reenter_the_execution_lock() {
     let mut pool = BufferPool::new();
     let tensor = recycled(&mut pool);
-    let output = PooledUninitOutput::<f64>::new(&mut pool, vec![4]).unwrap();
+    let output = PooledUninitOutput::<f64>::new(&pool, vec![4]).unwrap();
     drop(tensor);
     drop(output);
     assert_eq!(pool.len(), 1);
+}
+
+#[test]
+fn output_and_scratch_checkouts_coexist_without_borrowing_the_pool() {
+    let mut pool = BufferPool::new();
+    let mut output = PooledUninitOutput::<f64>::new(&pool, vec![2]).unwrap();
+    let mut scratch = PooledUninitOutput::<f64>::new(&pool, vec![2]).unwrap();
+    output.as_uninit_slice_mut()[0].write(2.0);
+    output.as_uninit_slice_mut()[1].write(3.0);
+    scratch.as_uninit_slice_mut()[0].write(5.0);
+    scratch.as_uninit_slice_mut()[1].write(7.0);
+    // An active lease must not prevent using the pool for other resources.
+    let zeroed = pool.acquire_zeroed::<f64>(1);
+    assert_eq!(zeroed, vec![0.0]);
+    // SAFETY: both elements of each lease were initialized above.
+    let result = unsafe { output.assume_init_recycled() }.unwrap();
+    let temporary = unsafe { scratch.assume_init_recycled() }.unwrap();
+    assert_eq!(result.as_slice().unwrap(), &[2.0, 3.0]);
+    assert_eq!(temporary.as_slice().unwrap(), &[5.0, 7.0]);
+    drop(result);
+    drop(temporary);
+    assert_eq!(pool.len(), 2);
+    assert!(pool.in_flight_is_empty());
+}
+
+#[test]
+fn ranked_recycled_handoff_returns_once_and_rank_error_cancels_checkout() {
+    use tenferro_tensor::Rank;
+
+    let pool = BufferPool::new();
+    let mut wrong = PooledUninitOutput::<f64>::new(&pool, vec![2]).unwrap();
+    wrong.as_uninit_slice_mut()[0].write(1.0);
+    wrong.as_uninit_slice_mut()[1].write(2.0);
+    // SAFETY: both elements have been initialized, although the selected rank is wrong.
+    assert!(unsafe { wrong.assume_init_as_recycled::<Rank<2>>() }.is_err());
+    assert!(pool.in_flight_is_empty());
+    assert!(pool.is_empty());
+
+    let mut output = PooledUninitOutput::<f64>::new(&pool, vec![2]).unwrap();
+    output.as_uninit_slice_mut()[0].write(3.0);
+    output.as_uninit_slice_mut()[1].write(4.0);
+    // SAFETY: both elements have been initialized.
+    let owner = unsafe { output.assume_init_as_recycled::<Rank<1>>() }.unwrap();
+    assert_eq!(owner.as_slice().unwrap(), &[3.0, 4.0]);
+    assert!(pool.is_empty());
+    drop(owner);
+    assert_eq!(pool.len(), 1);
+    assert!(pool.in_flight_is_empty());
 }
 
 #[test]
@@ -71,7 +119,7 @@ fn partial_output_is_discarded_on_error_and_unwind() {
         drop(recycled(&mut pool));
         assert_eq!(pool.len(), 1);
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let mut output = PooledUninitOutput::<f64>::new(&mut pool, vec![4]).unwrap();
+            let mut output = PooledUninitOutput::<f64>::new(&pool, vec![4]).unwrap();
             output.as_uninit_slice_mut()[0].write(f64::NAN);
             if unwind {
                 panic!("kernel stopped after a partial write");
@@ -127,8 +175,8 @@ fn compact_stride_validation_reports_dimension_and_product_overflow() {
 
 #[test]
 fn pooled_uninit_output_public_contract_covers_zero_length_handoff() {
-    let mut pool = BufferPool::new();
-    let mut output = PooledUninitOutput::<i32>::new(&mut pool, vec![0]).unwrap();
+    let pool = BufferPool::new();
+    let mut output = PooledUninitOutput::<i32>::new(&pool, vec![0]).unwrap();
     assert!(output.as_uninit_slice_mut().is_empty());
     assert!(output.as_uninit_bytes_mut().is_empty());
     assert_eq!(output.as_uninit_view_mut().unwrap().dims(), &[0]);

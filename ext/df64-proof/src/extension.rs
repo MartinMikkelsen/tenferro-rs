@@ -22,7 +22,8 @@ use tenferro_runtime::{
     SpecializationProjection,
 };
 use tenferro_tensor::{DType, Tensor, TensorRead, TensorView};
-use tenferro_tensor_core::{ErasedHostTensor, HostTensor, Scalar};
+use tenferro_tensor::{ErasedHostTensor, HostTensor};
+use tenferro_tensor_core::Scalar;
 
 use crate::{Df64, Df64Add};
 

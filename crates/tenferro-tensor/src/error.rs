@@ -93,6 +93,11 @@ pub enum Error {
         #[source]
         source: BoxError,
     },
+    #[error("backend session entry failed: {source}")]
+    SessionEntry {
+        #[source]
+        source: crate::SessionEntryError,
+    },
     #[error("missing runtime value for slot {slot}")]
     MissingValue { slot: usize },
     #[error("internal tensor error: {0}")]
@@ -162,7 +167,22 @@ impl<T> ReinterpretError<T> {
         &self.error
     }
 
-    pub(crate) fn into_parts(self) -> (T, Error) {
+    /// Consume the failure and return the retained owner with its typed cause.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::TypedTensor;
+    ///
+    /// let tensor = TypedTensor::<f32>::from_vec_col_major(vec![1], vec![1.0])?;
+    /// let Err(failure) = tensor.into_complex() else { return Ok(()); };
+    /// let (owner, error) = failure.into_parts();
+    /// assert!(!error.to_string().is_empty());
+    /// assert_eq!(owner.shape(), &[1]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    #[must_use]
+    pub fn into_parts(self) -> (T, Error) {
         (*self.owner, self.error)
     }
 }
@@ -575,11 +595,18 @@ impl Error {
             Self::IoSource { .. } => ErrorKind::Io,
             Self::RuntimeState { .. }
             | Self::RuntimeStateSource { .. }
-            | Self::HostAccess { .. } => ErrorKind::RuntimeState,
+            | Self::HostAccess { .. }
+            | Self::SessionEntry { .. } => ErrorKind::RuntimeState,
             Self::Extension { kind, .. } => *kind,
             Self::MissingValue { .. } => ErrorKind::RuntimeState,
             Self::Internal(_) => ErrorKind::Internal,
         }
+    }
+}
+
+impl From<crate::SessionEntryError> for Error {
+    fn from(source: crate::SessionEntryError) -> Self {
+        Self::SessionEntry { source }
     }
 }
 

@@ -3,7 +3,9 @@
 #[cfg(target_os = "macos")]
 use tenferro_gpu::apple::AppleContext;
 #[cfg(target_os = "macos")]
-use tenferro_linalg::LinalgBackend;
+use tenferro_linalg::TensorLinalgExt;
+#[cfg(target_os = "macos")]
+use tenferro_tensor::BackendSessionHost;
 #[cfg(target_os = "macos")]
 use tenferro_tensor::Tensor;
 
@@ -24,7 +26,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     // Backend selection is explicit. Cholesky is the initial mapped CPU linalg
     // operation; this is not an automatic or general linalg fallback.
     let mut cpu = context.cpu_backend().clone();
-    let factor = cpu.cholesky(&managed)?;
+    let factor = cpu.with_backend_session(|session| managed.cholesky(session))??;
 
     assert_eq!(managed_typed.allocation_domain(), Some(input_domain));
     assert_eq!(managed_typed.allocation_id(), Some(input_allocation));

@@ -1,5 +1,7 @@
 #[path = "integration/cuda_eager_tensor.rs"]
 mod cuda_eager_tensor;
+#[path = "integration/custom_session.rs"]
+mod custom_session;
 #[path = "integration/eager_tensor.rs"]
 mod eager_tensor;
 #[path = "integration/error_public.rs"]

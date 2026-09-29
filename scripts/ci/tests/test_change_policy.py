@@ -238,6 +238,16 @@ class LocalGateTests(unittest.TestCase):
             ROOT / "scripts" / "lib" / "python.sh",
             self.repo / "scripts" / "lib",
         )
+        # The gate audits session entry on every code change. The fixture has
+        # no crates, so it gets an allowlist of the same mechanisms with no
+        # recorded sites (the real entries would all read as stale).
+        shutil.copy2(ROOT / "scripts" / "audit-session-entry.py", self.repo / "scripts")
+        allowlist = json.loads(
+            (ROOT / "scripts" / "session-entry-allowlist.json").read_text(encoding="utf-8")
+        )
+        (self.repo / "scripts" / "session-entry-allowlist.json").write_text(
+            json.dumps({mechanism: [] for mechanism in allowlist}), encoding="utf-8"
+        )
         bin_dir = self.repo / "bin"
         bin_dir.mkdir()
         cargo = bin_dir / "cargo"

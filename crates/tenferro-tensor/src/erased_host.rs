@@ -1,20 +1,16 @@
-//! Host tensors whose element type is known only at run time.
+//! Dtype-erased external host value.
 //!
-//! A closed variant list cannot carry a scalar the crate does not declare, so a
-//! set with an externally defined member cannot use one. [`ErasedHostTensor`]
-//! carries the element type inside the value instead: the payload keeps its own
-//! concrete type and is recovered by identity, with no reinterpretation of bytes
-//! and no assumption that the element type belongs to any particular set.
-//!
-//! The erased value also carries the layout of the view it presents, so a
-//! metadata-only permutation and an explicit contiguous materialization exist
-//! without a variant in the typed view types. The payload is shared through an
-//! [`Arc`], so a view is one reference count and `duplicate` is the explicit copy.
+//! A downstream crate that defines its own scalar stores its data in a
+//! [`HostTensor`](crate::HostTensor) and hands it to [`ErasedHostTensor`]. The
+//! payload keeps its own element type and is recovered by that type, so no
+//! bytes are reinterpreted. This is the external-scalar half of the tensor
+//! family and lives with the host container it erases.
 
 use core::any::{Any, TypeId};
 use std::sync::Arc;
 
-use crate::{HostTensor, Scalar, ShapeVec, StrideVec, ValidationError};
+use crate::HostTensor;
+use tenferro_tensor_core::{Scalar, ShapeVec, StrideVec, ValidationError};
 
 /// Shape, element strides, and element offset of one erased view.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -191,7 +187,7 @@ impl<T: Scalar> ErasedPayload for HostTensor<T> {
 /// # Examples
 ///
 /// ```rust
-/// use tenferro_tensor_core::{ErasedHostTensor, HostTensor};
+/// use tenferro_tensor::{ErasedHostTensor, HostTensor};
 ///
 /// let value = ErasedHostTensor::new(HostTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?);
 /// assert_eq!(value.downcast_ref::<f64>().unwrap().as_slice(), &[1.0, 2.0]);
@@ -221,7 +217,7 @@ impl Clone for ErasedHostTensor {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_tensor_core::{ErasedHostTensor, HostTensor};
+    /// use tenferro_tensor::{ErasedHostTensor, HostTensor};
     ///
     /// let value = ErasedHostTensor::new(HostTensor::from_vec_col_major(vec![1], vec![7_i64])?);
     /// let view = value.clone();
@@ -260,7 +256,7 @@ impl ErasedHostTensor {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_tensor_core::{ErasedHostTensor, HostTensor};
+    /// use tenferro_tensor::{ErasedHostTensor, HostTensor};
     ///
     /// let erased = ErasedHostTensor::new(HostTensor::from_vec_col_major(vec![1], vec![7_i32])?);
     /// assert!(erased.is::<i32>());
@@ -284,7 +280,7 @@ impl ErasedHostTensor {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_tensor_core::{ErasedHostTensor, HostTensor};
+    /// use tenferro_tensor::{ErasedHostTensor, HostTensor};
     ///
     /// let erased = ErasedHostTensor::new(HostTensor::from_vec_col_major(vec![1], vec![1.0_f32])?);
     /// assert_eq!(erased.type_id(), core::any::TypeId::of::<HostTensor<f32>>());
@@ -302,7 +298,7 @@ impl ErasedHostTensor {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_tensor_core::{ErasedHostTensor, HostTensor};
+    /// use tenferro_tensor::{ErasedHostTensor, HostTensor};
     ///
     /// let erased = ErasedHostTensor::new(HostTensor::from_vec_col_major(vec![1], vec![1.0_f64])?);
     /// assert_eq!(erased.element_type_id(), core::any::TypeId::of::<f64>());
@@ -318,7 +314,7 @@ impl ErasedHostTensor {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_tensor_core::{ErasedHostTensor, HostTensor};
+    /// use tenferro_tensor::{ErasedHostTensor, HostTensor};
     ///
     /// let erased = ErasedHostTensor::new(HostTensor::from_vec_col_major(vec![2, 3], vec![0.0_f64; 6])?);
     /// assert_eq!(erased.shape(), &[2, 3]);
@@ -334,7 +330,7 @@ impl ErasedHostTensor {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_tensor_core::{ErasedHostTensor, HostTensor};
+    /// use tenferro_tensor::{ErasedHostTensor, HostTensor};
     ///
     /// let erased = ErasedHostTensor::new(HostTensor::from_vec_col_major(vec![2, 3], vec![0.0_f64; 6])?);
     /// assert_eq!(erased.strides(), &[1, 2]);
@@ -350,7 +346,7 @@ impl ErasedHostTensor {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_tensor_core::{ErasedHostTensor, HostTensor};
+    /// use tenferro_tensor::{ErasedHostTensor, HostTensor};
     ///
     /// let erased = ErasedHostTensor::new(HostTensor::from_vec_col_major(vec![2], vec![0.0_f64; 2])?);
     /// assert_eq!(erased.offset(), 0);
@@ -366,7 +362,7 @@ impl ErasedHostTensor {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_tensor_core::{ErasedHostTensor, HostTensor};
+    /// use tenferro_tensor::{ErasedHostTensor, HostTensor};
     ///
     /// let erased = ErasedHostTensor::new(HostTensor::from_vec_col_major(vec![2, 3], vec![0.0_f64; 6])?);
     /// assert!(erased.is_contiguous());
@@ -382,7 +378,7 @@ impl ErasedHostTensor {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_tensor_core::{ErasedHostTensor, HostTensor};
+    /// use tenferro_tensor::{ErasedHostTensor, HostTensor};
     ///
     /// let erased = ErasedHostTensor::new(HostTensor::from_vec_col_major(vec![2, 3], vec![0.0_f64; 6])?);
     /// assert_eq!(erased.element_count(), 6);
@@ -401,7 +397,7 @@ impl ErasedHostTensor {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_tensor_core::{ErasedHostTensor, HostTensor};
+    /// use tenferro_tensor::{ErasedHostTensor, HostTensor};
     ///
     /// let erased = ErasedHostTensor::new(HostTensor::from_vec_col_major(vec![1], vec![1.0_f64])?);
     /// assert!(erased.shares_payload_with(&erased.clone()));
@@ -421,7 +417,7 @@ impl ErasedHostTensor {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_tensor_core::{ErasedHostTensor, HostTensor};
+    /// use tenferro_tensor::{ErasedHostTensor, HostTensor};
     ///
     /// let erased = ErasedHostTensor::new(HostTensor::from_vec_col_major(vec![1], vec![1.0_f64])?);
     /// let mut copy = erased.duplicate();
@@ -456,7 +452,7 @@ impl ErasedHostTensor {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_tensor_core::{ErasedHostTensor, HostTensor};
+    /// use tenferro_tensor::{ErasedHostTensor, HostTensor};
     ///
     /// let erased = ErasedHostTensor::new(HostTensor::from_vec_col_major(vec![2, 3], vec![0.0_f64; 6])?);
     /// let permuted = erased.permuted(&[1, 0])?;
@@ -489,7 +485,7 @@ impl ErasedHostTensor {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_tensor_core::{ErasedHostTensor, HostTensor};
+    /// use tenferro_tensor::{ErasedHostTensor, HostTensor};
     ///
     /// let erased = ErasedHostTensor::new(HostTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0])?);
     /// let contiguous = erased.permuted(&[1, 0])?.to_contiguous()?;
@@ -517,7 +513,7 @@ impl ErasedHostTensor {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_tensor_core::{ErasedHostTensor, HostTensor};
+    /// use tenferro_tensor::{ErasedHostTensor, HostTensor};
     ///
     /// let erased = ErasedHostTensor::new(HostTensor::from_vec_col_major(vec![1], vec![1.0_f64])?);
     /// assert!(erased.is::<f64>());
@@ -537,7 +533,7 @@ impl ErasedHostTensor {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_tensor_core::{ErasedHostTensor, HostTensor};
+    /// use tenferro_tensor::{ErasedHostTensor, HostTensor};
     ///
     /// let erased = ErasedHostTensor::new(HostTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0])?);
     /// assert_eq!(erased.downcast_ref::<f64>().unwrap().shape(), &[2, 2]);
@@ -564,7 +560,7 @@ impl ErasedHostTensor {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_tensor_core::{ErasedHostTensor, HostTensor};
+    /// use tenferro_tensor::{ErasedHostTensor, HostTensor};
     ///
     /// let mut erased = ErasedHostTensor::new(HostTensor::from_vec_col_major(vec![1], vec![1_i64])?);
     /// erased.downcast_mut::<i64>().unwrap().as_mut_slice()[0] = 9;
@@ -585,7 +581,7 @@ impl ErasedHostTensor {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_tensor_core::{ErasedHostTensor, HostTensor};
+    /// use tenferro_tensor::{ErasedHostTensor, HostTensor};
     ///
     /// let erased = ErasedHostTensor::new(HostTensor::from_vec_col_major(vec![1], vec![2.0_f64])?);
     /// assert_eq!(erased.into_typed::<f64>().unwrap().as_slice(), &[2.0]);
@@ -612,7 +608,7 @@ impl ErasedHostTensor {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_tensor_core::{ErasedHostTensor, HostTensor};
+    /// use tenferro_tensor::{ErasedHostTensor, HostTensor};
     ///
     /// let erased = ErasedHostTensor::new(HostTensor::from_vec_col_major(vec![2, 2], vec![0.0_f64; 4])?);
     /// assert_eq!(erased.payload_element_count(), 4);
@@ -629,7 +625,7 @@ impl ErasedHostTensor {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_tensor_core::{ErasedHostTensor, HostTensor};
+    /// use tenferro_tensor::{ErasedHostTensor, HostTensor};
     ///
     /// let erased = ErasedHostTensor::new(HostTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?);
     /// assert_eq!(erased.as_dense::<f64>().unwrap().0, &[1.0, 2.0]);
@@ -652,7 +648,7 @@ impl ErasedHostTensor {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_tensor_core::{ErasedHostTensor, HostTensor};
+    /// use tenferro_tensor::{ErasedHostTensor, HostTensor};
     ///
     /// let erased = ErasedHostTensor::new(HostTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0])?);
     /// let permuted = erased.permuted(&[1, 0])?;
@@ -679,7 +675,7 @@ impl ErasedHostTensor {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_tensor_core::{ErasedHostTensor, HostTensor};
+    /// use tenferro_tensor::{ErasedHostTensor, HostTensor};
     ///
     /// let erased = ErasedHostTensor::new(HostTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0])?);
     ///

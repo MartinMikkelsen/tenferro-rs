@@ -6,7 +6,7 @@ mod support;
 use tenferro_ad::{EagerRuntime, EagerTensor};
 use tenferro_cpu::CpuBackend;
 #[cfg(feature = "autodiff")]
-use tenferro_fft::EagerTensorFftExt;
+use tenferro_fft::EagerSessionFftExt;
 use tenferro_fft::{FftNorm, TracedTensorFftExt};
 use tenferro_runtime::{
     DType, Error as RuntimeError, ErrorPhase, GraphCompiler, PrepareError, Tensor, TracedTensor,
@@ -79,6 +79,49 @@ fn fft_ad_context() -> tenferro_ad::AdContext {
         .unwrap()
         .build()
         .unwrap()
+}
+
+#[cfg(feature = "autodiff")]
+#[test]
+fn eager_fft_family_installs_and_executes_on_the_borrowed_session() {
+    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::with_threads(1).unwrap()).unwrap();
+    let (output, inverse, half, real_back) = ctx
+        .with_eager_session(|session| {
+            let input = session
+                .constant_from(Tensor::from_vec_col_major([2], vec![1.0_f64, 2.0]).unwrap())?;
+            let output = session.fft(&input, None, -1, FftNorm::Backward)?;
+            let inverse = session.ifft(&output, None, -1, FftNorm::Backward)?;
+            let half = session.rfft(&input, None, -1, FftNorm::Backward)?;
+            let real_back = session.irfft(&half, Some(2), -1, FftNorm::Backward)?;
+            Ok::<_, tenferro_ad::Error>((output, inverse, half, real_back))
+        })
+        .unwrap()
+        .unwrap();
+    assert_c64_close(
+        output.value().unwrap().as_slice::<Complex64>().unwrap(),
+        &[Complex64::new(3.0, 0.0), Complex64::new(-1.0, 0.0)],
+    );
+    assert_c64_close(
+        inverse.value().unwrap().as_slice::<Complex64>().unwrap(),
+        &[Complex64::new(1.0, 0.0), Complex64::new(2.0, 0.0)],
+    );
+    assert_c64_close(
+        half.value().unwrap().as_slice::<Complex64>().unwrap(),
+        &[Complex64::new(3.0, 0.0), Complex64::new(-1.0, 0.0)],
+    );
+    assert_f64_close(
+        real_back.value().unwrap().as_slice::<f64>().unwrap(),
+        &[1.0, 2.0],
+    );
+    let other = EagerRuntime::with_cpu_backend(CpuBackend::with_threads(1).unwrap()).unwrap();
+    let foreign = other
+        .constant_from(Tensor::from_vec_col_major([2], vec![1.0_f64, 2.0]).unwrap())
+        .unwrap();
+    let error = ctx
+        .with_eager_session(|session| session.fft(&foreign, None, -1, FftNorm::Backward))
+        .unwrap()
+        .unwrap_err();
+    assert!(matches!(error, RuntimeError::ContextMismatch { .. }));
 }
 
 #[cfg(feature = "autodiff")]
@@ -465,7 +508,12 @@ fn eager_fft_matches_traced_fft() {
         .unwrap()
         .fft(Some(3), -1, FftNorm::Ortho)
         .unwrap();
-    let eager = eager(input).fft(Some(3), -1, FftNorm::Ortho).unwrap();
+    let input = eager(input);
+    let eager = input
+        .runtime()
+        .with_eager_session(|s| s.fft(&input, Some(3), -1, FftNorm::Ortho))
+        .unwrap()
+        .unwrap();
 
     assert_c64_close(
         eager.to_tensor().unwrap().as_slice::<Complex64>().unwrap(),
@@ -490,7 +538,12 @@ fn eager_ifft_matches_traced_ifft() {
         .unwrap()
         .ifft(None, 0, FftNorm::Forward)
         .unwrap();
-    let eager = eager(input).ifft(None, 0, FftNorm::Forward).unwrap();
+    let input = eager(input);
+    let eager = input
+        .runtime()
+        .with_eager_session(|s| s.ifft(&input, None, 0, FftNorm::Forward))
+        .unwrap()
+        .unwrap();
 
     assert_c64_close(
         eager.to_tensor().unwrap().as_slice::<Complex64>().unwrap(),
@@ -506,7 +559,12 @@ fn eager_rfft_matches_traced_rfft() {
         .unwrap()
         .rfft(None, -1, FftNorm::Backward)
         .unwrap();
-    let eager = eager(input).rfft(None, -1, FftNorm::Backward).unwrap();
+    let input = eager(input);
+    let eager = input
+        .runtime()
+        .with_eager_session(|s| s.rfft(&input, None, -1, FftNorm::Backward))
+        .unwrap()
+        .unwrap();
 
     assert_c64_close(
         eager.to_tensor().unwrap().as_slice::<Complex64>().unwrap(),
@@ -530,7 +588,12 @@ fn eager_irfft_matches_traced_irfft() {
         .unwrap()
         .irfft(Some(4), -1, FftNorm::Backward)
         .unwrap();
-    let eager = eager(input).irfft(Some(4), -1, FftNorm::Backward).unwrap();
+    let input = eager(input);
+    let eager = input
+        .runtime()
+        .with_eager_session(|s| s.irfft(&input, Some(4), -1, FftNorm::Backward))
+        .unwrap()
+        .unwrap();
 
     assert_f64_close(
         eager.value().unwrap().as_slice::<f64>().unwrap(),
@@ -572,7 +635,10 @@ fn eager_fft_reuses_c2c_vjp_rule() {
     )
     .unwrap();
 
-    let y = x.fft(None, -1, FftNorm::Backward).unwrap();
+    let y = ctx
+        .with_eager_session(|session| session.fft(&x, None, -1, FftNorm::Backward))
+        .unwrap()
+        .unwrap();
     let dx = ctx.vjp(&y, &x, &cotangent).unwrap();
 
     assert_c64_close(

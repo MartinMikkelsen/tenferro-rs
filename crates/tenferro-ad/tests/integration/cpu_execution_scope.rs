@@ -94,7 +94,10 @@ fn shared_scope_eager_and_prepared_matmul_primal_jvp_vjp() {
                 })
                 .collect();
             let check = || {
-                let output = x.dot_general(&y, config.clone()).unwrap();
+                let output = eager
+                    .with_eager_session(|s| s.dot_general(&x, &y, config.clone()))
+                    .unwrap()
+                    .unwrap();
                 assert_eq!(output.shape(), output_shape);
                 assert_values(&output.to_tensor().unwrap(), &primal);
                 assert_values(
@@ -110,7 +113,12 @@ fn shared_scope_eager_and_prepared_matmul_primal_jvp_vjp() {
                     &vjp,
                 );
                 x.clear_grad().unwrap();
-                output.reduce_sum(None).unwrap().backward().unwrap();
+                eager
+                    .with_eager_session(|s| s.reduce_sum(&output, None))
+                    .unwrap()
+                    .unwrap()
+                    .backward()
+                    .unwrap();
                 assert_eq!(
                     x.grad().unwrap().unwrap().as_slice::<f64>().unwrap(),
                     vjp.as_slice()
@@ -151,7 +159,13 @@ fn shared_scope_elementwise_reduction_ad_and_error_recovery() {
             let seed =
                 EagerTensor::from_tensor_in(tensor(&[], vec![1.0]), Arc::clone(&eager)).unwrap();
             let check = || {
-                let loss = x.mul(&x).unwrap().reduce_sum(None).unwrap();
+                let loss = eager
+                    .with_eager_session(|s| {
+                        let squared = s.mul(&x, &x)?;
+                        s.reduce_sum(&squared, None)
+                    })
+                    .unwrap()
+                    .unwrap();
                 assert_values(
                     &loss.to_tensor().unwrap(),
                     &[data.iter().map(|v| v * v).sum()],
@@ -164,7 +178,10 @@ fn shared_scope_elementwise_reduction_ad_and_error_recovery() {
                     &eager.vjp(&loss, &x, &seed).unwrap().to_tensor().unwrap(),
                     &data.iter().map(|v| 2.0 * v).collect::<Vec<_>>(),
                 );
-                assert!(x.reshape([n + 1]).is_err());
+                assert!(eager
+                    .with_eager_session(|s| s.reshape(&x, [n + 1]))
+                    .unwrap()
+                    .is_err());
                 assert_values(&x.to_tensor().unwrap(), &data);
             };
             owner.with_execution_scope(check).unwrap();

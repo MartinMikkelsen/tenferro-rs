@@ -8,7 +8,7 @@
 use tenferro_cpu::{scalar_binary_into, AddOp, SubOp};
 use tenferro_df64_proof::{conversion, Df64};
 use tenferro_tensor::{DType, Tensor};
-use tenferro_tensor_core::{ErasedHostTensor, HostTensor};
+use tenferro_tensor::{ErasedHostTensor, HostTensor};
 
 fn external_df64(values: &[Df64]) -> Tensor {
     Tensor::external(ErasedHostTensor::new(

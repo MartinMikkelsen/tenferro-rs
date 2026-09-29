@@ -83,7 +83,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let a = Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0])?;
     let b = Tensor::from_vec_col_major(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0])?;
 
-    let c = backend.with_backend_session(|session| a.matmul(&b, session))?;
+    let c = backend.with_backend_session(|session| a.matmul(&b, session))??;
     assert_eq!(c.shape(), &[2, 2]);
 
     Ok(())
@@ -101,12 +101,13 @@ on the runtime.
 
 ## Eager Execution And Autodiff
 
-`EagerTensor` wraps concrete values in an `EagerRuntime`. Each operation
-computes or submits immediately and returns a concrete tensor handle. CPU
-values are host-readable; CUDA-resident values require explicit download before
-host inspection. If a tensor is a tracked variable, eager operations also
-record reverse-mode state so a scalar loss can call `backward()` and accumulate
-gradients.
+`EagerTensor` wraps concrete values in an `EagerRuntime`. Borrow one
+runtime-bound session with `with_eager_session` to import leaves and execute a
+sequence of eager operations; each computes or submits immediately and returns
+a concrete tensor handle. CPU values are host-readable; CUDA-resident values
+require explicit download before host inspection. If a tensor is a tracked
+variable, eager operations also record reverse-mode state so a scalar loss can
+call `backward()` and accumulate gradients.
 
 When the derivative itself should be returned as an eager tensor instead of
 accumulated into a gradient slot, call `EagerRuntime::grad`,
@@ -120,8 +121,12 @@ use tenferro_ad::{EagerRuntime, Tensor};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let ctx = EagerRuntime::new()?;
-    let x = ctx.variable_from(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?)?;
-    let loss = x.mul(&x)?.reduce_sum(Some(&[0]))?;
+    let (x, loss) = ctx.with_eager_session(|session| {
+        let x = session.variable_from(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?)?;
+        let squared = session.mul(&x, &x)?;
+        let loss = session.reduce_sum(&squared, Some(&[0]))?;
+        Ok::<_, tenferro_ad::Error>((x, loss))
+    })??;
     loss.backward()?;
 
     assert_eq!(x.grad()?.unwrap().as_slice::<f64>().unwrap(), &[2.0, 4.0]);

@@ -8,13 +8,13 @@ use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::ext_op::ExtensionOp;
 use tenferro_ops::{ShapeExtent, SymDim};
 use tenferro_tensor::{
-    BackendSessionHost, CompareDir, DType, DotGeneralConfig, GatherConfig, PadConfig,
-    ScatterConfig, SliceConfig, Tensor,
+    BackendSession, BackendSessionHost, CompareDir, DType, DotGeneralConfig, GatherConfig,
+    PadConfig, ScatterConfig, SliceConfig, Tensor,
 };
 
 use super::dispatch::{
-    backend_dispatch_entry, ffi_dispatch_entry, host_dispatch_entry, FfiDispatchKey,
-    HostDispatchKey, BACKEND_DISPATCH_TABLE,
+    backend_dispatch_entry, host_dispatch_entry, FfiDispatchKey, HostDispatchKey,
+    BACKEND_DISPATCH_TABLE,
 };
 use super::{
     collect_outputs_from, constant_tensor, get, initialize_exec_slots_in,
@@ -95,17 +95,13 @@ fn ffi_dispatch_table_covers_dot_and_extension_exec_ops() {
 
     for (op, expected) in cases {
         assert_eq!(FfiDispatchKey::for_op(&op), Some(expected), "{op:?}");
-        let entry = ffi_dispatch_entry::<CpuBackend>(&op)
-            .unwrap_or_else(|| panic!("missing FFI dispatch table entry for {expected:?}: {op:?}"));
-        assert_eq!(entry.key, expected);
     }
 }
 
 #[test]
-fn ffi_dispatch_table_excludes_host_and_backend_exec_ops() {
+fn ffi_dispatch_keys_exclude_host_and_backend_exec_ops() {
     for op in non_ffi_dispatch_cases() {
         assert_eq!(FfiDispatchKey::for_op(&op), None, "{op:?}");
-        assert!(ffi_dispatch_entry::<CpuBackend>(&op).is_none(), "{op:?}");
     }
 }
 
@@ -116,7 +112,7 @@ fn host_dispatch_table_covers_host_exec_ops() {
 
     for (op, expected) in cases {
         assert_eq!(HostDispatchKey::for_op(&op), Some(expected), "{op:?}");
-        let entry = host_dispatch_entry::<CpuBackend>(&op).unwrap_or_else(|| {
+        let entry = host_dispatch_entry::<dyn BackendSession>(&op).unwrap_or_else(|| {
             panic!("missing host dispatch table entry for {expected:?}: {op:?}")
         });
         assert_eq!(entry.key, expected);
@@ -127,7 +123,10 @@ fn host_dispatch_table_covers_host_exec_ops() {
 fn host_dispatch_table_excludes_backend_and_ffi_exec_ops() {
     for op in non_host_dispatch_cases() {
         assert_eq!(HostDispatchKey::for_op(&op), None, "{op:?}");
-        assert!(host_dispatch_entry::<CpuBackend>(&op).is_none(), "{op:?}");
+        assert!(
+            host_dispatch_entry::<dyn BackendSession>(&op).is_none(),
+            "{op:?}"
+        );
     }
 }
 
@@ -156,6 +155,7 @@ fn lazy_view_input_conversion_duplicates_when_input_remains_live() {
 
     let value = backend
         .with_backend_session(|exec| tensor_value_for_lazy_view(exec, &mut slots, 0, false))
+        .unwrap()
         .unwrap();
 
     let output = value.as_tensor().unwrap();
@@ -249,6 +249,7 @@ fn exec_slot_owned_value_and_read_tensor_conversions_preserve_shape_and_data() {
             );
             Ok::<(), crate::Error>(())
         })
+        .unwrap()
         .unwrap();
 }
 
@@ -303,6 +304,7 @@ fn collect_outputs_rejects_out_of_range_slot_without_panicking() {
     let mut backend = CpuBackend::new();
     let err = backend
         .with_backend_session(|exec| collect_outputs_from(&program, &mut slots, exec))
+        .unwrap()
         .unwrap_err();
 
     let message = err.to_string();
@@ -776,6 +778,7 @@ fn missing_extension_executor_reports_typed_fields_on_both_execution_paths() {
                 &mut caches,
             )
         })
+        .unwrap()
         .expect_err("metadata-only extension must not execute in a session");
     assert_missing_extension_executor(error);
 }

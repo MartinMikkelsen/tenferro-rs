@@ -42,7 +42,7 @@ let mut backend = CpuBackend::new();
 // Ordinary execution: no explicit preparation needed.
 let ordinary = backend.with_backend_session(|session| {
     [&lhs, &rhs].einsum("ij,jk->ik", session)
-})?;
+})??;
 assert_eq!(ordinary.as_slice::<f64>()?, &[2.0, 4.0, 7.0, 10.0]);
 
 // Strings are fine for one-time preparation. The plan does not retain inputs.
@@ -54,7 +54,7 @@ for (data, expected) in [
     let next_lhs = Tensor::from_vec_col_major([2, 2], data)?;
     let result = backend.with_backend_session(|session| {
         plan.execute([&next_lhs, &rhs], session)
-    })?;
+    })??;
     assert_eq!(result.as_slice::<f64>()?, &expected);
 }
 
@@ -62,7 +62,7 @@ for (data, expected) in [
 let equation = EinsumSubscripts::new(&[&[0, 1], &[1, 2]], &[0, 2]);
 let structured = backend.with_backend_session(|session| {
     [&lhs, &rhs].einsum_subscripts(&equation, session)
-})?;
+})??;
 assert_eq!(structured.as_slice::<f64>()?, &[2.0, 4.0, 7.0, 10.0]);
 ```
 <!-- end-snippet-source -->
@@ -120,12 +120,12 @@ uses one explicit CPU thread. See the
 [scope design and verification contract](../design/cpu-shared-execution-scope.md).
 
 This API supports Tenferro-managed CPU domains, not GPU or external executor
-scopes. Nested scopes return errors. The existing nested backend/session entry
-guards remain: do not call ordinary eager/backend APIs from an active borrowed
-session or another worker thread. A different immutable backend witness cannot borrow
-the scope; infallible session APIs retain their documented panic boundary for
-invalid entry. A returned error or unwinding releases the current operation loan
-and, when the callback exits, the scope permit.
+scopes. Nested scopes return errors. Do not call ordinary eager/backend APIs from
+an active borrowed session or another worker thread: such an entry is rejected
+with a `SessionEntryError` before its callback runs. A different immutable
+backend witness cannot borrow the scope, and its session entry fails the same
+way. A returned error or unwinding releases the current operation loan and, when
+the callback exits, the scope permit.
 
 For steady-state measurement, create inputs, compile/prepare graphs, enter the
 scope and warm up **before** starting the clock. Stop the clock before cleanup.

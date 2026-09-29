@@ -247,7 +247,7 @@ fn pooled_uninit_guard_discards_partial_reused_storage_without_replacement() {
     <f64 as PoolScalar>::pool_release(&mut pool, Vec::with_capacity(8));
     let before = pool.stats();
 
-    let mut output = PooledUninitOutput::<f64>::new(&mut pool, vec![3]).unwrap();
+    let mut output = PooledUninitOutput::<f64>::new(&pool, vec![3]).unwrap();
     assert!(output.token_is_reused_with_capacity(8));
     output.as_uninit_slice_mut()[0].write(1.0);
     drop(output);
@@ -262,9 +262,9 @@ fn pooled_uninit_guard_discards_partial_reused_storage_without_replacement() {
 
 #[test]
 fn pooled_uninit_guard_fresh_handoff_and_panic_discard_are_exact() {
-    let mut pool = BufferPool::new();
+    let pool = BufferPool::new();
     {
-        let mut output = PooledUninitOutput::<f64>::new(&mut pool, vec![2]).unwrap();
+        let mut output = PooledUninitOutput::<f64>::new(&pool, vec![2]).unwrap();
         assert!(output.token_is_fresh());
         output.as_uninit_slice_mut().iter_mut().for_each(|v| {
             v.write(3.0);
@@ -273,7 +273,7 @@ fn pooled_uninit_guard_fresh_handoff_and_panic_discard_are_exact() {
         assert_eq!(tensor.as_slice().unwrap(), &[3.0, 3.0]);
     }
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let mut output = PooledUninitOutput::<f64>::new(&mut pool, vec![4]).unwrap();
+        let mut output = PooledUninitOutput::<f64>::new(&pool, vec![4]).unwrap();
         output.as_uninit_slice_mut()[0].write(1.0);
         panic!("partial kernel panic");
     }));
@@ -290,7 +290,7 @@ fn pooled_uninit_guard_keeps_unrelated_dtype_markers_untouched() {
     assert_eq!(marker_before.get(&8), Some(&1));
     <f64 as PoolScalar>::pool_release(&mut pool, vec![0.0; 16]);
     {
-        let _output = PooledUninitOutput::<f64>::new(&mut pool, vec![3]).unwrap();
+        let _output = PooledUninitOutput::<f64>::new(&pool, vec![3]).unwrap();
     }
     // The unrelated 8-capacity checkout keeps its count of one. A retained
     // zero entry may also appear for the 16-capacity buffer the guard took and
@@ -309,7 +309,7 @@ fn pooled_uninit_guard_bool_invalid_byte_error_drops_without_typed_read() {
     let mut pool = BufferPool::new();
     <bool as PoolScalar>::pool_release(&mut pool, vec![false; 8]);
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let mut output = PooledUninitOutput::<bool>::new(&mut pool, vec![3]).unwrap();
+        let mut output = PooledUninitOutput::<bool>::new(&pool, vec![3]).unwrap();
         output.as_uninit_bytes_mut()[0].write(2);
         panic!("invalid bool partial panic");
     }));
@@ -326,7 +326,7 @@ fn pooled_uninit_guard_bool_invalid_byte_error_drops_without_typed_read() {
 fn pooled_uninit_guard_reused_success_handoff_reclaims_exact_capacity() {
     let mut pool = BufferPool::new();
     <f64 as PoolScalar>::pool_release(&mut pool, vec![0.0; 8]);
-    let mut output = PooledUninitOutput::<f64>::new(&mut pool, vec![3]).unwrap();
+    let mut output = PooledUninitOutput::<f64>::new(&pool, vec![3]).unwrap();
     assert!(output.token_is_reused_with_capacity(8));
     output
         .as_uninit_slice_mut()
@@ -355,7 +355,7 @@ fn pooled_uninit_guard_reused_success_handoff_reclaims_exact_capacity() {
 fn pooled_uninit_guard_reused_error_discards_exact_capacity() {
     let mut pool = BufferPool::new();
     <f64 as PoolScalar>::pool_release(&mut pool, vec![0.0; 8]);
-    let output = PooledUninitOutput::<f64>::new(&mut pool, vec![3]).unwrap();
+    let output = PooledUninitOutput::<f64>::new(&pool, vec![3]).unwrap();
     let error = unsafe { output.assume_init_as::<tenferro_tensor::Rank<2>>() }.unwrap_err();
     assert!(error.to_string().contains("pooled_uninit_output"));
     assert!(pool.in_flight_is_empty());
@@ -367,7 +367,7 @@ fn pooled_uninit_guard_reused_partial_panic_discards_exact_capacity() {
     let mut pool = BufferPool::new();
     <f64 as PoolScalar>::pool_release(&mut pool, vec![0.0; 8]);
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let mut output = PooledUninitOutput::<f64>::new(&mut pool, vec![3]).unwrap();
+        let mut output = PooledUninitOutput::<f64>::new(&pool, vec![3]).unwrap();
         assert!(output.token_is_reused_with_capacity(8));
         output.as_uninit_slice_mut()[0].write(1.0);
         panic!("partial reused C>len panic");
@@ -492,17 +492,17 @@ fn internal_full_overwrite_sources_use_the_guard_boundary() {
 
 #[test]
 fn pooled_uninit_guard_layout_validation_reports_real_shape_errors() {
-    let mut pool = BufferPool::new();
-    let error = PooledUninitOutput::<i32>::new(&mut pool, vec![usize::MAX]).unwrap_err();
+    let pool = BufferPool::new();
+    let error = PooledUninitOutput::<i32>::new(&pool, vec![usize::MAX]).unwrap_err();
     assert!(error.to_string().contains("pooled_uninit_output"));
     assert!(pool.is_empty());
 }
 
 #[test]
 fn pooled_uninit_guard_zero_length_view_bytes_and_drop_are_consistent() {
-    let mut pool = BufferPool::new();
+    let pool = BufferPool::new();
     {
-        let mut output = PooledUninitOutput::<i32>::new(&mut pool, vec![0]).unwrap();
+        let mut output = PooledUninitOutput::<i32>::new(&pool, vec![0]).unwrap();
         assert!(output.token_is_fresh());
         assert!(output.as_uninit_slice_mut().is_empty());
         assert!(output.as_uninit_bytes_mut().is_empty());
@@ -511,7 +511,7 @@ fn pooled_uninit_guard_zero_length_view_bytes_and_drop_are_consistent() {
     }
     assert!(pool.is_empty());
 
-    let output = PooledUninitOutput::<i32>::new(&mut pool, vec![0]).unwrap();
+    let output = PooledUninitOutput::<i32>::new(&pool, vec![0]).unwrap();
     let tensor = unsafe { output.assume_init() }.unwrap();
     assert_eq!(tensor.shape(), &[0]);
     assert!(pool.is_empty());
@@ -519,8 +519,8 @@ fn pooled_uninit_guard_zero_length_view_bytes_and_drop_are_consistent() {
 
 #[test]
 fn pooled_uninit_guard_static_rank_handoff_preserves_shape_and_values() {
-    let mut pool = BufferPool::new();
-    let mut output = PooledUninitOutput::<i32>::new(&mut pool, vec![2, 2]).unwrap();
+    let pool = BufferPool::new();
+    let mut output = PooledUninitOutput::<i32>::new(&pool, vec![2, 2]).unwrap();
     output
         .as_uninit_slice_mut()
         .iter_mut()
@@ -537,8 +537,8 @@ fn pooled_uninit_guard_static_rank_handoff_preserves_shape_and_values() {
 
 #[test]
 fn pooled_uninit_guard_shape_product_failure_does_not_touch_pool() {
-    let mut pool = BufferPool::new();
-    let error = PooledUninitOutput::<i32>::new(&mut pool, vec![usize::MAX, 2]).unwrap_err();
+    let pool = BufferPool::new();
+    let error = PooledUninitOutput::<i32>::new(&pool, vec![usize::MAX, 2]).unwrap_err();
     assert!(error.to_string().contains("pooled_uninit_output"));
     assert!(pool.is_empty());
 }

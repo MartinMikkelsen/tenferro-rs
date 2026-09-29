@@ -6,7 +6,7 @@ use num_complex::{Complex32, Complex64};
 use tenferro_cpu::with_cpu_exec_session;
 use tenferro_extension_macros::define_extension_runtime;
 use tenferro_ops::SymDim;
-use tenferro_runtime::extension::{ExtensionExecutionContext, ExtensionOp};
+use tenferro_runtime::extension::ExtensionOp;
 use tenferro_tensor::{BackendSession, DType, Error, ErrorKind, Tensor, TensorBackend, TensorRead};
 
 #[cfg(feature = "cuda")]
@@ -893,26 +893,6 @@ impl ExtensionOp for LinalgExtensionOp {
     }
 }
 
-pub(crate) fn execute_linalg_extension_reads<B: BackendSession + ?Sized>(
-    op: &LinalgExtensionOp,
-    inputs: &[TensorRead<'_>],
-    ctx: &mut ExtensionExecutionContext<'_, B>,
-) -> tenferro_tensor::Result<Vec<Tensor>> {
-    execute_linalg_extension_reads_on_session(op, inputs, ctx.backend_mut())
-}
-
-pub(crate) fn execute_linalg_extension_reads_owner<B: TensorBackend>(
-    op: &LinalgExtensionOp,
-    inputs: &[TensorRead<'_>],
-    ctx: &mut ExtensionExecutionContext<'_, B>,
-) -> tenferro_tensor::Result<Vec<Tensor>> {
-    let (backend, caches) = ctx.parts_mut();
-    backend.with_backend_session(|session| {
-        let mut session_ctx = ExtensionExecutionContext::new(session, caches);
-        execute_linalg_extension_reads(op, inputs, &mut session_ctx)
-    })
-}
-
 fn execute_linalg_extension_reads_on_session<B: BackendSession + ?Sized>(
     op: &LinalgExtensionOp,
     inputs: &[TensorRead<'_>],
@@ -1011,11 +991,11 @@ fn execute_linalg_extension_reads_in_session<S: LinalgBackend>(
         }
         LinalgOp::Eig { .. } => return session.eig_read(inputs[0].clone()),
         LinalgOp::EigVals { .. } => return Ok(vec![session.eig_values_read(inputs[0].clone())?]),
-        LinalgOp::Solve => {
-            return Ok(vec![
-                session.solve_read(inputs[0].clone(), inputs[1].clone())?
-            ]);
-        }
+        LinalgOp::Solve => match session.solve_read(inputs[0].clone(), inputs[1].clone()) {
+            Ok(output) => return Ok(vec![output]),
+            Err(error) if error.kind() == ErrorKind::Unsupported => {}
+            Err(error) => return Err(error),
+        },
         _ => {}
     }
     if let LinalgOp::TriangularSolve {
@@ -1057,7 +1037,7 @@ fn execute_linalg_extension_reads_in_session<S: LinalgBackend>(
     execute_linalg(op.op(), &input_refs, session)
 }
 
-fn linalg_session_supported<B: BackendSession + 'static>(
+fn linalg_session_supported<B: tenferro_tensor::TensorBackend + 'static>(
     #[cfg_attr(not(feature = "cuda"), allow(unused_variables))] op: &LinalgExtensionOp,
 ) -> bool {
     // The `supports_session` contract (capability.rs) requires that an op is
@@ -1115,8 +1095,6 @@ define_extension_runtime! {
     runtime = LinalgRuntime,
     family_id = LINALG_EXTENSION_FAMILY_ID,
     op_type = LinalgExtensionOp,
-    execute = execute_linalg_extension_reads_owner,
-    execute_reads = execute_linalg_extension_reads_owner,
     execute_in_session = execute_linalg_extension_in_session,
     session_supported = linalg_session_supported,
     backend_bound = TensorBackend,

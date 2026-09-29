@@ -17,6 +17,7 @@ fn prepared_solve_preserves_mixed_owned_and_strided_inputs() {
             })
             .unwrap()
         })
+        .unwrap()
         .unwrap();
     let b = Tensor::from_vec_col_major([2, 1], vec![4.0_f64, 9.0]).unwrap();
     let strided_data = [99.0_f64, 4.0, 99.0, 9.0, 99.0];
@@ -55,6 +56,7 @@ fn prepared_solve_preserves_mixed_owned_and_strided_inputs() {
                     })
                     .unwrap()
                 })
+                .unwrap()
                 .unwrap();
             assert_eq!(result[0].as_slice::<f64>().unwrap(), &[2.0, 3.0]);
         }

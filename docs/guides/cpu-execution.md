@@ -88,8 +88,10 @@ executions remain subject to these overlap rules.
 CPU backend execution is not reentrant. Do not call a backend clone or another
 CPU backend directly from `CpuBackend::install` or a backend session, and do not
 make backend calls from Rayon tasks spawned inside one. A managed scope rejects
-same-thread, spawned, stolen, and shared-context re-entry with a panic before a
-second permit is acquired. Work moved to an unrelated executor cannot always
+same-thread, spawned, stolen, and shared-context re-entry with a typed
+`SessionEntryError::Reentered` (reported through `Error::SessionEntry` by
+direct operations such as `install`) before a second permit is acquired and
+before the nested callback runs. Work moved to an unrelated executor cannot always
 inherit that diagnostic marker and may instead wait for the outer permit, so
 waiting for it from the outer execution can deadlock. Finish the outer backend
 execution before launching new top-level backend calls. Ordinary Rayon work
@@ -116,9 +118,8 @@ A second public backend entry into the same active domain is rejected, including
 entry from another worker of that pool. Provider bundles with external workers
 or uncontrolled thread counts, and BLAS/LAPACK configurations that cannot stay
 inside the supplied executor, fail during backend construction. Diagnostics
-report `CpuAdmissionMode::CallerManaged`; resolved placement, domain CPUs, and
-placement guarantee are `None` because tenferro has no verified placement
-claim.
+report `CpuAdmissionMode::CallerManaged`; resolved placement and domain CPUs
+are `None` because tenferro has no verified placement claim.
 
 ## Scoped direct faer calls
 
@@ -130,7 +131,7 @@ backend.with_backend_session(|session| {
     session.with_faer_parallelism(|parallel| {
         faer_operation(..., parallel)
     })
-})?;
+})??;
 ```
 
 The callback receives the same policy as an internal faer operation: bounded
@@ -159,9 +160,10 @@ such as `OPENBLAS_NUM_THREADS`, `MKL_NUM_THREADS`, and `OMP_NUM_THREADS` still
 control counts where supported, but they do not upgrade the provider to a
 tenferro-managed affinity contract.
 
-If strict NUMA placement is required, select `CpuBackendKind::Faer`. If an
-application configures and pins a BLAS provider independently, that remains an
-application/provider responsibility outside the tenferro placement guarantee.
+If strict NUMA placement is required, select `CpuBackendKind::Faer`. tenferro
+makes no placement promise for threads a provider creates; if an application
+configures and pins a BLAS provider independently, that remains an
+application/provider responsibility.
 
 ### Intel OpenMP worker affinity on Linux
 
@@ -192,6 +194,40 @@ needed when you deliberately pin OpenMP yourself.
 Fallible backend constructors return `CpuBackendError`. Configuration failures
 appear as `CpuBackendError::Tensor`, while topology discovery and engine
 placement failures remain inspectable through `CpuBackendError::placement_error`.
+
+## Batched Operation Strategy
+
+Batched work (strided-batched and grouped GEMM, packed LU factor/solve) runs
+its independent items one of five ways, chosen by a `CpuBatchPolicy`:
+
+| `CpuBatchStrategy` | Items run as |
+|---|---|
+| `Auto` (default) | a route chosen from `CpuBatchThresholds` and the provider |
+| `Sequential` | one after another, with no parallelism |
+| `OuterParallel` | tenferro lanes on the backend's own Rayon pool, each sequential |
+| `ProviderItems` | one after another, each using the provider's own parallelism |
+| `WholeBatchVendor` | one vendor `cblas_?gemm_batch` call, with no tenferro fan-out |
+
+Set a default with `CpuBackend::with_batch_policy`, and override it for part
+of a session with `tenferro_cpu::with_batch_policy(session, policy, |s| ...)`;
+wrapping a single call is a per-operation choice. The innermost scope wins and
+the previous policy is restored on return, error or unwind. Nothing is
+process-global.
+
+`Auto` keeps the pre-existing behavior: a grouped batch of small GEMMs (every
+dimension at most `vendor_batch_max_item_dim`, default 16) may use the vendor
+batch call when the build links one (`blas-openblas`, `blas-mkl`), while a
+strided-batched contraction runs one provider GEMM per item and reaches the
+vendor batch call only through `WholeBatchVendor` (with OpenBLAS at one thread
+the per-item route was measured faster for items of 8 and larger); outer lanes
+are used when the batch has at least `outer_min_items` items and
+`outer_min_items_per_lane` per lane. A forced strategy never overrides a safety
+rule or invents a missing route: `Sequential` with a provider that declares
+its own threading (the built-in BLAS), `OuterParallel` on a one-thread backend
+or for strided-batched contractions, and `WholeBatchVendor` with faer or
+without a linked vendor routine all return an `Unsupported` error before any
+output is written. A contraction whose axes are all batch axes is an
+elementwise product and never lowers to per-element GEMMs.
 
 ## CPU Affinity Is Not NUMA Memory Placement
 

@@ -1,4 +1,4 @@
-use std::any::TypeId;
+#[cfg(test)]
 #[cfg(test)]
 use std::sync::atomic::{AtomicUsize, Ordering};
 #[cfg(test)]
@@ -11,17 +11,17 @@ use tenferro_gpu::webgpu::WebGpuBackend;
 use tenferro_runtime::{
     EngineId, EngineRegistration, HardwareClassId, Runtime, RuntimeConfigError,
 };
-use tenferro_tensor::backend::ElementwiseFusionPlan;
+#[cfg(test)]
 use tenferro_tensor::{
-    BackendCachedDot, BackendRuntimeCache, BackendSession, BackendSessionHost, CompareDir, DType,
-    DotGeneralConfig, ElementwiseReadOp, GatherConfig, MemoryKind, PadConfig,
-    Result as TensorResult, ScatterConfig, SliceConfig, Tensor, TensorAnalytic, TensorBackend,
-    TensorBuffer, TensorDeviceTransfer, TensorDot, TensorElementwise, TensorFusion, TensorIndexing,
-    TensorRead, TensorReduction, TensorStructural, TensorValue, TensorWrite,
+    BackendCachedDot, CompareDir, DotGeneralConfig, ElementwiseReadOp, GatherConfig, PadConfig,
+    ScatterConfig, SliceConfig, TensorAnalytic, TensorBackend, TensorBuffer, TensorDeviceTransfer,
+    TensorDot, TensorElementwise, TensorFusion, TensorIndexing, TensorReduction, TensorStructural,
+    TensorWrite,
 };
-
-#[doc(hidden)]
-struct EagerBackendSessionMarker;
+use tenferro_tensor::{
+    BackendRuntimeCache, BackendSession, BackendSessionHost, DType, MemoryKind,
+    Result as TensorResult, Tensor, TensorRead,
+};
 
 /// Copy an owned host read into a fresh compact host tensor, or `None` when the
 /// CPU backend's host clone would refuse it.
@@ -102,6 +102,7 @@ impl EagerBackend {
             materializations,
             sessions: Arc::new(AtomicUsize::new(0)),
             inner: CpuBackend::new(),
+            install_engine: false,
         })
     }
 
@@ -114,6 +115,23 @@ impl EagerBackend {
             materializations,
             sessions,
             inner: CpuBackend::new(),
+            install_engine: false,
+        })
+    }
+
+    /// Like [`Self::recording_cpu_counting_sessions`], but the runtime also gets
+    /// the inner CPU engine so compiled derivative programs (semantic VJP) can
+    /// run; eager-backend session entries are still counted.
+    #[cfg(test)]
+    pub(crate) fn recording_cpu_counting_sessions_with_engine(
+        materializations: Arc<AtomicUsize>,
+        sessions: Arc<AtomicUsize>,
+    ) -> Self {
+        Self::Recording(RecordingBackend {
+            materializations,
+            sessions,
+            inner: CpuBackend::new(),
+            install_engine: true,
         })
     }
 
@@ -143,14 +161,6 @@ impl EagerBackend {
             Self::Cuda(_) => None,
             #[cfg(feature = "webgpu")]
             Self::WebGpu(_) => None,
-        }
-    }
-
-    #[cfg(test)]
-    pub(crate) fn recording_session_owner(&mut self) -> Option<*mut ()> {
-        match self {
-            Self::Recording(backend) => Some((backend as *mut RecordingBackend).cast()),
-            _ => None,
         }
     }
 
@@ -215,6 +225,12 @@ fn eager_engine_registration_for_backend(
             cpu_runtime_engine_registration(backend)?,
         ))),
         #[cfg(test)]
+        EagerBackend::Recording(backend) if backend.install_engine => {
+            Ok(EagerBackendRegistration::Install(Box::new(
+                cpu_runtime_engine_registration(&backend.inner)?,
+            )))
+        }
+        #[cfg(test)]
         EagerBackend::Recording(_) => Ok(EagerBackendRegistration::NoEngine),
         #[cfg(feature = "cuda")]
         EagerBackend::Cuda(backend) => Ok(EagerBackendRegistration::Install(Box::new(
@@ -249,24 +265,6 @@ pub(crate) fn cpu_runtime_engine_registration(
     tenferro_cpu::runtime_engine_registration(backend)
 }
 
-macro_rules! dispatch {
-    ($backend:expr, $method:ident($($arg:expr),* $(,)?)) => {
-        match $backend {
-            EagerBackend::Cpu(backend) => backend.$method($($arg),*),
-            #[cfg(test)]
-            EagerBackend::Recording(backend) => backend.$method($($arg),*),
-            #[cfg(feature = "cuda")]
-            EagerBackend::Cuda(backend) => backend.$method($($arg),*),
-            #[cfg(feature = "webgpu")]
-            EagerBackend::WebGpu(backend) => backend.$method($($arg),*),
-        }
-    };
-}
-
-#[cfg(test)]
-#[doc(hidden)]
-struct RecordingBackendSessionMarker;
-
 #[cfg(test)]
 #[derive(Debug)]
 pub struct RecordingBackend {
@@ -275,6 +273,9 @@ pub struct RecordingBackend {
     /// session-free rather than inferring it from timing.
     sessions: Arc<AtomicUsize>,
     inner: CpuBackend,
+    /// Install `inner` as the runtime engine instead of leaving the runtime
+    /// without one.
+    install_engine: bool,
 }
 
 #[cfg(test)]
@@ -282,22 +283,33 @@ macro_rules! delegate_recording_backend_methods {
     ($(fn $method:ident($($arg:ident: $ty:ty),* $(,)?) -> $ret:ty;)*) => {
         $(
             fn $method(&mut self, $($arg: $ty),*) -> $ret {
-                self.inner.$method($($arg),*)
+                self.inner
+                    .with_backend_session(|__s| __s.$method($($arg),*))?
             }
         )*
     };
 }
 
 #[cfg(test)]
-impl BackendSession for RecordingBackend {
-    fn session_type_id(&self) -> TypeId {
-        TypeId::of::<RecordingBackendSessionMarker>()
-    }
-
-    unsafe fn session_data_mut(&mut self) -> *mut () {
-        self as *mut Self as *mut ()
-    }
+macro_rules! delegate_owned_read_methods {
+    ($(fn $method:ident($label:literal; $($read:ident),+ $(; $($extra:ident: $extra_ty:ty),*)?);)*) => {
+        $(
+            fn $method(
+                &mut self,
+                $($read: TensorRead<'_>,)+
+                $($($extra: $extra_ty),*)?
+            ) -> TensorResult<Tensor> {
+                $(let $read = tenferro_tensor::backend::read_owned_tensor($label, $read)?;)+
+                self.inner.with_backend_session(|__s| {
+                    __s.$method($(TensorRead::from_tensor($read)),+ $(, $($extra),*)?)
+                })?
+            }
+        )*
+    };
 }
+
+#[cfg(test)]
+impl BackendSession for RecordingBackend {}
 
 #[cfg(test)]
 impl BackendRuntimeCache for RecordingBackend {
@@ -312,40 +324,55 @@ impl TensorElementwise for RecordingBackend {
         inputs: &[TensorRead<'_>],
         out: TensorWrite<'_>,
     ) -> TensorResult<()> {
-        self.inner.elementwise_read_into(op, inputs, out)
+        self.inner
+            .with_backend_session(|__s| __s.elementwise_read_into(op, inputs, out))?
     }
 
     delegate_recording_backend_methods! {
-        fn add(lhs: &Tensor, rhs: &Tensor) -> TensorResult<Tensor>;
-        fn sub(lhs: &Tensor, rhs: &Tensor) -> TensorResult<Tensor>;
-        fn mul(lhs: &Tensor, rhs: &Tensor) -> TensorResult<Tensor>;
         fn mul_read(lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> TensorResult<Tensor>;
-        fn neg(input: &Tensor) -> TensorResult<Tensor>;
-        fn conj(input: &Tensor) -> TensorResult<Tensor>;
-        fn div(lhs: &Tensor, rhs: &Tensor) -> TensorResult<Tensor>;
-        fn abs(input: &Tensor) -> TensorResult<Tensor>;
-        fn sign(input: &Tensor) -> TensorResult<Tensor>;
-        fn maximum(lhs: &Tensor, rhs: &Tensor) -> TensorResult<Tensor>;
-        fn minimum(lhs: &Tensor, rhs: &Tensor) -> TensorResult<Tensor>;
-        fn compare(lhs: &Tensor, rhs: &Tensor, dir: &CompareDir) -> TensorResult<Tensor>;
-        fn select(pred: &Tensor, on_true: &Tensor, on_false: &Tensor) -> TensorResult<Tensor>;
-        fn clamp(input: &Tensor, lower: &Tensor, upper: &Tensor) -> TensorResult<Tensor>;
+    }
+    // Reproduce the previous read-half default: delegate an owned tensor and
+    // reject a borrowed view.
+    fn add_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> TensorResult<Tensor> {
+        let lhs = tenferro_tensor::backend::read_owned_tensor("add", lhs)?;
+        let rhs = tenferro_tensor::backend::read_owned_tensor("add", rhs)?;
+        self.inner.with_backend_session(|__s| {
+            __s.add_read(TensorRead::from_tensor(lhs), TensorRead::from_tensor(rhs))
+        })?
+    }
+
+    // Reproduce the previous read-half default: delegate an owned tensor and
+    // reject a borrowed view.
+    delegate_owned_read_methods! {
+        fn sub_read("sub"; lhs, rhs);
+        fn neg_read("neg"; input);
+        fn conj_read("conj"; input);
+        fn div_read("div"; lhs, rhs);
+        fn abs_read("abs"; input);
+        fn sign_read("sign"; input);
+        fn maximum_read("maximum"; lhs, rhs);
+        fn minimum_read("minimum"; lhs, rhs);
+        fn compare_read("compare"; lhs, rhs; dir: &CompareDir);
+        fn select_read("select"; pred, on_true, on_false);
+        fn clamp_read("clamp"; input, lower, upper);
     }
 }
 
 #[cfg(test)]
 impl TensorAnalytic for RecordingBackend {
-    delegate_recording_backend_methods! {
-        fn exp(input: &Tensor) -> TensorResult<Tensor>;
-        fn log(input: &Tensor) -> TensorResult<Tensor>;
-        fn sin(input: &Tensor) -> TensorResult<Tensor>;
-        fn cos(input: &Tensor) -> TensorResult<Tensor>;
-        fn tanh(input: &Tensor) -> TensorResult<Tensor>;
-        fn sqrt(input: &Tensor) -> TensorResult<Tensor>;
-        fn rsqrt(input: &Tensor) -> TensorResult<Tensor>;
-        fn pow(lhs: &Tensor, rhs: &Tensor) -> TensorResult<Tensor>;
-        fn expm1(input: &Tensor) -> TensorResult<Tensor>;
-        fn log1p(input: &Tensor) -> TensorResult<Tensor>;
+    // Reproduce the previous read-half default: delegate an owned tensor and
+    // reject a borrowed view.
+    delegate_owned_read_methods! {
+        fn exp_read("exp"; input);
+        fn log_read("log"; input);
+        fn sin_read("sin"; input);
+        fn cos_read("cos"; input);
+        fn tanh_read("tanh"; input);
+        fn sqrt_read("sqrt"; input);
+        fn rsqrt_read("rsqrt"; input);
+        fn pow_read("pow"; lhs, rhs);
+        fn expm1_read("expm1"; input);
+        fn log1p_read("log1p"; input);
     }
 }
 
@@ -353,33 +380,67 @@ impl TensorAnalytic for RecordingBackend {
 impl TensorStructural for RecordingBackend {
     fn to_contiguous_read(&mut self, input: TensorRead<'_>) -> TensorResult<Tensor> {
         self.materializations.fetch_add(1, Ordering::Relaxed);
-        self.inner.to_contiguous_read(input)
+        self.inner
+            .with_backend_session(|__s| __s.to_contiguous_read(input))?
     }
 
     fn copy_read_into(&mut self, src: TensorRead<'_>, dst: TensorWrite<'_>) -> TensorResult<()> {
-        self.inner.copy_read_into(src, dst)
+        self.inner
+            .with_backend_session(|__s| __s.copy_read_into(src, dst))?
     }
 
     delegate_recording_backend_methods! {
-        fn transpose(input: &Tensor, perm: &[usize]) -> TensorResult<Tensor>;
-        fn reshape(input: &Tensor, shape: &[usize]) -> TensorResult<Tensor>;
-        fn broadcast_in_dim(input: &Tensor, shape: &[usize], dims: &[usize]) -> TensorResult<Tensor>;
         fn cast(input: &Tensor, to: DType) -> TensorResult<Tensor>;
         fn extract_diagonal(input: &Tensor, axis_a: usize, axis_b: usize) -> TensorResult<Tensor>;
         fn embed_diagonal(input: &Tensor, axis_a: usize, axis_b: usize) -> TensorResult<Tensor>;
         fn tril(input: &Tensor, k: i64) -> TensorResult<Tensor>;
         fn triu(input: &Tensor, k: i64) -> TensorResult<Tensor>;
     }
+
+    // The previous read-half default delegated owned tensors to the one-shot
+    // method and rejected borrowed views. Reproduce it explicitly rather than
+    // forwarding a view, which would widen the accepted input surface.
+    fn transpose_read(&mut self, input: TensorRead<'_>, perm: &[usize]) -> TensorResult<Tensor> {
+        let input = tenferro_tensor::backend::read_owned_tensor("transpose", input)?;
+        self.inner
+            .with_backend_session(|__s| __s.transpose_read(TensorRead::from_tensor(input), perm))?
+    }
+
+    // The previous read-half default delegated owned tensors to the one-shot
+    // method and rejected borrowed views. Reproduce it explicitly rather than
+    // forwarding a view, which would widen the accepted input surface.
+    // Reproduce the previous read-half default: delegate an owned tensor and
+    // reject a borrowed view.
+    delegate_owned_read_methods! {
+        fn reshape_read("reshape"; input; shape: &[usize]);
+    }
+
+    // The previous read-half default delegated owned tensors to the one-shot
+    // method and rejected borrowed views. Reproduce it explicitly rather than
+    // forwarding a view, which would widen the accepted input surface.
+    // Reproduce the previous read-half default: delegate an owned tensor and
+    // reject a borrowed view.
+    delegate_owned_read_methods! {
+        fn broadcast_in_dim_read("broadcast_in_dim"; input; shape: &[usize], dims: &[usize]);
+    }
 }
 
 #[cfg(test)]
 impl TensorReduction for RecordingBackend {
     delegate_recording_backend_methods! {
-        fn reduce_sum(input: &Tensor, axes: &[usize]) -> TensorResult<Tensor>;
         fn reduce_sum_squares_read(input: TensorRead<'_>, axes: &[usize]) -> TensorResult<Tensor>;
-        fn reduce_prod(input: &Tensor, axes: &[usize]) -> TensorResult<Tensor>;
-        fn reduce_max(input: &Tensor, axes: &[usize]) -> TensorResult<Tensor>;
-        fn reduce_min(input: &Tensor, axes: &[usize]) -> TensorResult<Tensor>;
+    }
+
+    // The previous read-half default delegated owned tensors to the one-shot
+    // method and rejected views, which is not the same as forwarding a view to
+    // the inner backend. Reproduce the old default explicitly.
+    // Reproduce the previous read-half default: delegate an owned tensor and
+    // reject a borrowed view.
+    delegate_owned_read_methods! {
+        fn reduce_sum_read("reduce_sum"; input; axes: &[usize]);
+        fn reduce_prod_read("reduce_prod"; input; axes: &[usize]);
+        fn reduce_max_read("reduce_max"; input; axes: &[usize]);
+        fn reduce_min_read("reduce_min"; input; axes: &[usize]);
     }
 }
 
@@ -399,13 +460,35 @@ impl TensorIndexing for RecordingBackend {
 
 #[cfg(test)]
 impl TensorDot for RecordingBackend {
-    fn dot_general(
+    // The previous read-half default delegated an owned pair to the one-shot
+    // method and materialized borrowed views through to_contiguous_read before
+    // contracting. Reproduce that exactly rather than forwarding a view.
+    fn dot_general_read(
         &mut self,
-        lhs: &Tensor,
-        rhs: &Tensor,
+        lhs: TensorRead<'_>,
+        rhs: TensorRead<'_>,
         config: &DotGeneralConfig,
     ) -> TensorResult<Tensor> {
-        self.inner.dot_general(lhs, rhs, config)
+        match (lhs.as_tensor(), rhs.as_tensor()) {
+            (Some(lhs), Some(rhs)) => self.inner.with_backend_session(|__s| {
+                __s.dot_general_read(
+                    TensorRead::from_tensor(lhs),
+                    TensorRead::from_tensor(rhs),
+                    config,
+                )
+            })?,
+            _ => {
+                let lhs = self.to_contiguous_read(lhs)?;
+                let rhs = self.to_contiguous_read(rhs)?;
+                self.inner.with_backend_session(|__s| {
+                    __s.dot_general_read(
+                        TensorRead::from_tensor(&lhs),
+                        TensorRead::from_tensor(&rhs),
+                        config,
+                    )
+                })?
+            }
+        }
     }
 }
 
@@ -430,183 +513,35 @@ impl BackendSessionHost for RecordingBackend {
     fn with_backend_session<R: Send>(
         &mut self,
         f: impl FnOnce(&mut dyn BackendSession) -> R + Send,
-    ) -> R {
+    ) -> Result<R, tenferro_tensor::SessionEntryError> {
         self.sessions.fetch_add(1, Ordering::Relaxed);
-        f(self)
+        Ok(f(self))
     }
 }
 #[cfg(test)]
 impl TensorBackend for RecordingBackend {}
 
-macro_rules! delegate_tensor_backend_methods {
-    ($(fn $method:ident($($arg:ident: $ty:ty),* $(,)?) -> $ret:ty;)*) => {
-        $(
-            fn $method(&mut self, $($arg: $ty),*) -> $ret {
-                dispatch!(self, $method($($arg),*))
-            }
-        )*
-    };
-}
-
-impl BackendSession for EagerBackend {
-    fn session_type_id(&self) -> TypeId {
-        TypeId::of::<EagerBackendSessionMarker>()
-    }
-
-    unsafe fn session_data_mut(&mut self) -> *mut () {
-        self as *mut Self as *mut ()
-    }
-}
-
 impl BackendRuntimeCache for EagerBackend {
     type RuntimeCache = ();
-}
-
-impl TensorElementwise for EagerBackend {
-    fn elementwise_read_into(
-        &mut self,
-        op: ElementwiseReadOp,
-        inputs: &[TensorRead<'_>],
-        out: TensorWrite<'_>,
-    ) -> TensorResult<()> {
-        dispatch!(self, elementwise_read_into(op, inputs, out))
-    }
-
-    delegate_tensor_backend_methods! {
-        fn add(lhs: &Tensor, rhs: &Tensor) -> TensorResult<Tensor>;
-        fn add_read(lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> TensorResult<Tensor>;
-        fn sub(lhs: &Tensor, rhs: &Tensor) -> TensorResult<Tensor>;
-        fn sub_read(lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> TensorResult<Tensor>;
-        fn mul(lhs: &Tensor, rhs: &Tensor) -> TensorResult<Tensor>;
-        fn mul_read(lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> TensorResult<Tensor>;
-        fn neg(input: &Tensor) -> TensorResult<Tensor>;
-        fn neg_read(input: TensorRead<'_>) -> TensorResult<Tensor>;
-        fn conj(input: &Tensor) -> TensorResult<Tensor>;
-        fn conj_read(input: TensorRead<'_>) -> TensorResult<Tensor>;
-        fn div(lhs: &Tensor, rhs: &Tensor) -> TensorResult<Tensor>;
-        fn div_read(lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> TensorResult<Tensor>;
-        fn rem(lhs: &Tensor, rhs: &Tensor) -> TensorResult<Tensor>;
-        fn rem_read(lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> TensorResult<Tensor>;
-        fn abs(input: &Tensor) -> TensorResult<Tensor>;
-        fn abs_read(input: TensorRead<'_>) -> TensorResult<Tensor>;
-        fn sign(input: &Tensor) -> TensorResult<Tensor>;
-        fn sign_read(input: TensorRead<'_>) -> TensorResult<Tensor>;
-        fn maximum(lhs: &Tensor, rhs: &Tensor) -> TensorResult<Tensor>;
-        fn maximum_read(lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> TensorResult<Tensor>;
-        fn minimum(lhs: &Tensor, rhs: &Tensor) -> TensorResult<Tensor>;
-        fn minimum_read(lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> TensorResult<Tensor>;
-        fn compare(lhs: &Tensor, rhs: &Tensor, dir: &CompareDir) -> TensorResult<Tensor>;
-        fn compare_read(lhs: TensorRead<'_>, rhs: TensorRead<'_>, dir: &CompareDir) -> TensorResult<Tensor>;
-        fn select(pred: &Tensor, on_true: &Tensor, on_false: &Tensor) -> TensorResult<Tensor>;
-        fn select_read(pred: TensorRead<'_>, on_true: TensorRead<'_>, on_false: TensorRead<'_>) -> TensorResult<Tensor>;
-        fn clamp(input: &Tensor, lower: &Tensor, upper: &Tensor) -> TensorResult<Tensor>;
-        fn clamp_read(input: TensorRead<'_>, lower: TensorRead<'_>, upper: TensorRead<'_>) -> TensorResult<Tensor>;
-    }
-}
-
-impl TensorAnalytic for EagerBackend {
-    delegate_tensor_backend_methods! {
-        fn exp(input: &Tensor) -> TensorResult<Tensor>;
-        fn exp_read(input: TensorRead<'_>) -> TensorResult<Tensor>;
-        fn log(input: &Tensor) -> TensorResult<Tensor>;
-        fn log_read(input: TensorRead<'_>) -> TensorResult<Tensor>;
-        fn sin(input: &Tensor) -> TensorResult<Tensor>;
-        fn sin_read(input: TensorRead<'_>) -> TensorResult<Tensor>;
-        fn cos(input: &Tensor) -> TensorResult<Tensor>;
-        fn cos_read(input: TensorRead<'_>) -> TensorResult<Tensor>;
-        fn tanh(input: &Tensor) -> TensorResult<Tensor>;
-        fn tanh_read(input: TensorRead<'_>) -> TensorResult<Tensor>;
-        fn sqrt(input: &Tensor) -> TensorResult<Tensor>;
-        fn sqrt_read(input: TensorRead<'_>) -> TensorResult<Tensor>;
-        fn rsqrt(input: &Tensor) -> TensorResult<Tensor>;
-        fn rsqrt_read(input: TensorRead<'_>) -> TensorResult<Tensor>;
-        fn pow(lhs: &Tensor, rhs: &Tensor) -> TensorResult<Tensor>;
-        fn pow_read(lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> TensorResult<Tensor>;
-        fn expm1(input: &Tensor) -> TensorResult<Tensor>;
-        fn expm1_read(input: TensorRead<'_>) -> TensorResult<Tensor>;
-        fn log1p(input: &Tensor) -> TensorResult<Tensor>;
-        fn log1p_read(input: TensorRead<'_>) -> TensorResult<Tensor>;
-    }
-}
-
-impl TensorStructural for EagerBackend {
-    delegate_tensor_backend_methods! {
-        fn to_contiguous_read(input: TensorRead<'_>) -> TensorResult<Tensor>;
-        fn copy_read_into(src: TensorRead<'_>, dst: TensorWrite<'_>) -> TensorResult<()>;
-        fn transpose(input: &Tensor, perm: &[usize]) -> TensorResult<Tensor>;
-        fn reshape(input: &Tensor, shape: &[usize]) -> TensorResult<Tensor>;
-        fn reshape_read(input: TensorRead<'_>, shape: &[usize]) -> TensorResult<Tensor>;
-        fn broadcast_in_dim(input: &Tensor, shape: &[usize], dims: &[usize]) -> TensorResult<Tensor>;
-        fn broadcast_in_dim_read(input: TensorRead<'_>, shape: &[usize], dims: &[usize]) -> TensorResult<Tensor>;
-        fn cast(input: &Tensor, to: DType) -> TensorResult<Tensor>;
-        fn extract_diagonal(input: &Tensor, axis_a: usize, axis_b: usize) -> TensorResult<Tensor>;
-        fn embed_diagonal(input: &Tensor, axis_a: usize, axis_b: usize) -> TensorResult<Tensor>;
-        fn tril(input: &Tensor, k: i64) -> TensorResult<Tensor>;
-        fn triu(input: &Tensor, k: i64) -> TensorResult<Tensor>;
-    }
-}
-
-impl TensorReduction for EagerBackend {
-    delegate_tensor_backend_methods! {
-        fn reduce_sum(input: &Tensor, axes: &[usize]) -> TensorResult<Tensor>;
-        fn reduce_sum_squares_read(input: TensorRead<'_>, axes: &[usize]) -> TensorResult<Tensor>;
-        fn reduce_prod(input: &Tensor, axes: &[usize]) -> TensorResult<Tensor>;
-        fn reduce_max(input: &Tensor, axes: &[usize]) -> TensorResult<Tensor>;
-        fn reduce_min(input: &Tensor, axes: &[usize]) -> TensorResult<Tensor>;
-    }
-}
-
-impl TensorDot for EagerBackend {
-    delegate_tensor_backend_methods! {
-        fn dot_general(lhs: &Tensor, rhs: &Tensor, config: &DotGeneralConfig) -> TensorResult<Tensor>;
-        fn dot_general_read(lhs: TensorRead<'_>, rhs: TensorRead<'_>, config: &DotGeneralConfig) -> TensorResult<Tensor>;
-        fn dot_general_with_conj(lhs: &Tensor, rhs: &Tensor, config: &DotGeneralConfig, lhs_conj: bool, rhs_conj: bool) -> TensorResult<Tensor>;
-    }
-}
-
-impl TensorIndexing for EagerBackend {
-    delegate_tensor_backend_methods! {
-        fn gather(operand: &Tensor, start_indices: &Tensor, config: &GatherConfig) -> TensorResult<Tensor>;
-        fn scatter(operand: &Tensor, scatter_indices: &Tensor, updates: &Tensor, config: &ScatterConfig) -> TensorResult<Tensor>;
-        fn slice(input: &Tensor, config: &SliceConfig) -> TensorResult<Tensor>;
-        fn dynamic_slice(input: &Tensor, starts: &Tensor, slice_sizes: &[usize]) -> TensorResult<Tensor>;
-        fn dynamic_update_slice(operand: &Tensor, update: &Tensor, starts: &Tensor) -> TensorResult<Tensor>;
-        fn pad(input: &Tensor, config: &PadConfig) -> TensorResult<Tensor>;
-        fn concatenate(inputs: &[&Tensor], axis: usize) -> TensorResult<Tensor>;
-        fn reverse(input: &Tensor, axes: &[usize]) -> TensorResult<Tensor>;
-    }
 }
 
 impl BackendSessionHost for EagerBackend {
     fn with_backend_session<R: Send>(
         &mut self,
         f: impl FnOnce(&mut dyn BackendSession) -> R + Send,
-    ) -> R {
-        dispatch!(self, with_backend_session(f))
+    ) -> Result<R, tenferro_tensor::SessionEntryError> {
+        // Hand the caller the *concrete* backend's session. The composite enum
+        // is not a session: its read halves deliberately reproduce the
+        // read-boundary policy (owned inputs only), while the concrete sessions
+        // are what the operation entry points expect.
+        match self {
+            EagerBackend::Cpu(backend) => backend.with_backend_session(f),
+            #[cfg(test)]
+            EagerBackend::Recording(backend) => backend.with_backend_session(f),
+            #[cfg(feature = "cuda")]
+            EagerBackend::Cuda(backend) => backend.with_backend_session(f),
+            #[cfg(feature = "webgpu")]
+            EagerBackend::WebGpu(backend) => backend.with_backend_session(f),
+        }
     }
 }
-
-impl TensorDeviceTransfer for EagerBackend {
-    delegate_tensor_backend_methods! {
-        fn download_to_host(tensor: TensorRead<'_>) -> TensorResult<Tensor>;
-        fn upload_host_tensor(tensor: TensorRead<'_>) -> TensorResult<Tensor>;
-    }
-}
-
-impl TensorBuffer for EagerBackend {
-    delegate_tensor_backend_methods! {
-        fn reclaim_buffer(tensor: Tensor) -> ();
-    }
-}
-
-impl TensorFusion for EagerBackend {
-    delegate_tensor_backend_methods! {
-        fn execute_elementwise_fusion(inputs: &[&Tensor], plan: &ElementwiseFusionPlan) -> TensorResult<Option<Vec<Tensor>>>;
-        fn execute_broadcast_multiply(lhs: TensorRead<'_>, lhs_shape: &[usize], lhs_dims: &[usize], rhs: TensorRead<'_>, rhs_shape: &[usize], rhs_dims: &[usize]) -> TensorResult<Option<Tensor>>;
-        fn execute_broadcast_multiply_value(lhs: TensorRead<'_>, lhs_shape: &[usize], lhs_dims: &[usize], rhs: TensorRead<'_>, rhs_shape: &[usize], rhs_dims: &[usize]) -> TensorResult<Option<TensorValue>>;
-    }
-}
-
-impl BackendCachedDot for EagerBackend {}
-
-impl TensorBackend for EagerBackend {}

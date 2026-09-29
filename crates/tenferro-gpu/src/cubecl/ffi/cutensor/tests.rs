@@ -37,3 +37,13 @@ fn cutensor_sm70_guard_uses_reproduced_version_boundary() {
             if source.downcast_ref::<super::CutensorArchitectureError>().is_some()
     ));
 }
+
+#[test]
+#[ignore = "requires the cuTENSOR runtime library"]
+fn cutensor_library_is_loaded_once_per_process() {
+    // Every handle shares one loaded library, so dropping backends never
+    // unloads and reloads cuTENSOR (#1924).
+    let first = super::CutensorLibrary::load().unwrap();
+    let second = super::CutensorLibrary::load().unwrap();
+    assert!(std::sync::Arc::ptr_eq(&first, &second));
+}

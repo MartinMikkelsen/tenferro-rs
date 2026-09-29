@@ -9,7 +9,7 @@ pub fn with_cuda_fft_session<R>(
 where
     R: Send,
 {
-    backend.with_backend_session(f)
+    backend.with_backend_session(f).expect("CUDA session entry")
 }
 
 pub fn cuda_backend() -> CudaBackend {

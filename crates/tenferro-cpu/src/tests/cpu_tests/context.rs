@@ -1,5 +1,7 @@
 use super::*;
 
+use tenferro_tensor::BackendSessionHost;
+use tenferro_tensor::TensorRead;
 use tenferro_tensor::{ErrorKind, ValidationKind};
 
 #[test]
@@ -98,18 +100,20 @@ fn cpu_backend_try_new_propagates_invalid_rayon_num_threads() {
 #[test]
 fn test_with_backend_session_runs_compiled_ops() {
     let mut backend = CpuBackend::with_threads(2).unwrap();
-    let result = backend.with_backend_session(|session| {
-        session
-            .add(
-                &Tensor::from_typed::<f64>(
-                    TypedTensor::from_vec_col_major(vec![2], vec![1.0, 2.0]).unwrap(),
-                ),
-                &Tensor::from_typed::<f64>(
-                    TypedTensor::from_vec_col_major(vec![2], vec![3.0, 4.0]).unwrap(),
-                ),
-            )
-            .unwrap()
-    });
+    let result = backend
+        .with_backend_session(|session| {
+            session
+                .add_read(
+                    TensorRead::from_tensor(&Tensor::from_typed::<f64>(
+                        TypedTensor::from_vec_col_major(vec![2], vec![1.0, 2.0]).unwrap(),
+                    )),
+                    TensorRead::from_tensor(&Tensor::from_typed::<f64>(
+                        TypedTensor::from_vec_col_major(vec![2], vec![3.0, 4.0]).unwrap(),
+                    )),
+                )
+                .unwrap()
+        })
+        .unwrap();
     assert_eq!(get_f64(&result, &[0]), 4.0);
     assert_eq!(get_f64(&result, &[1]), 6.0);
 }
@@ -130,7 +134,7 @@ fn cpu_install_accepts_send_state() {
 
     let backend = CpuBackend::with_threads(2).unwrap();
     let state = Arc::new(20usize);
-    let seen = backend.install(|| *state + 2);
+    let seen = backend.install(|| *state + 2).unwrap();
     assert_eq!(seen, 22);
 }
 
@@ -146,29 +150,40 @@ fn cpu_backend_multi_operation_session_enters_executor_once() {
     );
     let before = context.executor_install_calls_for_test();
 
-    backend.with_backend_session(|session| {
-        session.add(&lhs, &rhs).unwrap();
-        session.neg(&lhs).unwrap();
-        session.mul(&lhs, &rhs).unwrap();
-        session
-            .dot_general(
-                &lhs,
-                &rhs,
-                &DotGeneralConfig {
-                    lhs_contracting_dims: [0].as_slice().into(),
-                    rhs_contracting_dims: [0].as_slice().into(),
-                    lhs_batch_dims: [].as_slice().into(),
-                    rhs_batch_dims: [].as_slice().into(),
-                },
-            )
-            .unwrap();
-    });
+    backend
+        .with_backend_session(|session| {
+            session
+                .add_read(TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs))
+                .unwrap();
+            session.neg_read(TensorRead::from_tensor(&lhs)).unwrap();
+            session
+                .mul_read(TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs))
+                .unwrap();
+            session
+                .dot_general_read(
+                    TensorRead::from_tensor(&lhs),
+                    TensorRead::from_tensor(&rhs),
+                    &DotGeneralConfig {
+                        lhs_contracting_dims: [0].as_slice().into(),
+                        rhs_contracting_dims: [0].as_slice().into(),
+                        lhs_batch_dims: [].as_slice().into(),
+                        rhs_batch_dims: [].as_slice().into(),
+                    },
+                )
+                .unwrap();
+        })
+        .unwrap();
 
     let install_delta = context.executor_install_calls_for_test() - before;
     assert_eq!(install_delta, 1);
 
     let before_standalone = context.executor_install_calls_for_test();
-    backend.add(&lhs, &rhs).unwrap();
+    backend
+        .with_backend_session(|__s| {
+            __s.add_read(TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs))
+        })
+        .unwrap()
+        .unwrap();
     assert_eq!(
         context.executor_install_calls_for_test() - before_standalone,
         1

@@ -73,7 +73,7 @@ pub use ad::support::{
 };
 pub use backend::LinalgBackend;
 #[cfg(feature = "autodiff")]
-pub use eager_ext::EagerTensorLinalgExt;
+pub use eager_ext::{EagerSessionLinalgExt, EagerTensorLinalgExt};
 pub use error::{Error, Result};
 pub use extension::{
     extension_module, EighDriver, EighGauge, EighOptions, QrGauge, QrOptions, SvdDriver, SvdGauge,

@@ -2,7 +2,8 @@ use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
 use std::hint::black_box;
 
-use tenferro_tensor::{TypedTensorView, TypedTensorViewMut};
+use num_complex::Complex64;
+use tenferro_tensor::{Rank, Tensor, TensorRead, TypedTensor, TypedTensorView, TypedTensorViewMut};
 
 struct CountingAllocator;
 
@@ -61,4 +62,109 @@ fn small_dynamic_borrowed_view_metadata_stays_inline() {
 
     assert_eq!(read_allocations, 0);
     assert_eq!(write_allocations, 0);
+}
+
+#[test]
+fn plain_static_rank_owner_adopts_vec_without_metadata_allocation() {
+    let data = vec![String::from("a"), String::from("b")];
+    let pointer = data.as_ptr();
+    let mut owner = None;
+    let ctor_allocations = count_allocations(|| {
+        owner = Some(TypedTensor::<String, Rank<1>>::from_vec_col_major([2], data).unwrap());
+    });
+    let owner = owner.unwrap();
+    let view_allocations = count_allocations(|| {
+        assert_eq!(owner.host_data().unwrap().as_ptr(), pointer);
+        assert_eq!(owner.as_view().get(&[1]).unwrap(), "b");
+    });
+    assert_eq!(ctor_allocations, 0);
+    assert_eq!(view_allocations, 0);
+    let original = owner.into_host_vec().unwrap();
+    assert_eq!(original.as_ptr(), pointer);
+}
+
+#[test]
+fn erased_plain_owner_and_read_borrow_keep_original_allocation() {
+    let data = vec![1.0_f64, 2.0];
+    let pointer = data.as_ptr();
+    let allocations = count_allocations(|| {
+        let owner = TypedTensor::<f64>::from_vec_col_major([2], data).unwrap();
+        let tensor = Tensor::from_typed(owner);
+        let read = TensorRead::from_tensor(&tensor);
+        assert_eq!(read.as_slice::<f64>().unwrap().as_ptr(), pointer);
+        assert_eq!(
+            tensor
+                .as_typed::<f64>()
+                .unwrap()
+                .host_data()
+                .unwrap()
+                .as_ptr(),
+            pointer
+        );
+        black_box(tensor);
+    });
+    assert_eq!(allocations, 0);
+}
+
+#[test]
+fn static_rank_borrowed_erasure_does_not_allocate_or_promote_storage() {
+    let data = [1.0_f64, 2.0, 3.0, 4.0];
+    let allocations = count_allocations(|| {
+        let view =
+            TypedTensorView::<_, Rank<2>>::from_slice_ranked([2, 2], [1, 2], 0, &data).unwrap();
+        let read = view.into_tensor_read().unwrap();
+        assert_eq!(read.as_slice::<f64>().unwrap(), &data);
+        black_box(read);
+    });
+    assert_eq!(allocations, 0);
+}
+
+#[test]
+fn ranked_owner_view_erasure_keeps_its_root_borrow() {
+    let owner =
+        TypedTensor::<f64, Rank<2>>::from_vec_col_major([2, 2], vec![1.0, 2.0, 3.0, 4.0]).unwrap();
+    let read = owner.as_view().into_tensor_read().unwrap();
+    assert_eq!(read.as_slice::<f64>().unwrap(), &[1.0, 2.0, 3.0, 4.0]);
+}
+
+#[test]
+fn small_complex_real_views_do_not_allocate_metadata() {
+    let data = [Complex64::new(1.0, 2.0); 6];
+    let immutable = count_allocations(|| {
+        let view =
+            TypedTensorView::<_, Rank<2>>::from_slice_ranked([2, 3], [1, 2], 0, &data).unwrap();
+        let real = view.as_real_view().unwrap();
+        assert_eq!(real.shape(), &[2, 2, 3]);
+        assert_eq!(real.as_slice().unwrap()[1], 2.0);
+        black_box(real);
+    });
+    let mut data = [Complex64::new(1.0, 2.0); 6];
+    let mutable = count_allocations(|| {
+        let mut view =
+            TypedTensorViewMut::<_, Rank<2>>::from_slice_ranked([2, 3], [1, 2], 0, &mut data)
+                .unwrap();
+        let mut real = view.as_real_view_mut().unwrap();
+        real.host_storage_mut().unwrap()[1] = 4.0;
+        black_box(real);
+    });
+    let dynamic = count_allocations(|| {
+        let view = TypedTensorView::from_slice([2, 3], [1, 2], 0, &data).unwrap();
+        black_box(view.as_real_view().unwrap());
+    });
+    let dynamic_mut = count_allocations(|| {
+        let mut view = TypedTensorViewMut::from_slice([2, 3], [1, 2], 0, &mut data).unwrap();
+        black_box(view.as_real_view_mut().unwrap());
+    });
+    assert_eq!(data[0].im, 4.0);
+    assert_eq!(immutable, 0);
+    assert_eq!(mutable, 0);
+    assert_eq!(dynamic, 0);
+    assert_eq!(dynamic_mut, 0);
+
+    // Arbitrary rank may spill, but its layout must still be valid.
+    let high_rank = TypedTensorView::from_slice([1; 8], [1; 8], 0, &data[..1]).unwrap();
+    assert_eq!(
+        high_rank.as_real_view().unwrap().shape(),
+        &[2, 1, 1, 1, 1, 1, 1, 1, 1]
+    );
 }

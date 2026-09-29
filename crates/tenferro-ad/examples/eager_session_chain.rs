@@ -4,6 +4,7 @@ use std::time::{Duration, Instant};
 
 use tenferro_ad::EagerRuntime;
 use tenferro_cpu::CpuBackend;
+use tenferro_tensor::TensorRead;
 use tenferro_tensor::{BackendSessionHost, DotGeneralConfig, Tensor};
 
 fn sample(f: &mut impl FnMut(), duration: Duration) -> (usize, Duration) {
@@ -75,33 +76,40 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     for case in cases {
         let mut run = || -> Option<Tensor> {
             match case {
-                "shared" => backend.with_backend_session(|session| {
-                    let mut out = None;
-                    for _ in 0..10 {
-                        out = Some(
-                            session
-                                .dot_general(
-                                    out.as_ref().unwrap_or(black_box(&lhs)),
-                                    black_box(&rhs),
-                                    black_box(&config),
-                                )
-                                .unwrap(),
-                        );
-                    }
-                    out
-                }),
+                "shared" => backend
+                    .with_backend_session(|session| {
+                        let mut out = None;
+                        for _ in 0..10 {
+                            out = Some(
+                                session
+                                    .dot_general_read(
+                                        TensorRead::from_tensor(
+                                            out.as_ref().unwrap_or(black_box(&lhs)),
+                                        ),
+                                        TensorRead::from_tensor(black_box(&rhs)),
+                                        black_box(&config),
+                                    )
+                                    .unwrap(),
+                            );
+                        }
+                        out
+                    })
+                    .unwrap(),
                 "per_op" => {
                     let mut out = None;
                     for _ in 0..10 {
                         out = Some(
                             backend
                                 .with_backend_session(|session| {
-                                    session.dot_general(
-                                        out.as_ref().unwrap_or(black_box(&lhs)),
-                                        black_box(&rhs),
+                                    session.dot_general_read(
+                                        TensorRead::from_tensor(
+                                            out.as_ref().unwrap_or(black_box(&lhs)),
+                                        ),
+                                        TensorRead::from_tensor(black_box(&rhs)),
                                         black_box(&config),
                                     )
                                 })
+                                .unwrap()
                                 .unwrap(),
                         );
                     }
@@ -111,16 +119,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let mut out = black_box(if case == "eager" { &a } else { &active_a }).clone();
                     for _ in 0..10 {
                         out = out
-                            .dot_general(black_box(&b), black_box(config.clone()))
+                            .runtime()
+                            .with_eager_session(|session| {
+                                session.dot_general(&out, black_box(&b), black_box(config.clone()))
+                            })
+                            .unwrap()
                             .unwrap();
                     }
                     Some(out.to_tensor().unwrap())
                 }
                 "empty_x10" => {
                     for _ in 0..10 {
-                        backend.with_backend_session(|session| {
-                            black_box(session);
-                        });
+                        backend
+                            .with_backend_session(|session| {
+                                black_box(session);
+                            })
+                            .unwrap();
                     }
                     None
                 }

@@ -6,16 +6,13 @@ use std::fmt;
 use std::sync::Arc;
 
 use crate::{
-    AccessError, AllocationDomainId, AllocationId, AllocationKey, BackendAllocation,
-    BackendCachedDot, BackendId, BackendRuntimeCache, BackendSession, CompareDir, DType,
-    DeviceAccessError, DeviceAccessRequest, DeviceId, DeviceKind, DotGeneralConfig,
-    ElementwiseReadOp, Error, GatherConfig, GpuBackendKind, HostAccessError, MemoryKind, PadConfig,
-    Placement, PreparedDeviceAccess, ProviderCapabilities, ProviderReadMapping,
-    ProviderWriteMapping, RootBoundSpan, RootResourceExtent, ScatterConfig, SliceConfig, Tensor,
-    TensorAnalytic, TensorBackend, TensorBuffer, TensorDeviceTransfer, TensorDot,
-    TensorElementwise, TensorFusion, TensorIndexing, TensorRank, TensorRead, TensorReduction,
-    TensorScalar, TensorStructural, TensorViewCanonicalization, TensorWrite, TypedTensor,
-    TypedTensorView, TypedTensorViewMut,
+    AccessError, AllocationDomainId, AllocationId, AllocationKey, BackendAllocation, BackendId,
+    BackendRuntimeCache, DType, DeviceAccessError, DeviceAccessRequest, DeviceId, DeviceKind,
+    Error, GpuBackendKind, HostAccessError, MemoryKind, Placement, PreparedDeviceAccess,
+    ProviderCapabilities, ProviderReadMapping, ProviderWriteMapping, RootBoundSpan,
+    RootResourceExtent, Tensor, TensorBackend, TensorBuffer, TensorDeviceTransfer, TensorRank,
+    TensorRead, TensorScalar, TensorViewCanonicalization, TypedTensor, TypedTensorView,
+    TypedTensorViewMut,
 };
 
 const DEFAULT_CUBE_DIM_X: u32 = 256;
@@ -624,9 +621,14 @@ fn webgpu_placement(rt: &WebGpuRuntime) -> Placement {
 ///
 /// let _ctor: fn(usize) -> tenferro_tensor::Result<WebGpuBackend> = WebGpuBackend::new;
 /// ```
-#[doc(hidden)]
-struct WebGpuBackendSessionMarker;
-
+///
+/// The backend is not an operation route: the operations live on
+/// [`WebGpuExecSession`], so the owner does not implement the operation traits.
+///
+/// ```compile_fail
+/// fn requires_elementwise<B: tenferro_tensor::TensorElementwise>() {}
+/// requires_elementwise::<tenferro_gpu::webgpu::WebGpuBackend>();
+/// ```
 #[derive(Clone)]
 pub struct WebGpuBackend {
     runtime: WebGpuRuntime,
@@ -742,7 +744,7 @@ impl WebGpuBackend {
     }
 }
 
-fn unsupported_op(op: &'static str) -> crate::Error {
+pub(crate) fn unsupported_op(op: &'static str) -> crate::Error {
     crate::Error::unsupported(
         op,
         "WebGPU backend does not support this operation yet; upload/download explicitly and use a supported backend operation",
@@ -754,183 +756,7 @@ macro_rules! unsupported {
         Err(unsupported_op($op))
     };
 }
-
-impl TensorElementwise for WebGpuBackend {
-    fn elementwise_read_into(
-        &mut self,
-        _op: ElementwiseReadOp,
-        _inputs: &[TensorRead<'_>],
-        _out: TensorWrite<'_>,
-    ) -> crate::Result<()> {
-        unsupported!("webgpu_elementwise_read_into")
-    }
-
-    fn add(&mut self, _lhs: &Tensor, _rhs: &Tensor) -> crate::Result<Tensor> {
-        unsupported!("webgpu_add")
-    }
-
-    fn sub(&mut self, _lhs: &Tensor, _rhs: &Tensor) -> crate::Result<Tensor> {
-        unsupported!("webgpu_sub")
-    }
-
-    fn mul(&mut self, _lhs: &Tensor, _rhs: &Tensor) -> crate::Result<Tensor> {
-        unsupported!("webgpu_mul")
-    }
-
-    fn neg(&mut self, _input: &Tensor) -> crate::Result<Tensor> {
-        unsupported!("webgpu_neg")
-    }
-
-    fn conj(&mut self, _input: &Tensor) -> crate::Result<Tensor> {
-        unsupported!("webgpu_conj")
-    }
-
-    fn div(&mut self, _lhs: &Tensor, _rhs: &Tensor) -> crate::Result<Tensor> {
-        unsupported!("webgpu_div")
-    }
-
-    fn abs(&mut self, _input: &Tensor) -> crate::Result<Tensor> {
-        unsupported!("webgpu_abs")
-    }
-
-    fn sign(&mut self, _input: &Tensor) -> crate::Result<Tensor> {
-        unsupported!("webgpu_sign")
-    }
-
-    fn maximum(&mut self, _lhs: &Tensor, _rhs: &Tensor) -> crate::Result<Tensor> {
-        unsupported!("webgpu_maximum")
-    }
-
-    fn minimum(&mut self, _lhs: &Tensor, _rhs: &Tensor) -> crate::Result<Tensor> {
-        unsupported!("webgpu_minimum")
-    }
-
-    fn compare(
-        &mut self,
-        _lhs: &Tensor,
-        _rhs: &Tensor,
-        _dir: &CompareDir,
-    ) -> crate::Result<Tensor> {
-        unsupported!("webgpu_compare")
-    }
-
-    fn select(
-        &mut self,
-        _pred: &Tensor,
-        _on_true: &Tensor,
-        _on_false: &Tensor,
-    ) -> crate::Result<Tensor> {
-        unsupported!("webgpu_select")
-    }
-
-    fn clamp(
-        &mut self,
-        _input: &Tensor,
-        _lower: &Tensor,
-        _upper: &Tensor,
-    ) -> crate::Result<Tensor> {
-        unsupported!("webgpu_clamp")
-    }
-}
-
-impl TensorAnalytic for WebGpuBackend {
-    fn exp(&mut self, _input: &Tensor) -> crate::Result<Tensor> {
-        unsupported!("webgpu_exp")
-    }
-
-    fn log(&mut self, _input: &Tensor) -> crate::Result<Tensor> {
-        unsupported!("webgpu_log")
-    }
-
-    fn sin(&mut self, _input: &Tensor) -> crate::Result<Tensor> {
-        unsupported!("webgpu_sin")
-    }
-
-    fn cos(&mut self, _input: &Tensor) -> crate::Result<Tensor> {
-        unsupported!("webgpu_cos")
-    }
-
-    fn tanh(&mut self, _input: &Tensor) -> crate::Result<Tensor> {
-        unsupported!("webgpu_tanh")
-    }
-
-    fn sqrt(&mut self, _input: &Tensor) -> crate::Result<Tensor> {
-        unsupported!("webgpu_sqrt")
-    }
-
-    fn rsqrt(&mut self, _input: &Tensor) -> crate::Result<Tensor> {
-        unsupported!("webgpu_rsqrt")
-    }
-
-    fn pow(&mut self, _lhs: &Tensor, _rhs: &Tensor) -> crate::Result<Tensor> {
-        unsupported!("webgpu_pow")
-    }
-
-    fn expm1(&mut self, _input: &Tensor) -> crate::Result<Tensor> {
-        unsupported!("webgpu_expm1")
-    }
-
-    fn log1p(&mut self, _input: &Tensor) -> crate::Result<Tensor> {
-        unsupported!("webgpu_log1p")
-    }
-}
-
-impl TensorStructural for WebGpuBackend {
-    fn to_contiguous_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
-        structural::to_contiguous_read(self, input)
-    }
-
-    fn copy_read_into(&mut self, _src: TensorRead<'_>, _dst: TensorWrite<'_>) -> crate::Result<()> {
-        unsupported!("WebGpuBackend::copy_read_into")
-    }
-
-    fn transpose(&mut self, input: &Tensor, perm: &[usize]) -> crate::Result<Tensor> {
-        structural::transpose(self, input, perm)
-    }
-
-    fn reshape(&mut self, _input: &Tensor, _shape: &[usize]) -> crate::Result<Tensor> {
-        unsupported!("webgpu_reshape")
-    }
-
-    fn broadcast_in_dim(
-        &mut self,
-        _input: &Tensor,
-        _shape: &[usize],
-        _dims: &[usize],
-    ) -> crate::Result<Tensor> {
-        unsupported!("webgpu_broadcast_in_dim")
-    }
-
-    fn cast(&mut self, _input: &Tensor, _to: DType) -> crate::Result<Tensor> {
-        unsupported!("webgpu_cast")
-    }
-
-    fn extract_diagonal(
-        &mut self,
-        _input: &Tensor,
-        _axis_a: usize,
-        _axis_b: usize,
-    ) -> crate::Result<Tensor> {
-        unsupported!("webgpu_extract_diagonal")
-    }
-
-    fn embed_diagonal(
-        &mut self,
-        _input: &Tensor,
-        _axis_a: usize,
-        _axis_b: usize,
-    ) -> crate::Result<Tensor> {
-        unsupported!("webgpu_embed_diagonal")
-    }
-
-    fn tril(&mut self, _input: &Tensor, _k: i64) -> crate::Result<Tensor> {
-        unsupported!("webgpu_tril")
-    }
-
-    fn triu(&mut self, _input: &Tensor, _k: i64) -> crate::Result<Tensor> {
-        unsupported!("webgpu_triu")
-    }
-}
+pub(crate) use unsupported;
 
 impl TensorViewCanonicalization<f32, tenferro_tensor::DynRank> for WebGpuBackend {
     fn to_contiguous(
@@ -948,103 +774,6 @@ impl TensorViewCanonicalization<f32, tenferro_tensor::DynRank> for WebGpuBackend
         unsupported!("WebGpuBackend::copy_into")
     }
 }
-
-impl TensorReduction for WebGpuBackend {
-    fn reduce_sum(&mut self, _input: &Tensor, _axes: &[usize]) -> crate::Result<Tensor> {
-        unsupported!("webgpu_reduce_sum")
-    }
-
-    fn reduce_prod(&mut self, _input: &Tensor, _axes: &[usize]) -> crate::Result<Tensor> {
-        unsupported!("webgpu_reduce_prod")
-    }
-
-    fn reduce_max(&mut self, _input: &Tensor, _axes: &[usize]) -> crate::Result<Tensor> {
-        unsupported!("webgpu_reduce_max")
-    }
-
-    fn reduce_min(&mut self, _input: &Tensor, _axes: &[usize]) -> crate::Result<Tensor> {
-        unsupported!("webgpu_reduce_min")
-    }
-}
-
-impl TensorDot for WebGpuBackend {
-    fn dot_general(
-        &mut self,
-        lhs: &Tensor,
-        rhs: &Tensor,
-        config: &DotGeneralConfig,
-    ) -> crate::Result<Tensor> {
-        gemm::dot_general(self, lhs, rhs, config)
-    }
-
-    fn dot_general_with_conj(
-        &mut self,
-        lhs: &Tensor,
-        rhs: &Tensor,
-        config: &DotGeneralConfig,
-        lhs_conj: bool,
-        rhs_conj: bool,
-    ) -> crate::Result<Tensor> {
-        gemm::dot_general_with_conj(self, lhs, rhs, config, lhs_conj, rhs_conj)
-    }
-}
-
-impl TensorIndexing for WebGpuBackend {
-    fn gather(
-        &mut self,
-        _operand: &Tensor,
-        _start_indices: &Tensor,
-        _config: &GatherConfig,
-    ) -> crate::Result<Tensor> {
-        unsupported!("webgpu_gather")
-    }
-
-    fn scatter(
-        &mut self,
-        _operand: &Tensor,
-        _scatter_indices: &Tensor,
-        _updates: &Tensor,
-        _config: &ScatterConfig,
-    ) -> crate::Result<Tensor> {
-        unsupported!("webgpu_scatter")
-    }
-
-    fn slice(&mut self, _input: &Tensor, _config: &SliceConfig) -> crate::Result<Tensor> {
-        unsupported!("webgpu_slice")
-    }
-
-    fn dynamic_slice(
-        &mut self,
-        _input: &Tensor,
-        _starts: &Tensor,
-        _slice_sizes: &[usize],
-    ) -> crate::Result<Tensor> {
-        unsupported!("webgpu_dynamic_slice")
-    }
-
-    fn dynamic_update_slice(
-        &mut self,
-        _operand: &Tensor,
-        _update: &Tensor,
-        _starts: &Tensor,
-    ) -> crate::Result<Tensor> {
-        unsupported!("webgpu_dynamic_update_slice")
-    }
-
-    fn pad(&mut self, _input: &Tensor, _config: &PadConfig) -> crate::Result<Tensor> {
-        unsupported!("webgpu_pad")
-    }
-
-    fn concatenate(&mut self, _inputs: &[&Tensor], _axis: usize) -> crate::Result<Tensor> {
-        unsupported!("webgpu_concatenate")
-    }
-
-    fn reverse(&mut self, _input: &Tensor, _axes: &[usize]) -> crate::Result<Tensor> {
-        unsupported!("webgpu_reverse")
-    }
-}
-
-impl TensorFusion for WebGpuBackend {}
 
 impl TensorBuffer for WebGpuBackend {}
 
@@ -1073,17 +802,5 @@ impl TensorDeviceTransfer for WebGpuBackend {
 impl BackendRuntimeCache for WebGpuBackend {
     type RuntimeCache = ();
 }
-
-impl BackendSession for WebGpuBackend {
-    fn session_type_id(&self) -> std::any::TypeId {
-        std::any::TypeId::of::<WebGpuBackendSessionMarker>()
-    }
-
-    unsafe fn session_data_mut(&mut self) -> *mut () {
-        self as *mut Self as *mut ()
-    }
-}
-
-impl BackendCachedDot for WebGpuBackend {}
 
 impl TensorBackend for WebGpuBackend {}

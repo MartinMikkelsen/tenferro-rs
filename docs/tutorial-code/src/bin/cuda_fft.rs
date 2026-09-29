@@ -64,7 +64,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // FFT execution consumes the already uploaded tensor; it does not transfer it.
     let spectrum = backend
-        .with_backend_session(|session| gpu_input.rfft(None, 0, FftNorm::Backward, session))?;
+        .with_backend_session(|session| gpu_input.rfft(None, 0, FftNorm::Backward, session))??;
 
     // Check residency before crossing the explicit device-to-host boundary.
     let spectrum_read = TensorRead::from_tensor(&spectrum);

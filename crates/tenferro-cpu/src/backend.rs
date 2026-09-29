@@ -1,5 +1,4 @@
 use num_complex::{Complex32, Complex64};
-use std::any::TypeId;
 use std::cmp::Reverse;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::env;
@@ -17,9 +16,7 @@ use crate::dot_runtime::{
     CpuProviderBundle, CpuProviderBundleInstallError, CpuProviderDomainContract,
 };
 use crate::engine::{CpuEngine, EngineResources};
-use crate::indexed_plan_cache::{
-    IndexedPlanCache, IndexedPlanCacheLimits, DEFAULT_INDEXED_PLAN_CACHE_LIMITS,
-};
+use crate::indexed_plan_cache::{IndexedPlanCacheLimits, DEFAULT_INDEXED_PLAN_CACHE_LIMITS};
 use crate::placement::{
     resolve_placement, resolve_placement_with_affinity, CpuEngineConstructionError,
     ResolvedCpuExecution,
@@ -27,30 +24,22 @@ use crate::placement::{
 use crate::provider::{CpuExecutionContext, CpuOperationEntry, ParallelMode};
 use crate::{
     discover_cpu_topology, CpuAdmissionMode, CpuDomainId, CpuDomainOwnership, CpuExecutorAffinity,
-    CpuExecutorShutdown, CpuId, CpuPlacement, CpuPlacementError, CpuPlacementGuarantee, CpuSet,
-    CpuTopology, CpuTopologyError, ExternalCpuDomain, NumaNodeId, ResolvedCpuPlacement,
+    CpuExecutorShutdown, CpuId, CpuPlacement, CpuPlacementError, CpuSet, CpuTopology,
+    CpuTopologyError, ExternalCpuDomain, NumaNodeId, ResolvedCpuPlacement,
 };
 use crate::{
     CacheStats, Tensor, TensorRank, TensorRead, TensorScalar, TensorValue, TensorWrite,
     TypedTensor, TypedTensorView, TypedTensorViewMut,
 };
-use tenferro_tensor::backend::{ElementwiseFusionPlan, GroupedGemmConfig};
-use tenferro_tensor::SharedTensorAllocationDomain;
+use tenferro_tensor::backend::ElementwiseFusionPlan;
 use tenferro_tensor::{
-    AllocationDomainId, BackendCachedDot, BackendRuntimeCache, BackendSession, BackendSessionHost,
-    ContractionScalar, DotGeneralAccumulation, ElementwiseReadOp, TensorAnalytic, TensorBackend,
-    TensorBuffer, TensorDeviceTransfer, TensorDot, TensorElementwise, TensorFusion, TensorIndexing,
-    TensorReduction, TensorStructural, TensorViewCanonicalization,
+    AllocationDomainId, BackendRuntimeCache, BackendSession, BackendSessionHost, ElementwiseReadOp,
+    TensorBackend, TensorBuffer, TensorDeviceTransfer, TensorFusion, TensorViewCanonicalization,
 };
-use tenferro_tensor::{
-    CompareDir, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig,
-};
+use tenferro_tensor::{SessionEntryError, SharedTensorAllocationDomain};
 
 use super::exec_session::CpuExecSession;
-use super::{
-    analytic, copy_tensor_read_into, elementwise, gemm, indexing,
-    materialize_tensor_read_in_domain, reduction, structural, CpuContext,
-};
+use super::{copy_tensor_read_into, elementwise, gemm, structural, CpuContext};
 
 pub(crate) fn tag_fresh_output(output: &mut Tensor, domain: CpuDomainId) {
     match output.dtype() {
@@ -107,11 +96,14 @@ pub(crate) fn elementwise_read_into_fallback_with_pool(
             ))
         }
     };
-    copy_tensor_read_into(
+    let copied = copy_tensor_read_into(
         "CpuBackend::elementwise_read_into",
         TensorRead::from_tensor(&result),
         out,
-    )
+    );
+    // The staged result is scratch: return it to the pool for the next op.
+    reclaim_tensor(buffers, result);
+    copied
 }
 
 pub(crate) trait FreshCpuOutput {
@@ -231,6 +223,9 @@ fn maybe_print_cpu_session_profile() {
         );
     }
 }
+
+/// Backend name reported by CPU session-entry failures.
+pub(crate) const CPU_BACKEND: &str = "CpuBackend";
 
 struct BufferPoolLoan<'a> {
     buffers: &'a mut BufferPool,
@@ -515,7 +510,6 @@ pub struct CpuExecutionInfo {
     domain_cpus: Option<CpuSet>,
     worker_count: usize,
     thread_budget: usize,
-    placement_guarantee: Option<CpuPlacementGuarantee>,
     admission_mode: CpuAdmissionMode,
     domain_ownership: CpuDomainOwnership,
     executor_affinity: CpuExecutorAffinity,
@@ -638,20 +632,6 @@ impl CpuExecutionInfo {
     /// ```
     pub fn thread_budget(&self) -> usize {
         self.thread_budget
-    }
-
-    /// Return whether the selected placement is exact or advisory.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// let guarantee = tenferro_cpu::CpuBackend::new()
-    ///     .execution_info()
-    ///     .placement_guarantee();
-    /// let _ = format!("{guarantee:?}");
-    /// ```
-    pub fn placement_guarantee(&self) -> Option<CpuPlacementGuarantee> {
-        self.placement_guarantee
     }
 
     /// Return the selected domain's admission contract.
@@ -1077,10 +1057,6 @@ fn saturating_add_tensor_cache_stats(total: &mut CacheStats, value: CacheStats) 
 /// let backend = CpuBackend::new();
 /// let clone = backend.clone();
 /// assert_eq!(backend.kind(), clone.kind());
-/// ```
-#[doc(hidden)]
-struct CpuBackendSessionMarker;
-
 #[derive(Clone)]
 pub struct CpuBackend {
     runtime_identity: CpuRuntimeIdentity,
@@ -1090,6 +1066,7 @@ pub struct CpuBackend {
     engine: Arc<CpuEngine>,
     provider_bundle: CpuProviderBundle,
     allocation_domain: Option<Arc<dyn SharedTensorAllocationDomain>>,
+    batch_policy: crate::CpuBatchPolicy,
 }
 
 /// Opaque identity for one CPU backend executable witness.
@@ -1275,6 +1252,7 @@ impl CpuBackend {
                 engine,
                 provider_bundle: CpuProviderBundle::standard(kind, kind == CpuBackendKind::Blas),
                 allocation_domain: None,
+                batch_policy: crate::CpuBatchPolicy::default(),
             })
         }
     }
@@ -1343,6 +1321,7 @@ impl CpuBackend {
             engine: base_engine,
             provider_bundle: CpuProviderBundle::standard(kind, kind == CpuBackendKind::Blas),
             allocation_domain: None,
+            batch_policy: crate::CpuBatchPolicy::default(),
         }
     }
 
@@ -1386,7 +1365,7 @@ impl CpuBackend {
     /// use std::sync::Arc;
     /// use tenferro_cpu::{
     ///     discover_cpu_topology, CpuBackend, CpuBackendError, CpuContext,
-    ///     CpuExecutionMode, CpuPlacementGuarantee, CpuProviderBundleInstallError,
+    ///     CpuExecutionMode, CpuProviderBundleInstallError,
     ///     ExternalCpuDomain, ResolvedCpuPlacement,
     /// };
     /// use tenferro_tensor::CpuDomainId;
@@ -1400,7 +1379,6 @@ impl CpuBackend {
     ///     },
     ///     Arc::new(CpuContext::with_threads(1)?),
     ///     NonZeroUsize::new(1).unwrap(),
-    ///     CpuPlacementGuarantee::AdvisoryDeclared,
     /// )?;
     /// match CpuBackend::from_external_managed_domains(id, [domain]) {
     ///     Ok(backend) => assert_eq!(
@@ -1468,7 +1446,7 @@ impl CpuBackend {
     /// use std::sync::Arc;
     /// use tenferro_cpu::{
     ///     discover_cpu_topology, CpuBackend, CpuBackendKind, CpuContext,
-    ///     CpuExecutionMode, CpuPlacementGuarantee, CpuProviderBundle,
+    ///     CpuExecutionMode, CpuProviderBundle,
     ///     ExternalCpuDomain, ResolvedCpuPlacement,
     /// };
     /// use tenferro_tensor::CpuDomainId;
@@ -1482,7 +1460,6 @@ impl CpuBackend {
     ///     },
     ///     Arc::new(CpuContext::with_threads(1)?),
     ///     NonZeroUsize::new(1).unwrap(),
-    ///     CpuPlacementGuarantee::AdvisoryDeclared,
     /// )?;
     /// let bundle = CpuProviderBundle::builder(CpuBackendKind::Faer).build()?;
     /// let backend = CpuBackend::from_external_managed_domains_with_provider_bundle(
@@ -1573,10 +1550,10 @@ impl CpuBackend {
                             );
                         }
                         has_all_allowed = true;
-                        if domain.placement_guarantee()
-                            == Some(CpuPlacementGuarantee::ExactDeclared)
-                            && cpus != topology.allowed_cpus()
-                        {
+                        // `AllAllowed` names the whole allowed set; a different
+                        // declared set would make the domain's exclusion identity
+                        // disagree with its placement name.
+                        if cpus != topology.allowed_cpus() {
                             return Err(ExternalCpuDomainRegistryError::ExactAllAllowedMismatch {
                                 domain: domain.id(),
                                 declared: cpus.clone(),
@@ -1660,6 +1637,7 @@ impl CpuBackend {
             engine,
             provider_bundle,
             allocation_domain: None,
+            batch_policy: crate::CpuBatchPolicy::default(),
         };
         backend
             .validate_provider_bundle_for_domains(&backend.provider_bundle)
@@ -1929,6 +1907,7 @@ impl CpuBackend {
             engine,
             provider_bundle: self.provider_bundle.clone(),
             allocation_domain: self.allocation_domain.clone(),
+            batch_policy: self.batch_policy,
         })
     }
 
@@ -1948,6 +1927,7 @@ impl CpuBackend {
                 engine,
                 provider_bundle: self.provider_bundle.clone(),
                 allocation_domain: self.allocation_domain.clone(),
+                batch_policy: self.batch_policy,
             });
         }
         let resolved = resolve_placement_with_affinity(
@@ -1965,6 +1945,7 @@ impl CpuBackend {
                 engine: self.shared.managed_base_engine(requested)?,
                 provider_bundle: self.provider_bundle.clone(),
                 allocation_domain: self.allocation_domain.clone(),
+                batch_policy: self.batch_policy,
             });
         }
         let engine_placement = match &resolved {
@@ -1999,6 +1980,7 @@ impl CpuBackend {
             engine,
             provider_bundle: self.provider_bundle.clone(),
             allocation_domain: self.allocation_domain.clone(),
+            batch_policy: self.batch_policy,
         })
     }
 
@@ -2113,7 +2095,6 @@ impl CpuBackend {
             domain_cpus: domain.cpus().cloned(),
             worker_count: capabilities.worker_count.get(),
             thread_budget: domain.thread_budget().get(),
-            placement_guarantee: domain.placement_guarantee(),
             admission_mode: domain.admission_mode(),
             domain_ownership: domain.ownership(),
             executor_affinity,
@@ -2202,21 +2183,12 @@ impl CpuBackend {
         &self,
         bundle: &CpuProviderBundle,
     ) -> Result<(), CpuProviderBundleInstallError> {
-        let allowed = self.shared.topology.allowed_cpus();
         let validate_engine = |engine: &CpuEngine| {
             let domain = engine.domain();
-            let contract = match (domain.placement_guarantee(), domain.cpus()) {
-                (Some(placement_guarantee), Some(domain_cpus)) => {
-                    CpuProviderDomainContract::CooperativeCpuSet {
-                        placement_guarantee,
-                        domain_cpus,
-                        process_allowed_cpus: allowed,
-                    }
-                }
-                (None, None) => CpuProviderDomainContract::CallerManaged,
-                // INVARIANT: CpuResourceDomain stores placement and guarantee in
-                // the same admission enum variant, so their optionality matches.
-                _ => unreachable!("CPU domain placement and guarantee must match"),
+            let contract = if domain.cpus().is_some() {
+                CpuProviderDomainContract::CooperativeCpuSet
+            } else {
+                CpuProviderDomainContract::CallerManaged
             };
             bundle.validate_for_domain(domain.id(), domain.thread_budget(), contract)
         };
@@ -2245,11 +2217,7 @@ impl CpuBackend {
                     bundle.validate_for_domain(
                         domain_id,
                         budget,
-                        CpuProviderDomainContract::CooperativeCpuSet {
-                            placement_guarantee: CpuPlacementGuarantee::ExactDeclared,
-                            domain_cpus: node.cpus(),
-                            process_allowed_cpus: allowed,
-                        },
+                        CpuProviderDomainContract::CooperativeCpuSet,
                     )?;
                 }
             }
@@ -2636,27 +2604,30 @@ impl CpuBackend {
     /// ```
     /// use tenferro_cpu::CpuBackend;
     ///
-    /// let backend = CpuBackend::with_threads(1).unwrap();
-    /// let value = backend.install(|| 1 + 1);
+    /// let backend = CpuBackend::with_threads(1)?;
+    /// let value = backend.install(|| 1 + 1)?;
     /// assert_eq!(value, 2);
+    /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// Panics when re-entered while another CPU backend execution is active on
-    /// the current thread or managed Rayon scope. This includes direct nesting
-    /// and backend calls from parallel child tasks; either could violate CPU or
-    /// provider exclusivity. For an externally managed domain, it also panics
-    /// with the executor's typed diagnostic when synchronous executor entry
-    /// fails because this convenience method cannot return a `Result`.
-    pub fn install<R: Send>(&self, op: impl FnOnce() -> R + Send) -> R {
-        let admission = self.infallible_execution_admission();
+    /// Returns [`crate::Error::SessionEntry`] without running `op` when another
+    /// CPU backend execution is already active on the current thread or managed
+    /// Rayon scope ([`SessionEntryError::Reentered`]; direct nesting and backend
+    /// calls from parallel child tasks could violate CPU or provider
+    /// exclusivity), when a caller-managed domain is already executing, or when
+    /// admission state is poisoned. Returns [`crate::Error::BackendSource`] with
+    /// the executor's typed diagnostic when an externally managed executor
+    /// cannot be entered.
+    pub fn install<R: Send>(&self, op: impl FnOnce() -> R + Send) -> crate::Result<R> {
+        let admission = self.execution_admission()?;
         let permit = admission.permit();
-        let entry = CpuOperationEntry::new(self.engine.domain(), permit);
-        match entry.enter(ParallelMode::Sequential, |_| op()) {
-            Ok(result) => result,
-            Err(error) => panic!("CpuBackend::install executor failed: {error}"),
-        }
+        let entry = CpuOperationEntry::new(self.engine.domain(), permit)
+            .with_batch_policy(self.batch_policy);
+        entry
+            .enter(ParallelMode::Sequential, |_| op())
+            .map_err(|error| crate::Error::backend_source("CpuBackend::install", error))
     }
 
     fn try_install<R: Send>(
@@ -2665,36 +2636,12 @@ impl CpuBackend {
     ) -> crate::Result<R> {
         let admission = self.execution_admission()?;
         let permit = admission.permit();
-        let entry = CpuOperationEntry::new(self.engine.domain(), permit);
+        let entry = CpuOperationEntry::new(self.engine.domain(), permit)
+            .with_batch_policy(self.batch_policy);
         let mode = entry.preferred_engine_mode();
         entry
             .enter(mode, |context| context.with_native_parallelism(op))
             .map_err(|error| crate::Error::backend_source("CPU tensor execution", error))?
-    }
-
-    fn try_install_with_context<R: Send>(
-        &self,
-        op: impl FnOnce(&CpuExecutionContext<'_>) -> crate::Result<R> + Send,
-    ) -> crate::Result<R> {
-        let admission = self.execution_admission()?;
-        let permit = admission.permit();
-        let entry = CpuOperationEntry::new(self.engine.domain(), permit);
-        let mode = entry.preferred_engine_mode();
-        entry
-            .enter(mode, |context| {
-                context.with_native_parallelism(|| op(context))
-            })
-            .map_err(|error| crate::Error::backend_source("CPU tensor execution", error))?
-    }
-
-    fn try_install_fresh_with_context<R: FreshCpuOutput + Send>(
-        &self,
-        op: impl FnOnce(&CpuExecutionContext<'_>) -> crate::Result<R> + Send,
-    ) -> crate::Result<R> {
-        let domain = self.engine.domain().id();
-        let mut output = self.try_install_with_context(op)?;
-        output.tag_fresh(domain);
-        Ok(output)
     }
 
     fn install_with_pool_unmarked<R: Send>(
@@ -2703,7 +2650,8 @@ impl CpuBackend {
     ) -> crate::Result<R> {
         let admission = self.execution_admission()?;
         let permit = admission.permit();
-        let entry = CpuOperationEntry::new(self.engine.domain(), permit);
+        let entry = CpuOperationEntry::new(self.engine.domain(), permit)
+            .with_batch_policy(self.batch_policy);
         let mode = entry.preferred_engine_mode();
         entry
             .enter(mode, |context| {
@@ -2723,7 +2671,8 @@ impl CpuBackend {
     ) -> crate::Result<R> {
         let admission = self.execution_admission()?;
         let permit = admission.permit();
-        let entry = CpuOperationEntry::new(self.engine.domain(), permit);
+        let entry = CpuOperationEntry::new(self.engine.domain(), permit)
+            .with_batch_policy(self.batch_policy);
         let mode = entry.preferred_engine_mode();
         entry
             .enter(mode, |context| {
@@ -2731,36 +2680,6 @@ impl CpuBackend {
                     self.with_execution_resources(permit, |resources| {
                         let mut buffers = BufferPoolLoan::new(&mut resources.buffers);
                         op(context, buffers.get_mut())
-                    })
-                })
-            })
-            .map_err(|error| crate::Error::backend_source("CPU tensor execution", error))?
-    }
-
-    fn install_with_indexed_pool_context_unmarked<R: Send>(
-        &mut self,
-        op: impl FnOnce(
-                &CpuExecutionContext<'_>,
-                &mut BufferPool,
-                &mut IndexedPlanCache,
-            ) -> crate::Result<R>
-            + Send,
-    ) -> crate::Result<R> {
-        let admission = self.execution_admission()?;
-        let permit = admission.permit();
-        let entry = CpuOperationEntry::new(self.engine.domain(), permit);
-        let mode = entry.preferred_engine_mode();
-        entry
-            .enter(mode, |context| {
-                context.with_native_parallelism(|| {
-                    self.with_execution_resources(permit, |resources| {
-                        let EngineResources {
-                            buffers,
-                            indexed_plan_cache,
-                            ..
-                        } = resources;
-                        let mut buffers = BufferPoolLoan::new(buffers);
-                        op(context, buffers.get_mut(), indexed_plan_cache)
                     })
                 })
             })
@@ -2783,21 +2702,6 @@ impl CpuBackend {
     ) -> crate::Result<R> {
         let domain = self.engine.domain().id();
         let mut output = self.install_with_pool_context_unmarked(op)?;
-        output.tag_fresh(domain);
-        Ok(output)
-    }
-
-    fn install_with_indexed_pool_context<R: FreshCpuOutput + Send>(
-        &mut self,
-        op: impl FnOnce(
-                &CpuExecutionContext<'_>,
-                &mut BufferPool,
-                &mut IndexedPlanCache,
-            ) -> crate::Result<R>
-            + Send,
-    ) -> crate::Result<R> {
-        let domain = self.engine.domain().id();
-        let mut output = self.install_with_indexed_pool_context_unmarked(op)?;
         output.tag_fresh(domain);
         Ok(output)
     }
@@ -2833,7 +2737,8 @@ impl CpuBackend {
     ) -> crate::Result<R> {
         let admission = self.execution_admission()?;
         let permit = admission.permit();
-        let entry = CpuOperationEntry::new(self.engine.domain(), permit);
+        let entry = CpuOperationEntry::new(self.engine.domain(), permit)
+            .with_batch_policy(self.batch_policy);
         let mode = entry.preferred_linalg_mode(self.kind());
         entry
             .enter(mode, |context| {
@@ -2857,6 +2762,11 @@ impl CpuBackend {
                 EngineResources::new(self.shared.buffer_limit.load(Ordering::Relaxed));
             return op(&mut resources);
         }
+        // INVARIANT: this lock is poisoned only by a session callback that
+        // unwound while holding it, and `BufferPoolLoan` restores the pool's
+        // in-flight accounting on unwind, so the resources are consistent and
+        // the next session may reuse them. Pool introspection
+        // (`buffer_pool_len`, `buffer_pool_stats`) still reports the poison.
         let mut resources = self
             .engine
             .resources
@@ -2865,13 +2775,21 @@ impl CpuBackend {
         op(&mut resources)
     }
 
-    fn acquire_execution_permit(&self, owner: ResourceOwner) -> ResourcePermit {
+    fn acquire_execution_permit(
+        &self,
+        owner: ResourceOwner,
+    ) -> Result<ResourcePermit, SessionEntryError> {
+        let arbiter_poisoned = |_| SessionEntryError::ResourcePoisoned {
+            backend: CPU_BACKEND,
+            resource: "the CPU resource arbiter",
+        };
         match &self.resolved {
             ResolvedCpuExecution::Managed(placement)
             | ResolvedCpuExecution::ExternalManaged(placement) => self
                 .shared
                 .arbiter
-                .acquire_recovering(placement.cpus().clone(), owner),
+                .acquire_waiting(placement.cpus().clone(), owner)
+                .map_err(arbiter_poisoned),
             ResolvedCpuExecution::ExternalCallerManaged => {
                 // INVARIANT: this resolved mode is created only from a domain
                 // whose admission variant owns the matching active-entry flag.
@@ -2882,16 +2800,25 @@ impl CpuBackend {
                     .unwrap_or_else(|| {
                         unreachable!("caller-managed execution needs a local admission guard")
                     });
-                ResourcePermit::caller_managed(active, owner)
+                ResourcePermit::caller_managed(active, owner).ok_or_else(|| {
+                    SessionEntryError::Contended {
+                        backend: CPU_BACKEND,
+                        message: "the caller-managed CPU domain is already executing; \
+                                  serialize entries to a caller-managed domain"
+                            .to_owned(),
+                    }
+                })
             }
             ResolvedCpuExecution::Compatibility => self
                 .shared
                 .arbiter
-                .acquire_recovering(self.shared.topology.allowed_cpus().clone(), owner),
+                .acquire_waiting(self.shared.topology.allowed_cpus().clone(), owner)
+                .map_err(arbiter_poisoned),
             ResolvedCpuExecution::ProviderDefaultExclusive => self
                 .shared
                 .arbiter
-                .acquire_provider_exclusive_recovering(owner),
+                .acquire_provider_exclusive_waiting(owner)
+                .map_err(arbiter_poisoned),
         }
     }
 
@@ -2916,773 +2843,50 @@ impl CpuBackend {
     }
 }
 
-impl BackendSession for CpuBackend {
-    fn vdot_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor> {
-        self.run_backend_session_cached(None, move |session| session.vdot_read(lhs, rhs))
-    }
-
-    fn norm_squared_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
-        self.run_backend_session_cached(None, move |session| session.norm_squared_read(input))
-    }
-
-    fn axpby_read_into_accum(
-        &mut self,
-        alpha: ContractionScalar,
-        x: TensorRead<'_>,
-        beta: ContractionScalar,
-        y: TensorWrite<'_>,
-    ) -> crate::Result<()> {
-        self.run_backend_session_cached(None, move |session| {
-            session.axpby_read_into_accum(alpha, x, beta, y)
-        })
-    }
-
-    fn session_type_id(&self) -> TypeId {
-        TypeId::of::<CpuBackendSessionMarker>()
-    }
-
-    unsafe fn session_data_mut(&mut self) -> *mut () {
-        self as *mut Self as *mut ()
-    }
-}
-
 impl BackendRuntimeCache for CpuBackend {
     type RuntimeCache = gemm::GemmAnalysisCache;
 }
 
-impl TensorElementwise for CpuBackend {
-    fn elementwise_read_into(
-        &mut self,
-        op: ElementwiseReadOp,
-        inputs: &[TensorRead<'_>],
-        out: TensorWrite<'_>,
-    ) -> crate::Result<()> {
-        self.install_with_pool_context_unmarked(|context, buffers| {
-            let exec_context = context.strided_exec_context();
-            tenferro_internal_cpu_kernels::elementwise_read_into_with_context(
-                op,
-                inputs,
-                out,
-                &exec_context,
-                |inputs, out| {
-                    elementwise_read_into_fallback_with_pool(
-                        buffers,
-                        &exec_context,
-                        op,
-                        inputs,
-                        out,
-                    )
-                },
-            )
-        })
-    }
-
-    fn add(&mut self, lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
-        self.install_with_pool_context(|context, buffers| {
-            elementwise::add_with_pool(buffers, &context.strided_exec_context(), lhs, rhs)
-        })
-    }
-
-    fn add_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor> {
-        self.install_with_pool_context(|context, buffers| {
-            elementwise::add_read_with_pool(buffers, &context.strided_exec_context(), lhs, rhs)
-        })
-    }
-
-    fn sub(&mut self, lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
-        self.install_with_pool_context(|context, buffers| {
-            elementwise::sub_with_pool(buffers, &context.strided_exec_context(), lhs, rhs)
-        })
-    }
-
-    fn sub_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor> {
-        self.install_with_pool_context(|context, buffers| {
-            elementwise::sub_read_with_pool(buffers, &context.strided_exec_context(), lhs, rhs)
-        })
-    }
-
-    fn mul(&mut self, lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
-        self.install_with_pool_context(|context, buffers| {
-            elementwise::mul_with_pool(buffers, &context.strided_exec_context(), lhs, rhs)
-        })
-    }
-
-    fn mul_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor> {
-        self.install_with_pool_context(|context, buffers| {
-            elementwise::mul_read_with_pool(buffers, &context.strided_exec_context(), lhs, rhs)
-        })
-    }
-
-    fn neg(&mut self, input: &Tensor) -> crate::Result<Tensor> {
-        self.install_with_pool_context(|context, buffers| {
-            elementwise::neg_with_pool(buffers, &context.strided_exec_context(), input)
-        })
-    }
-
-    fn neg_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
-        self.install_with_pool_context(|context, buffers| {
-            elementwise::neg_read_with_pool(buffers, &context.strided_exec_context(), input)
-        })
-    }
-
-    fn conj(&mut self, input: &Tensor) -> crate::Result<Tensor> {
-        self.install_with_pool_context(|context, buffers| {
-            elementwise::conj_with_pool(buffers, &context.strided_exec_context(), input)
-        })
-    }
-
-    fn conj_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
-        self.install_with_pool_context(|context, buffers| {
-            elementwise::conj_read_with_pool(buffers, &context.strided_exec_context(), input)
-        })
-    }
-
-    fn div(&mut self, lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
-        self.install_with_pool_context(|context, buffers| {
-            elementwise::div_with_pool(buffers, &context.strided_exec_context(), lhs, rhs)
-        })
-    }
-
-    fn div_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor> {
-        self.install_with_pool_context(|context, buffers| {
-            elementwise::div_read_with_pool(buffers, &context.strided_exec_context(), lhs, rhs)
-        })
-    }
-
-    fn rem(&mut self, lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
-        self.install_with_pool_context(|context, buffers| {
-            elementwise::rem_with_pool(buffers, &context.strided_exec_context(), lhs, rhs)
-        })
-    }
-
-    fn rem_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor> {
-        self.install_with_pool_context(|context, buffers| {
-            elementwise::rem_read_with_pool(buffers, &context.strided_exec_context(), lhs, rhs)
-        })
-    }
-
-    fn abs(&mut self, input: &Tensor) -> crate::Result<Tensor> {
-        self.install_with_pool_context(|context, buffers| {
-            elementwise::abs_with_pool(buffers, &context.strided_exec_context(), input)
-        })
-    }
-
-    fn abs_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
-        self.install_with_pool_context(|context, buffers| {
-            elementwise::abs_read_with_pool(buffers, &context.strided_exec_context(), input)
-        })
-    }
-
-    fn sign(&mut self, input: &Tensor) -> crate::Result<Tensor> {
-        self.install_with_pool_context(|context, buffers| {
-            elementwise::sign_with_pool(buffers, &context.strided_exec_context(), input)
-        })
-    }
-
-    fn sign_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
-        self.install_with_pool_context(|context, buffers| {
-            elementwise::sign_read_with_pool(buffers, &context.strided_exec_context(), input)
-        })
-    }
-
-    fn maximum(&mut self, lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
-        self.install_with_pool_context(|context, buffers| {
-            elementwise::maximum_with_pool(buffers, &context.strided_exec_context(), lhs, rhs)
-        })
-    }
-
-    fn maximum_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor> {
-        self.install_with_pool_context(|context, buffers| {
-            elementwise::maximum_read_with_pool(buffers, &context.strided_exec_context(), lhs, rhs)
-        })
-    }
-
-    fn minimum(&mut self, lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
-        self.install_with_pool_context(|context, buffers| {
-            elementwise::minimum_with_pool(buffers, &context.strided_exec_context(), lhs, rhs)
-        })
-    }
-
-    fn minimum_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor> {
-        self.install_with_pool_context(|context, buffers| {
-            elementwise::minimum_read_with_pool(buffers, &context.strided_exec_context(), lhs, rhs)
-        })
-    }
-
-    fn compare(&mut self, lhs: &Tensor, rhs: &Tensor, dir: &CompareDir) -> crate::Result<Tensor> {
-        self.install_with_pool_context(|context, buffers| {
-            elementwise::compare_with_pool(buffers, &context.strided_exec_context(), lhs, rhs, dir)
-        })
-    }
-
-    fn compare_read(
-        &mut self,
-        lhs: TensorRead<'_>,
-        rhs: TensorRead<'_>,
-        dir: &CompareDir,
-    ) -> crate::Result<Tensor> {
-        self.install_with_pool_context(|context, buffers| {
-            elementwise::compare_read_with_pool(
-                buffers,
-                &context.strided_exec_context(),
-                lhs,
-                rhs,
-                dir,
-            )
-        })
-    }
-
-    fn select(
-        &mut self,
-        pred: &Tensor,
-        on_true: &Tensor,
-        on_false: &Tensor,
-    ) -> crate::Result<Tensor> {
-        self.install_with_pool_context(|context, buffers| {
-            elementwise::select_with_pool(
-                buffers,
-                &context.strided_exec_context(),
-                pred,
-                on_true,
-                on_false,
-            )
-        })
-    }
-
-    fn select_read(
-        &mut self,
-        pred: TensorRead<'_>,
-        on_true: TensorRead<'_>,
-        on_false: TensorRead<'_>,
-    ) -> crate::Result<Tensor> {
-        self.install_with_pool_context(|context, buffers| {
-            elementwise::select_read_with_pool(
-                buffers,
-                &context.strided_exec_context(),
-                pred,
-                on_true,
-                on_false,
-            )
-        })
-    }
-
-    fn clamp(&mut self, input: &Tensor, lower: &Tensor, upper: &Tensor) -> crate::Result<Tensor> {
-        self.install_with_pool_context(|context, buffers| {
-            elementwise::clamp_with_pool(
-                buffers,
-                &context.strided_exec_context(),
-                input,
-                lower,
-                upper,
-            )
-        })
-    }
-
-    fn clamp_read(
-        &mut self,
-        input: TensorRead<'_>,
-        lower: TensorRead<'_>,
-        upper: TensorRead<'_>,
-    ) -> crate::Result<Tensor> {
-        self.install_with_pool_context(|context, buffers| {
-            elementwise::clamp_read_with_pool(
-                buffers,
-                &context.strided_exec_context(),
-                input,
-                lower,
-                upper,
-            )
-        })
-    }
-}
-
-impl TensorAnalytic for CpuBackend {
-    fn exp(&mut self, input: &Tensor) -> crate::Result<Tensor> {
-        self.install_with_pool(|buffers| analytic::exp_with_pool(buffers, input))
-    }
-
-    fn exp_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
-        self.install_with_pool(|buffers| analytic::exp_read_with_pool(buffers, input))
-    }
-
-    fn log(&mut self, input: &Tensor) -> crate::Result<Tensor> {
-        self.install_with_pool(|buffers| analytic::log_with_pool(buffers, input))
-    }
-
-    fn log_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
-        self.install_with_pool(|buffers| analytic::log_read_with_pool(buffers, input))
-    }
-
-    fn sin(&mut self, input: &Tensor) -> crate::Result<Tensor> {
-        self.install_with_pool(|buffers| analytic::sin_with_pool(buffers, input))
-    }
-
-    fn sin_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
-        self.install_with_pool(|buffers| analytic::sin_read_with_pool(buffers, input))
-    }
-
-    fn cos(&mut self, input: &Tensor) -> crate::Result<Tensor> {
-        self.install_with_pool(|buffers| analytic::cos_with_pool(buffers, input))
-    }
-
-    fn cos_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
-        self.install_with_pool(|buffers| analytic::cos_read_with_pool(buffers, input))
-    }
-
-    fn tanh(&mut self, input: &Tensor) -> crate::Result<Tensor> {
-        self.install_with_pool(|buffers| analytic::tanh_with_pool(buffers, input))
-    }
-
-    fn tanh_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
-        self.install_with_pool(|buffers| analytic::tanh_read_with_pool(buffers, input))
-    }
-
-    fn sqrt(&mut self, input: &Tensor) -> crate::Result<Tensor> {
-        self.install_with_pool(|buffers| analytic::sqrt_with_pool(buffers, input))
-    }
-
-    fn sqrt_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
-        self.install_with_pool(|buffers| analytic::sqrt_read_with_pool(buffers, input))
-    }
-
-    fn rsqrt(&mut self, input: &Tensor) -> crate::Result<Tensor> {
-        self.install_with_pool(|buffers| analytic::rsqrt_with_pool(buffers, input))
-    }
-
-    fn rsqrt_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
-        self.install_with_pool(|buffers| analytic::rsqrt_read_with_pool(buffers, input))
-    }
-
-    fn pow(&mut self, lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
-        self.install_with_pool(|buffers| analytic::pow_with_pool(buffers, lhs, rhs))
-    }
-
-    fn pow_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor> {
-        self.install_with_pool(|buffers| analytic::pow_read_with_pool(buffers, lhs, rhs))
-    }
-
-    fn expm1(&mut self, input: &Tensor) -> crate::Result<Tensor> {
-        self.install_with_pool(|buffers| analytic::expm1_with_pool(buffers, input))
-    }
-
-    fn expm1_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
-        self.install_with_pool(|buffers| analytic::expm1_read_with_pool(buffers, input))
-    }
-
-    fn log1p(&mut self, input: &Tensor) -> crate::Result<Tensor> {
-        self.install_with_pool(|buffers| analytic::log1p_with_pool(buffers, input))
-    }
-
-    fn log1p_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
-        self.install_with_pool(|buffers| analytic::log1p_read_with_pool(buffers, input))
-    }
-}
-
-impl TensorStructural for CpuBackend {
-    fn to_contiguous_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
-        let domain = self.allocation_domain.clone();
-        self.install_with_pool(|buffers| {
-            materialize_tensor_read_in_domain(
-                buffers,
-                "CpuBackend::to_contiguous_read",
-                input,
-                domain.as_deref(),
-            )
-        })
-    }
-
-    fn copy_read_into(&mut self, src: TensorRead<'_>, dst: TensorWrite<'_>) -> crate::Result<()> {
-        self.try_install(|| copy_tensor_read_into("CpuBackend::copy_read_into", src, dst))
-    }
-
-    fn transpose(&mut self, input: &Tensor, perm: &[usize]) -> crate::Result<Tensor> {
-        self.install_with_pool(|buffers| structural::transpose_with_pool(buffers, input, perm))
-    }
-
-    fn transpose_read(&mut self, input: TensorRead<'_>, perm: &[usize]) -> crate::Result<Tensor> {
-        self.install_with_pool(|buffers| structural::transpose_read_with_pool(buffers, input, perm))
-    }
-
-    fn reshape(&mut self, input: &Tensor, shape: &[usize]) -> crate::Result<Tensor> {
-        // INVARIANT: typed_reshape performs a serial host copy (to_vec); no
-        // parallel kernel runs, so the engine entry is pure overhead on
-        // multi-thread pools.
-        structural::reshape(input, shape)
-    }
-
-    fn reshape_read(&mut self, input: TensorRead<'_>, shape: &[usize]) -> crate::Result<Tensor> {
-        match &input {
-            // INVARIANT: compact inputs take the serial host-copy path, so
-            // they must not pay the engine entry; views may materialize via
-            // strided kernels and keep the entry.
-            TensorRead::Tensor(tensor) => structural::reshape(tensor, shape),
-            TensorRead::View(_) => self.install_with_pool(|buffers| {
-                structural::reshape_read_with_pool(buffers, input, shape)
-            }),
-        }
-    }
-
-    fn broadcast_in_dim(
-        &mut self,
-        input: &Tensor,
-        shape: &[usize],
-        dims: &[usize],
-    ) -> crate::Result<Tensor> {
-        self.install_with_pool(|buffers| {
-            structural::broadcast_in_dim_with_pool(buffers, input, shape, dims)
-        })
-    }
-
-    fn broadcast_in_dim_read(
-        &mut self,
-        input: TensorRead<'_>,
-        shape: &[usize],
-        dims: &[usize],
-    ) -> crate::Result<Tensor> {
-        self.install_with_pool(|buffers| {
-            structural::broadcast_in_dim_read_with_pool(buffers, input, shape, dims)
-        })
-    }
-
-    fn cast(&mut self, input: &Tensor, to: crate::DType) -> crate::Result<Tensor> {
-        self.install_with_pool(|buffers| structural::cast_with_pool(buffers, input, to))
-    }
-
-    fn extract_diagonal(
-        &mut self,
-        input: &Tensor,
-        axis_a: usize,
-        axis_b: usize,
-    ) -> crate::Result<Tensor> {
-        self.install_with_pool(|buffers| {
-            structural::extract_diagonal_with_pool(buffers, input, axis_a, axis_b)
-        })
-    }
-
-    fn embed_diagonal(
-        &mut self,
-        input: &Tensor,
-        axis_a: usize,
-        axis_b: usize,
-    ) -> crate::Result<Tensor> {
-        self.install_with_pool(|buffers| {
-            structural::embed_diagonal_with_pool(buffers, input, axis_a, axis_b)
-        })
-    }
-
-    fn tril(&mut self, input: &Tensor, k: i64) -> crate::Result<Tensor> {
-        self.install_with_pool(|buffers| structural::tril_with_pool(buffers, input, k))
-    }
-
-    fn triu(&mut self, input: &Tensor, k: i64) -> crate::Result<Tensor> {
-        self.install_with_pool(|buffers| structural::triu_with_pool(buffers, input, k))
-    }
-}
-
-impl TensorReduction for CpuBackend {
-    fn reduce_sum(&mut self, input: &Tensor, axes: &[usize]) -> crate::Result<Tensor> {
-        self.try_install_fresh_with_context(|context| {
-            let exec_context = context.strided_exec_context();
-            reduction::reduce_sum(input, axes, &exec_context)
-        })
-    }
-
-    fn reduce_sum_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
-        self.install_with_pool_context(|context, buffers| {
-            let exec_context = context.strided_exec_context();
-            reduction::reduce_sum_read(buffers, input, axes, &exec_context)
-        })
-    }
-
-    fn reduce_sum_squares_read(
-        &mut self,
-        input: TensorRead<'_>,
-        axes: &[usize],
-    ) -> crate::Result<Tensor> {
-        self.install_with_pool_context(|context, buffers| {
-            let exec_context = context.strided_exec_context();
-            reduction::reduce_sum_squares_read(buffers, input, axes, &exec_context)
-        })
-    }
-
-    fn reduce_prod(&mut self, input: &Tensor, axes: &[usize]) -> crate::Result<Tensor> {
-        self.try_install_fresh_with_context(|context| {
-            let exec_context = context.strided_exec_context();
-            reduction::reduce_prod(input, axes, &exec_context)
-        })
-    }
-
-    fn reduce_prod_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
-        self.install_with_pool_context(|context, buffers| {
-            let exec_context = context.strided_exec_context();
-            reduction::reduce_prod_read(buffers, input, axes, &exec_context)
-        })
-    }
-
-    fn reduce_max(&mut self, input: &Tensor, axes: &[usize]) -> crate::Result<Tensor> {
-        self.try_install_fresh_with_context(|context| {
-            let exec_context = context.strided_exec_context();
-            reduction::reduce_max(input, axes, &exec_context)
-        })
-    }
-
-    fn reduce_max_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
-        self.install_with_pool_context(|context, buffers| {
-            let exec_context = context.strided_exec_context();
-            reduction::reduce_max_read(buffers, input, axes, &exec_context)
-        })
-    }
-
-    fn reduce_min(&mut self, input: &Tensor, axes: &[usize]) -> crate::Result<Tensor> {
-        self.try_install_fresh_with_context(|context| {
-            let exec_context = context.strided_exec_context();
-            reduction::reduce_min(input, axes, &exec_context)
-        })
-    }
-
-    fn reduce_min_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
-        self.install_with_pool_context(|context, buffers| {
-            let exec_context = context.strided_exec_context();
-            reduction::reduce_min_read(buffers, input, axes, &exec_context)
-        })
-    }
-}
-
-impl TensorDot for CpuBackend {
-    fn dot_general(
-        &mut self,
-        lhs: &Tensor,
-        rhs: &Tensor,
-        config: &DotGeneralConfig,
-    ) -> crate::Result<Tensor> {
-        self.run_backend_session_cached(None, move |session| session.dot_general(lhs, rhs, config))
-    }
-
-    fn dot_general_read(
-        &mut self,
-        lhs: TensorRead<'_>,
-        rhs: TensorRead<'_>,
-        config: &DotGeneralConfig,
-    ) -> crate::Result<Tensor> {
-        self.run_backend_session_cached(None, move |session| {
-            session.dot_general_read(lhs, rhs, config)
-        })
-    }
-
-    fn dot_general_read_into(
-        &mut self,
-        lhs: TensorRead<'_>,
-        rhs: TensorRead<'_>,
-        config: &DotGeneralConfig,
-        out: TensorWrite<'_>,
-    ) -> crate::Result<()> {
-        self.run_backend_session_cached(None, move |session| {
-            session.dot_general_read_into(lhs, rhs, config, out)
-        })
-    }
-
-    fn dot_general_read_into_accum(
-        &mut self,
-        lhs: TensorRead<'_>,
-        rhs: TensorRead<'_>,
-        config: &DotGeneralConfig,
-        accumulation: DotGeneralAccumulation,
-        out: TensorWrite<'_>,
-    ) -> crate::Result<()> {
-        self.run_backend_session_cached(None, move |session| {
-            session.dot_general_read_into_accum(lhs, rhs, config, accumulation, out)
-        })
-    }
-
-    fn dot_general_with_conj(
-        &mut self,
-        lhs: &Tensor,
-        rhs: &Tensor,
-        config: &DotGeneralConfig,
-        lhs_conj: bool,
-        rhs_conj: bool,
-    ) -> crate::Result<Tensor> {
-        self.run_backend_session_cached(None, move |session| {
-            session.dot_general_with_conj(lhs, rhs, config, lhs_conj, rhs_conj)
-        })
-    }
-}
-
-impl BackendCachedDot for CpuBackend {
-    fn dot_general_cached(
-        &mut self,
-        cache: &mut Self::RuntimeCache,
-        cache_slot: Option<usize>,
-        lhs: &Tensor,
-        rhs: &Tensor,
-        config: &DotGeneralConfig,
-    ) -> crate::Result<Tensor> {
-        self.run_backend_session_cached(Some(cache), move |session| {
-            session.dot_general_cached(cache_slot, lhs, rhs, config)
-        })
-    }
-
-    fn dot_general_with_conj_cached(
-        &mut self,
-        cache: &mut Self::RuntimeCache,
-        cache_slot: Option<usize>,
-        lhs: &Tensor,
-        rhs: &Tensor,
-        config: &DotGeneralConfig,
-        lhs_conj: bool,
-        rhs_conj: bool,
-    ) -> crate::Result<Tensor> {
-        self.run_backend_session_cached(Some(cache), move |session| {
-            session.dot_general_with_conj_cached(cache_slot, lhs, rhs, config, lhs_conj, rhs_conj)
-        })
-    }
-
-    fn dot_general_read_into_accum_cached(
-        &mut self,
-        cache: &mut Self::RuntimeCache,
-        cache_slot: Option<usize>,
-        lhs: TensorRead<'_>,
-        rhs: TensorRead<'_>,
-        config: &DotGeneralConfig,
-        accumulation: DotGeneralAccumulation,
-        out: TensorWrite<'_>,
-    ) -> crate::Result<()> {
-        self.run_backend_session_cached(Some(cache), move |session| {
-            session.dot_general_read_into_accum_cached(
-                cache_slot,
-                lhs,
-                rhs,
-                config,
-                accumulation,
-                out,
-            )
-        })
-    }
-
-    fn grouped_gemm_cached(
-        &mut self,
-        cache: &mut Self::RuntimeCache,
-        cache_slot: Option<usize>,
-        lhs: TensorRead<'_>,
-        rhs: TensorRead<'_>,
-        config: &GroupedGemmConfig<'_>,
-        out: TensorWrite<'_>,
-    ) -> crate::Result<()> {
-        self.run_backend_session_cached(Some(cache), move |session| {
-            session.grouped_gemm_cached(cache_slot, lhs, rhs, config, out)
-        })
-    }
-}
-
-impl TensorIndexing for CpuBackend {
-    fn gather(
-        &mut self,
-        operand: &Tensor,
-        start_indices: &Tensor,
-        config: &GatherConfig,
-    ) -> crate::Result<Tensor> {
-        self.install_with_indexed_pool_context(|context, buffers, cache| {
-            let exec_context = context.strided_exec_context();
-            indexing::gather_with_pool(
-                buffers,
-                cache,
-                &exec_context,
-                operand,
-                start_indices,
-                config,
-            )
-        })
-    }
-
-    fn scatter(
-        &mut self,
-        operand: &Tensor,
-        scatter_indices: &Tensor,
-        updates: &Tensor,
-        config: &ScatterConfig,
-    ) -> crate::Result<Tensor> {
-        self.install_with_indexed_pool_context(|context, buffers, cache| {
-            let exec_context = context.strided_exec_context();
-            indexing::scatter_with_pool(
-                buffers,
-                cache,
-                &exec_context,
-                operand,
-                scatter_indices,
-                updates,
-                config,
-            )
-        })
-    }
-
-    fn slice(&mut self, input: &Tensor, config: &SliceConfig) -> crate::Result<Tensor> {
-        self.install_with_pool_context(|context, buffers| {
-            let exec_context = context.strided_exec_context();
-            indexing::try_slice_with_pool(buffers, &exec_context, input, config)
-        })
-    }
-
-    fn dynamic_slice(
-        &mut self,
-        input: &Tensor,
-        starts: &Tensor,
-        slice_sizes: &[usize],
-    ) -> crate::Result<Tensor> {
-        self.install_with_indexed_pool_context(|context, buffers, cache| {
-            let exec_context = context.strided_exec_context();
-            indexing::dynamic_slice_with_pool(
-                buffers,
-                cache,
-                &exec_context,
-                input,
-                starts,
-                slice_sizes,
-            )
-        })
-    }
-
-    fn dynamic_update_slice(
-        &mut self,
-        operand: &Tensor,
-        update: &Tensor,
-        starts: &Tensor,
-    ) -> crate::Result<Tensor> {
-        self.install_with_indexed_pool_context(|context, buffers, cache| {
-            let exec_context = context.strided_exec_context();
-            indexing::dynamic_update_slice_with_pool(
-                buffers,
-                cache,
-                &exec_context,
-                operand,
-                update,
-                starts,
-            )
-        })
-    }
-
-    fn pad(&mut self, input: &Tensor, config: &PadConfig) -> crate::Result<Tensor> {
-        self.install_with_pool_context(|context, buffers| {
-            let exec_context = context.strided_exec_context();
-            indexing::try_pad_with_pool(buffers, &exec_context, input, config)
-        })
-    }
-
-    fn concatenate(&mut self, inputs: &[&Tensor], axis: usize) -> crate::Result<Tensor> {
-        self.install_with_pool_context(|context, buffers| {
-            let exec_context = context.strided_exec_context();
-            indexing::try_concatenate_with_pool(buffers, &exec_context, inputs, axis)
-        })
-    }
-
-    fn reverse(&mut self, input: &Tensor, axes: &[usize]) -> crate::Result<Tensor> {
-        self.install_with_pool_context(|context, buffers| {
-            let exec_context = context.strided_exec_context();
-            indexing::reverse_with_pool(buffers, &exec_context, input, axes)
-        })
-    }
-}
-
 impl CpuBackend {
+    /// Set this backend's default batch policy.
+    ///
+    /// The default applies to every batched operation run through this backend
+    /// value and its clones, unless a session scope overrides it with
+    /// [`crate::with_batch_policy`]. A per-operation choice is a
+    /// scope around that single call. The default is `Auto`
+    /// ( with the pre-existing thresholds, see
+    /// [`crate::CpuBatchPolicy::default`]).
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_cpu::{CpuBackend, CpuBatchPolicy, CpuBatchStrategy};
+    ///
+    /// let backend = CpuBackend::with_threads(1)?
+    ///     .with_batch_policy(CpuBatchPolicy::new(CpuBatchStrategy::ProviderItems));
+    /// assert_eq!(backend.batch_policy().strategy(), CpuBatchStrategy::ProviderItems);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    #[must_use]
+    pub fn with_batch_policy(mut self, policy: crate::CpuBatchPolicy) -> Self {
+        self.batch_policy = policy;
+        self
+    }
+
+    /// Return this backend's default batch policy.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_cpu::{CpuBackend, CpuBatchPolicy};
+    ///
+    /// assert_eq!(CpuBackend::new().batch_policy(), CpuBatchPolicy::default());
+    /// ```
+    #[must_use]
+    pub fn batch_policy(&self) -> crate::CpuBatchPolicy {
+        self.batch_policy
+    }
+
     /// Bind this backend handle to a shared-allocation domain.
     ///
     /// Host-only CPU behavior is unchanged. Operation crates can use the domain
@@ -3743,15 +2947,16 @@ impl CpuBackend {
         &mut self,
         cache: Option<&mut gemm::GemmAnalysisCache>,
         f: impl FnOnce(&mut dyn BackendSession) -> R + Send,
-    ) -> R {
+    ) -> Result<R, SessionEntryError> {
         let providers = self.provider_bundle.clone();
-        let admission = self.infallible_execution_admission();
+        let admission = self.execution_admission()?;
         let permit = admission.permit();
         let owner = permit.owner();
-        let entry = CpuOperationEntry::new(self.engine.domain(), permit);
+        let entry = CpuOperationEntry::new(self.engine.domain(), permit)
+            .with_batch_policy(self.batch_policy);
         // Provider-owned BLAS threading does not change session entry: the
         // permit, including provider exclusion, spans this entire callback.
-        let enter_managed_session = entry.supports_infallible_session_entry();
+        let enter_managed_session = entry.enters_executor_per_session();
         let run = |entered| {
             self.with_execution_resources(permit, |resources| {
                 let mut buffers = BufferPoolLoan::new(&mut resources.buffers);
@@ -3783,7 +2988,8 @@ impl CpuBackend {
         if enter_managed_session {
             entry.enter_managed_session(|context| run(Some(context)))
         } else {
-            with_execution_owner(owner, || run(None))
+            // Externally managed domains keep operation-level executor entry.
+            Ok(with_execution_owner(owner, || run(None)))
         }
     }
 }
@@ -3792,7 +2998,7 @@ impl BackendSessionHost for CpuBackend {
     fn with_backend_session<R: Send>(
         &mut self,
         f: impl FnOnce(&mut dyn BackendSession) -> R + Send,
-    ) -> R {
+    ) -> Result<R, SessionEntryError> {
         self.run_backend_session_cached(None, f)
     }
 
@@ -3800,7 +3006,7 @@ impl BackendSessionHost for CpuBackend {
         &mut self,
         cache: &mut Self::RuntimeCache,
         f: impl FnOnce(&mut dyn BackendSession) -> R + Send,
-    ) -> R {
+    ) -> Result<R, SessionEntryError> {
         if !cpu_session_profile_enabled() {
             return self.run_backend_session_cached(Some(cache), f);
         }
@@ -3844,7 +3050,12 @@ fn reclaim_tensor_typed<T: tenferro_cpu_basic::PoolScalar>(
 
 impl TensorBuffer for CpuBackend {
     fn reclaim_buffer(&mut self, tensor: Tensor) {
-        let admission = self.infallible_execution_admission();
+        // Recycling is best effort: when no execution can be admitted (for
+        // example a nested call from inside a session), the tensor is simply
+        // dropped and its allocation freed instead of pooled.
+        let Ok(admission) = self.execution_admission() else {
+            return;
+        };
         let permit = admission.permit();
         with_execution_owner(permit.owner(), || {
             self.with_execution_resources(permit, |resources| {

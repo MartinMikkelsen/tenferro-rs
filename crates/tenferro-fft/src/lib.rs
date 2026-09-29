@@ -16,8 +16,9 @@
 //! domain-bound CPU RustFFT backend. Backend choice remains explicit, while
 //! matching managed tensors can be used without an intervening download.
 //! Concrete non-AD execution uses
-//! [`TensorFftExt`] and [`TensorReadFftExt`]. Eager execution uses
-//! `EagerTensorFftExt` when `autodiff` is enabled, and traced graph
+//! [`TensorFftExt`] and [`TensorReadFftExt`]. Eager FFTs use
+//! `EagerSessionFftExt` on a borrowed session when `autodiff` is enabled;
+//! consuming in-place transforms retain `EagerTensorFftExt`. Traced graph
 //! construction uses [`TracedTensorFftExt`].
 //!
 //! # Examples
@@ -75,11 +76,11 @@
 //!     let after_creation = context.transfer_stats();
 //!     let mut cpu = context.cpu_backend().clone();
 //!     let cpu_output = cpu
-//!         .with_backend_session(|session| input.fft(None, 0, FftNorm::Backward, session))
+//!         .with_backend_session(|session| input.fft(None, 0, FftNorm::Backward, session))?
 //!         .unwrap();
 //!     let mut metal = context.metal_backend().clone();
 //!     let output = metal
-//!         .with_backend_session(|session| input.fft(None, 0, FftNorm::Backward, session))
+//!         .with_backend_session(|session| input.fft(None, 0, FftNorm::Backward, session))?
 //!         .unwrap();
 //!     metal.synchronize().unwrap();
 //!     assert_eq!(output.shape(), &[4]);
@@ -87,6 +88,7 @@
 //!     assert_eq!(context.transfer_stats(), after_creation);
 //! }
 //! # }
+//! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
 //!
 //! ```
@@ -98,10 +100,11 @@
 //! let x = Tensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap();
 //! let mut backend = CpuBackend::new();
 //! let out = backend
-//!     .with_backend_session(|session| x.fft(None, -1, FftNorm::Backward, session))
+//!     .with_backend_session(|session| x.fft(None, -1, FftNorm::Backward, session))?
 //!     .unwrap();
 //!
 //! assert_eq!(out.as_slice::<Complex64>().unwrap()[0], Complex64::new(10.0, 0.0));
+//! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
 
 use std::any::Any;
@@ -153,7 +156,7 @@ pub use cache::{
     fft_plan_cache_selector, FftPlanCache, DEFAULT_FFT_PLAN_CACHE_CAPACITY, FFT_PLAN_CACHE_NAME,
 };
 #[cfg(feature = "autodiff")]
-pub use eager_ext::EagerTensorFftExt;
+pub use eager_ext::{EagerSessionFftExt, EagerTensorFftExt};
 #[cfg(feature = "autodiff")]
 pub use eager_in_place::EagerFftInPlaceError;
 pub use spec::{FftNorm, FftOperation, FftPlanSpec};
@@ -457,7 +460,7 @@ impl TracedTensorFftExt for TracedTensor {
 /// let mut backend = CpuBackend::new();
 ///
 /// let spectrum = backend
-///     .with_backend_session(|session| input.fft(None, -1, FftNorm::Backward, session))?;
+///     .with_backend_session(|session| input.fft(None, -1, FftNorm::Backward, session))??;
 /// assert_eq!(spectrum.shape(), &[4]);
 /// assert_eq!(spectrum.as_slice::<Complex64>()?[0], Complex64::new(10.0, 0.0));
 /// # Ok::<(), tenferro_tensor::Error>(())
@@ -641,7 +644,7 @@ impl TensorFftExt for Tensor {
 /// let mut backend = CpuBackend::new();
 ///
 /// let spectrum = backend
-///     .with_backend_session(|session| input.fft_read(None, -1, FftNorm::Backward, session))?;
+///     .with_backend_session(|session| input.fft_read(None, -1, FftNorm::Backward, session))??;
 /// assert_eq!(spectrum.as_slice::<Complex64>()?[0], Complex64::new(10.0, 0.0));
 /// # Ok::<(), tenferro_tensor::Error>(())
 /// ```
@@ -1459,17 +1462,6 @@ pub fn semantic_ad_rules(
         .with_primal_vjp(Arc::new(FftAdRule))
 }
 
-pub(crate) fn execute_fft_extension_reads_owner<B: TensorBackend + 'static>(
-    op: &FftOp,
-    inputs: &[TensorRead<'_>],
-    ctx: &mut ExtensionExecutionContext<'_, B>,
-) -> tenferro_tensor::Result<Vec<Tensor>> {
-    let (backend, caches) = ctx.parts_mut();
-    backend.with_backend_session(|session| {
-        execute_fft_extension_reads_on_session(op, inputs, session, caches)
-    })
-}
-
 pub(crate) fn execute_fft_extension_reads_session(
     op: &FftOp,
     inputs: &[TensorRead<'_>],
@@ -1544,8 +1536,6 @@ define_extension_runtime! {
     runtime = FftRuntime,
     family_id = FFT_EXTENSION_FAMILY_ID,
     op_type = FftOp,
-    execute = execute_fft_extension_reads_owner,
-    execute_reads = execute_fft_extension_reads_owner,
     execute_in_session = execute_fft_extension_reads_in_session,
     session_supported = fft_session_supported,
     backend_bound = TensorBackend,
@@ -1564,7 +1554,7 @@ fn execute_fft_extension_reads_in_session(
     execute_fft_extension_reads_session(op, inputs, &mut ctx)
 }
 
-fn fft_session_supported<B: BackendSession + 'static>(_op: &FftOp) -> bool {
+fn fft_session_supported<B: tenferro_tensor::TensorBackend + 'static>(_op: &FftOp) -> bool {
     // The session executor routes CPU/CUDA/WebGPU through their FftBackend exec
     // sessions; keep scheduler-session admission consistent with the backends
     // that `execute_fft_extension_reads_on_session` actually handles.

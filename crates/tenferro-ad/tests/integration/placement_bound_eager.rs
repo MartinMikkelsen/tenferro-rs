@@ -14,12 +14,13 @@ use tenferro_cpu::{
     discover_cpu_topology, CpuBackend, CpuBackendKind, CpuDomainExecutor,
     CpuDomainExecutorCapabilities, CpuDomainExecutorError, CpuExecutorAffinity,
     CpuExecutorReentrancy, CpuExecutorShutdown, CpuInnerParallelism, CpuPlacement,
-    CpuPlacementControl, CpuPlacementError, CpuPlacementGuarantee, CpuProviderBundle,
-    CpuProviderExecutionCapabilities, CpuThreadCountControl, ExternalCpuDomain, NumaNodeId,
-    ResolvedCpuPlacement, ScopedCpuJob, ScopedCpuJobs,
+    CpuPlacementControl, CpuPlacementError, CpuProviderBundle, CpuProviderExecutionCapabilities,
+    CpuThreadCountControl, ExternalCpuDomain, NumaNodeId, ResolvedCpuPlacement, ScopedCpuJob,
+    ScopedCpuJobs,
 };
 use tenferro_runtime::{Error as RuntimeError, ErrorPhase, GraphCompiler, Runtime, TracedTensor};
-use tenferro_tensor::{CpuDomainId, Error as TensorError, ErrorKind, Tensor, TensorElementwise};
+use tenferro_tensor::TensorRead;
+use tenferro_tensor::{CpuDomainId, Error as TensorError, ErrorKind, Tensor};
 
 #[derive(Debug, Default)]
 struct ExecutorCounters {
@@ -134,7 +135,6 @@ fn external_backend(counters: Arc<ExecutorCounters>) -> CpuBackend {
         },
         Arc::new(CountingExecutor { counters }),
         NonZeroUsize::new(1).unwrap(),
-        CpuPlacementGuarantee::AdvisoryDeclared,
     )
     .unwrap();
     let providers = CpuProviderBundle::builder(CpuBackendKind::default_compiled())
@@ -152,7 +152,9 @@ fn external_backend(counters: Arc<ExecutorCounters>) -> CpuBackend {
 fn add_one(session: &mut dyn tenferro_tensor::BackendSession) -> tenferro_ad::Result<Tensor> {
     let lhs = Tensor::from_vec_col_major(vec![1], vec![1.0_f64]).unwrap();
     let rhs = Tensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
-    TensorElementwise::add(session, &lhs, &rhs).map_err(RuntimeError::from)
+    session
+        .add_read(TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs))
+        .map_err(RuntimeError::from)
 }
 
 fn source_chain_contains<E: StdError + 'static>(error: &(dyn StdError + 'static)) -> bool {
@@ -198,7 +200,7 @@ fn placement_binding_is_idle_until_a_session_operation_runs() {
 
     let (sent, received) = mpsc::channel();
     let worker = thread::spawn(move || {
-        probe.install(|| {});
+        probe.install(|| {}).unwrap();
         sent.send(()).unwrap();
     });
     let completed = received.recv_timeout(Duration::from_secs(1));
@@ -277,7 +279,7 @@ fn callback_error_and_panic_release_the_session_for_reuse() {
 }
 
 #[test]
-fn same_runtime_eager_reentry_panics_without_deadlock_and_then_recovers() {
+fn same_runtime_eager_reentry_is_rejected_without_deadlock_and_then_recovers() {
     let counters = Arc::new(ExecutorCounters::default());
     let runtime = EagerRuntime::with_cpu_backend(external_backend(counters)).unwrap();
     let eager = EagerTensor::from_tensor_in(
@@ -287,19 +289,21 @@ fn same_runtime_eager_reentry_panics_without_deadlock_and_then_recovers() {
     .unwrap();
     let mut cpu = runtime.on_cpu(placement()).unwrap();
 
-    let panicked = catch_unwind(AssertUnwindSafe(|| {
-        let _ = cpu.with_eager_session::<()>(|_| {
-            let _ = eager.add(&eager).unwrap();
-            Ok(())
-        });
-    }));
-    let payload = panicked.expect_err("same-runtime eager re-entry must be rejected");
-    let message = payload
-        .downcast_ref::<&str>()
-        .copied()
-        .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
-        .unwrap_or_default();
-    assert!(message.contains("CpuBackend cannot be re-entered"));
+    let nested = cpu
+        .with_eager_session(|_| {
+            Ok(runtime
+                .with_eager_session(|session| session.add(&eager, &eager))
+                .map(|_| ()))
+        })
+        .unwrap();
+    let error = nested.expect_err("same-runtime eager re-entry must be rejected");
+    assert_eq!(error.kind(), tenferro_tensor::ErrorKind::RuntimeState);
+    assert!(
+        error
+            .to_string()
+            .contains("an execution is already active on this thread"),
+        "{error}"
+    );
 
     cpu.with_eager_session(add_one).unwrap();
 }

@@ -315,9 +315,20 @@ unsafe impl Send for CutensorLibrary {}
 unsafe impl Sync for CutensorLibrary {}
 
 impl CutensorLibrary {
+    /// The process-wide cuTENSOR library, loaded on first success.
+    ///
+    /// Handles share one loaded library and never unload it: reloading
+    /// cuTENSOR (and its cublasLt dependency) on every backend leaked about
+    /// 55 MB per create/drop cycle (#1924). A failed load is not cached, and
+    /// `TENFERRO_CUTENSOR_PATH` is read until the first success.
     fn load() -> crate::Result<Arc<Self>> {
+        static LOADED: std::sync::OnceLock<Arc<CutensorLibrary>> = std::sync::OnceLock::new();
+        if let Some(library) = LOADED.get() {
+            return Ok(Arc::clone(library));
+        }
         let paths = super::library_search_paths("TENFERRO_CUTENSOR_PATH", CUTENSOR_DEFAULT_PATHS);
-        Self::load_from_paths(paths)
+        let library = Self::load_from_paths(paths)?;
+        Ok(Arc::clone(LOADED.get_or_init(|| library)))
     }
 
     fn load_from_paths(paths: Vec<String>) -> crate::Result<Arc<Self>> {

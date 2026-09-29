@@ -16,7 +16,7 @@
 
 use tenferro_df64_proof::Df64;
 
-tenferro_tensor_core::define_scalar_set! {
+tenferro_tensor::define_scalar_set! {
     /// Tag for the set the application declares.
     ///
     /// # Examples
@@ -41,7 +41,7 @@ tenferro_tensor_core::define_scalar_set! {
     /// ```rust
     /// use tenferro_df64_proof::Df64;
     /// use tenferro_scalar_consumer_application::{ApplicationSet, ApplicationTag};
-    /// use tenferro_tensor_core::{HostTensor, ScalarSet};
+    /// use tenferro_tensor::{HostTensor, ScalarSet};
     ///
     /// let value = ApplicationSet::Df64(
     ///     HostTensor::from_vec_col_major(vec![1], vec![Df64::from_f64(2.0)])?,

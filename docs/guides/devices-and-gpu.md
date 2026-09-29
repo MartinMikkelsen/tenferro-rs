@@ -75,7 +75,8 @@ For a time-axis diagram, see [Execution Models](execution-models.md).
 use tenferro_gpu::{
     cuda::cuda_devices, cuda::download_tensor, cuda::upload_tensor, cuda::CudaBackend,
 };
-use tenferro_tensor::{Tensor, TensorElementwise, TensorRead, TensorStructural, TensorWrite};
+use tenferro_tensor::BackendSessionHost;
+use tenferro_tensor::{Tensor, TensorRead, TensorWrite};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let Some(device) = cuda_devices()?.into_iter().next() else {
@@ -88,16 +89,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let gpu_a = upload_tensor(backend.runtime(), &cpu_a)?;
     let gpu_b = upload_tensor(backend.runtime(), &cpu_b)?;
-    let gpu_c = backend.add(&gpu_a, &gpu_b)?;
+    let gpu_c = backend.with_backend_session(|session| {
+        session.add_read(
+            TensorRead::from_tensor(&gpu_a),
+            TensorRead::from_tensor(&gpu_b),
+        )
+    })??;
     let cpu_c = download_tensor(backend.runtime(), &gpu_c)?;
 
     assert_eq!(cpu_c.as_slice::<f64>().unwrap(), &[4.0, 6.0]);
 
     let mut gpu_reuse = upload_tensor(backend.runtime(), &cpu_c)?;
-    backend.copy_read_into(
-        TensorRead::from_tensor(&gpu_c),
-        TensorWrite::from_tensor(&mut gpu_reuse),
-    )?;
+    backend.with_backend_session(|session| {
+        session.copy_read_into(
+            TensorRead::from_tensor(&gpu_c),
+            TensorWrite::from_tensor(&mut gpu_reuse),
+        )
+    })??;
     let copied = download_tensor(backend.runtime(), &gpu_reuse)?;
     assert_eq!(copied.as_slice::<f64>().unwrap(), &[4.0, 6.0]);
     Ok(())

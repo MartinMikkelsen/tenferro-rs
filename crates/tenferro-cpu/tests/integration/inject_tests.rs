@@ -12,11 +12,13 @@ use tenferro_cpu::inject::{
 use tenferro_cpu::{
     discover_cpu_topology, CpuBackend, CpuBackendError, CpuBackendKind, CpuDomainExecutor,
     CpuDomainExecutorCapabilities, CpuDomainExecutorError, CpuExecutorAffinity,
-    CpuExecutorReentrancy, CpuExecutorShutdown, CpuInnerParallelism, CpuPlacementGuarantee,
-    CpuProviderBundle, CpuProviderBundleInstallError, CpuProviderDomainError, CpuProviderSlot,
-    ExternalCpuDomain, ResolvedCpuPlacement, ScopedCpuJob, ScopedCpuJobs,
+    CpuExecutorReentrancy, CpuExecutorShutdown, CpuInnerParallelism, CpuProviderBundle,
+    CpuProviderBundleInstallError, CpuProviderDomainError, CpuProviderSlot, ExternalCpuDomain,
+    ResolvedCpuPlacement, ScopedCpuJob, ScopedCpuJobs,
 };
-use tenferro_tensor::{CpuDomainId, DotGeneralConfig, Tensor, TensorDot, TypedTensor};
+use tenferro_tensor::{
+    BackendSessionHost, CpuDomainId, DotGeneralConfig, Tensor, TensorRead, TypedTensor,
+};
 
 static REGISTER_ONCE: Once = Once::new();
 static TEST_LOCK: Mutex<()> = Mutex::new(());
@@ -62,7 +64,6 @@ fn all_allowed_external_domain(id: CpuDomainId) -> ExternalCpuDomain {
         },
         Arc::new(InlineExternalExecutor),
         NonZeroUsize::new(1).unwrap(),
-        CpuPlacementGuarantee::ExactDeclared,
     )
     .unwrap()
 }
@@ -270,16 +271,20 @@ fn provider_inject_dot_general_uses_registered_blas() {
 
     let mut backend = CpuBackend::with_kind(CpuBackendKind::Blas).unwrap();
     assert_eq!(backend.kind(), CpuBackendKind::Blas);
-    let c = backend.dot_general(
-        &a,
-        &b,
-        &DotGeneralConfig {
-            lhs_contracting_dims: [1].as_slice().into(),
-            rhs_contracting_dims: [0].as_slice().into(),
-            lhs_batch_dims: [].as_slice().into(),
-            rhs_batch_dims: [].as_slice().into(),
-        },
-    );
+    let c = backend
+        .with_backend_session(|session| {
+            session.dot_general_read(
+                TensorRead::from_tensor(&a),
+                TensorRead::from_tensor(&b),
+                &DotGeneralConfig {
+                    lhs_contracting_dims: [1].as_slice().into(),
+                    rhs_contracting_dims: [0].as_slice().into(),
+                    lhs_batch_dims: [].as_slice().into(),
+                    rhs_batch_dims: [].as_slice().into(),
+                },
+            )
+        })
+        .expect("session entry");
 
     assert_eq!(DGEMM_CALLS.load(Ordering::SeqCst), 1);
     match c {
@@ -307,16 +312,20 @@ fn provider_inject_dot_general_singleton_contract_uses_registered_blas() {
     );
 
     let mut backend = CpuBackend::with_kind(CpuBackendKind::Blas).unwrap();
-    let c = backend.dot_general(
-        &a,
-        &b,
-        &DotGeneralConfig {
-            lhs_contracting_dims: [0].as_slice().into(),
-            rhs_contracting_dims: [0].as_slice().into(),
-            lhs_batch_dims: [].as_slice().into(),
-            rhs_batch_dims: [].as_slice().into(),
-        },
-    );
+    let c = backend
+        .with_backend_session(|session| {
+            session.dot_general_read(
+                TensorRead::from_tensor(&a),
+                TensorRead::from_tensor(&b),
+                &DotGeneralConfig {
+                    lhs_contracting_dims: [0].as_slice().into(),
+                    rhs_contracting_dims: [0].as_slice().into(),
+                    lhs_batch_dims: [].as_slice().into(),
+                    rhs_batch_dims: [].as_slice().into(),
+                },
+            )
+        })
+        .expect("session entry");
 
     assert_eq!(DGEMM_CALLS.load(Ordering::SeqCst), 1);
     match c {
@@ -342,16 +351,20 @@ fn provider_inject_dot_general_rhs_singleton_contract_uses_registered_blas() {
     );
 
     let mut backend = CpuBackend::with_kind(CpuBackendKind::Blas).unwrap();
-    let c = backend.dot_general(
-        &a,
-        &b,
-        &DotGeneralConfig {
-            lhs_contracting_dims: [0].as_slice().into(),
-            rhs_contracting_dims: [1].as_slice().into(),
-            lhs_batch_dims: [].as_slice().into(),
-            rhs_batch_dims: [].as_slice().into(),
-        },
-    );
+    let c = backend
+        .with_backend_session(|session| {
+            session.dot_general_read(
+                TensorRead::from_tensor(&a),
+                TensorRead::from_tensor(&b),
+                &DotGeneralConfig {
+                    lhs_contracting_dims: [0].as_slice().into(),
+                    rhs_contracting_dims: [1].as_slice().into(),
+                    lhs_batch_dims: [].as_slice().into(),
+                    rhs_batch_dims: [].as_slice().into(),
+                },
+            )
+        })
+        .expect("session entry");
 
     assert_eq!(DGEMM_CALLS.load(Ordering::SeqCst), 1);
     match c {

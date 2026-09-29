@@ -18,17 +18,19 @@ pub(crate) struct BlasGemmBatch<T> {
     pub(crate) c_cs: isize,
 }
 
-#[cfg(any(feature = "blas-openblas", feature = "blas-mkl"))]
-const PROVIDER_GEMM_BATCH_SMALL_DIM_LIMIT: usize = 16;
+/// Whether this build links a vendor `cblas_?gemm_batch` routine.
+pub(crate) const VENDOR_BATCH_AVAILABLE: bool =
+    cfg!(any(feature = "blas-openblas", feature = "blas-mkl"));
 
-#[cfg(any(feature = "blas-openblas", feature = "blas-mkl"))]
-pub(super) fn provider_should_use_gemm_batch<T>(batches: &[BlasGemmBatch<T>]) -> bool {
-    batches.len() > 1
-        && batches.iter().all(|batch| {
-            batch.m <= PROVIDER_GEMM_BATCH_SMALL_DIM_LIMIT
-                && batch.n <= PROVIDER_GEMM_BATCH_SMALL_DIM_LIMIT
-                && batch.k <= PROVIDER_GEMM_BATCH_SMALL_DIM_LIMIT
-        })
+/// Resolve the engine's vendor-batch control for these jobs. The small-job
+/// cutoff that used to be a provider constant is the policy threshold carried
+/// by `CpuVendorBatch::Allowed`.
+pub(super) fn use_vendor_batch<T>(
+    control: crate::provider::CpuVendorBatch,
+    batches: &[BlasGemmBatch<T>],
+) -> bool {
+    VENDOR_BATCH_AVAILABLE
+        && control.permits(batches.iter().map(|batch| [batch.m, batch.n, batch.k]))
 }
 
 unsafe fn grouped_gemm_sequential<T: BlasGemm>(
@@ -151,6 +153,7 @@ pub(crate) trait BlasGemm: Sized + Copy {
         alpha: Self,
         beta: Self,
         batches: &[BlasGemmBatch<Self>],
+        _vendor_batch: bool,
     ) -> crate::Result<bool> {
         // SAFETY: this default provider preserves the caller's grouped-GEMM
         // contract by executing each already-validated job sequentially.
@@ -742,14 +745,15 @@ macro_rules! impl_real_blas_gemm {
                 alpha: Self,
                 beta: Self,
                 batches: &[BlasGemmBatch<Self>],
+                vendor_batch: bool,
             ) -> crate::Result<bool> {
                 if batches.is_empty() {
                     return Ok(true);
                 }
-                if provider_should_use_gemm_batch(batches) {
+                if vendor_batch {
                     // SAFETY: callers validate job pointers, dimensions, and
-                    // disjoint outputs. The heuristic keeps provider
-                    // gemm_batch on the small-job regime measured to win.
+                    // disjoint outputs; the engine resolved the batch policy
+                    // (by default the measured small-job regime).
                     unsafe { $batch(alpha, beta, batches) }
                 } else {
                     // SAFETY: same grouped-GEMM contract, executed through the
@@ -912,14 +916,15 @@ macro_rules! impl_complex_blas_gemm {
                 alpha: Self,
                 beta: Self,
                 batches: &[BlasGemmBatch<Self>],
+                vendor_batch: bool,
             ) -> crate::Result<bool> {
                 if batches.is_empty() {
                     return Ok(true);
                 }
-                if provider_should_use_gemm_batch(batches) {
+                if vendor_batch {
                     // SAFETY: callers validate job pointers, dimensions, and
-                    // disjoint outputs. The heuristic keeps provider
-                    // gemm_batch on the small-job regime measured to win.
+                    // disjoint outputs; the engine resolved the batch policy
+                    // (by default the measured small-job regime).
                     unsafe { $batch(alpha, beta, batches) }
                 } else {
                     // SAFETY: same grouped-GEMM contract, executed through the

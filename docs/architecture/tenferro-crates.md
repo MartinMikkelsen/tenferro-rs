@@ -16,7 +16,7 @@ users import the crates that own the layer or operation family they need.
 
 The design goal is to keep these concerns separate:
 
-- host tensor data model
+- rank/layout and scalar metadata
 - concrete runtime tensors and backend traits
 - CPU/GPU backend implementations
 - traced graph construction and execution
@@ -35,8 +35,8 @@ stack. `tenferro-xla` is a peer executor over compiled static programs, not a
 
 | Crate | Role |
 |---|---|
-| `tenferro-tensor-core` | Rank/layout metadata, dtype tags, scalar trait, and host-only tensor adapters |
-| `tenferro-tensor` | Runtime `TypedTensor<T, R>`/`Tensor` values, typed views, backend traits, and backend-independent contracts |
+| `tenferro-tensor-core` | Rank/layout metadata, dtype tags, scalar promotion facts, and layout validation; no tensor-storage family |
+| `tenferro-tensor` | Runtime `TypedTensor<T, R, D>` (`Host`/`Gpu`/`Dynamic`) and `Tensor` values, typed views, the host container (`HostTensor`, `DefaultScalars`, `ScalarSet`, `ErasedHostTensor`), backend traits, and backend-independent contracts |
 | `tenferro-cpu` | Public CPU backend, CPU execution sessions, CPU execution context, provider selection, thread policy, public resource-pool controls, and the CPU runtime-registration preparation/execution adapter |
 | `tenferro-cpu-basic` | Shared CPU buffer pool, full-overwrite destination guard, and host strided-storage adapters used by CPU kernel families |
 | `tenferro-cpu-fused` | Internal CPU runtime-DAG fused elementwise adapter; delegates traversal to the fused strided kernel |
@@ -109,8 +109,8 @@ Layer 2: tenferro-tensor
          CubeCL/CUDA backend and GPU transfer helpers
 
 Layer 1: tenferro-tensor-core
-         rank/layout metadata, dtype tags, scalar trait,
-         host-only tensor adapters
+         rank/layout metadata, dtype tags, scalar tags
+         and promotion facts, layout validation
 
 Internal: tenferro-core-ops
           core primitive operation catalog
@@ -192,6 +192,17 @@ Rules:
   GPU, BLAS/LAPACK provider crates, backend buffers, runtime caches, or AD.
 - `tenferro-tensor-core` must not expose public `TypedTensor` aliases.
   Backend-capable typed tensors are owned by `tenferro-tensor`.
+- `tenferro-tensor-core` must not own a tensor-storage family. The host
+  container (`HostTensor`, `HostTensorView`), the default scalar set
+  (`DefaultScalars`), the scalar-set trait and its declaration macro, and the
+  dtype-erased external value (`ErasedHostTensor`, its erased views) belong to
+  `tenferro-tensor` beside the canonical owner and views. Core keeps the scalar
+  tags and their promotion facts (`DType`, `TensorScalar`, `define_scalar_tag!`,
+  `MemberKind`, `MemberSpec`, `promote_specs`, `promote_in_set`) and the
+  rank/layout metadata and validation.
+- `define_scalar_set!` expands `$crate::HostTensor` from `tenferro-tensor`, so a
+  crate that declares its own scalar set depends on `tenferro-tensor` (not only
+  `tenferro-tensor-core`).
 - `tenferro-tensor` owns concrete runtime tensor values, arbitrary-stride typed
   views, backend traits, and backend-independent contracts. Its
   `TensorElementwise::elementwise_read_into` hook is required at backend

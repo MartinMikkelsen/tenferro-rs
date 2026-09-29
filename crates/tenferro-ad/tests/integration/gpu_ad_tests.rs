@@ -6,7 +6,9 @@ use tenferro_ad::{EagerRuntime, EagerTensor, TracedTensorAdExt};
 use tenferro_gpu::{
     cuda::gpu_available, cuda::upload_tensor, cuda::CudaBackend, cuda::CudaDeviceId,
 };
-use tenferro_runtime::{DotGeneralConfig, Tensor, TensorRead, TracedTensor, TypedTensor};
+use tenferro_runtime::{
+    DotGeneralConfig, GatherConfig, Tensor, TensorRead, TracedTensor, TypedTensor,
+};
 use tenferro_tensor::StorageBuffer;
 
 fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
@@ -98,7 +100,10 @@ fn test_gpu_eager_backward_smoke() {
     let ctx = EagerRuntime::with_cuda_backend(upload_backend).unwrap();
     let x = EagerTensor::requires_grad_in(x_gpu, ctx.clone()).unwrap();
     let seed = EagerTensor::from_tensor_in(seed_gpu, ctx.clone()).unwrap();
-    let y = x.mul(&x).unwrap();
+    let y = ctx
+        .with_eager_session(|session| session.mul(&x, &x))
+        .unwrap()
+        .unwrap();
 
     y.backward_with(&seed).unwrap();
     let grad = x.grad().unwrap().unwrap();
@@ -116,6 +121,95 @@ fn test_gpu_eager_backward_smoke() {
         1.0e-10,
         1.0e-10,
     );
+}
+
+#[test]
+#[ignore = "requires CUDA"]
+fn test_gpu_borrowed_reduce_sum_preserves_residency_and_gradient() {
+    assert!(gpu_available(), "CUDA test requires an available device");
+    let backend = CudaBackend::new(CudaDeviceId::from_ordinal(0)).unwrap();
+    let x_gpu = upload_tensor(
+        backend.runtime(),
+        &f64_tensor(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]),
+    )
+    .unwrap();
+    let seed_gpu = upload_tensor(backend.runtime(), &f64_tensor(vec![2], vec![1.0, 1.0])).unwrap();
+    let ctx = EagerRuntime::with_cuda_backend(backend).unwrap();
+    let x = EagerTensor::requires_grad_in(x_gpu, ctx.clone()).unwrap();
+    let seed = EagerTensor::from_tensor_in(seed_gpu, ctx.clone()).unwrap();
+    let sum = ctx
+        .with_eager_session(|session| session.reduce_sum(&x, Some(&[0])))
+        .unwrap()
+        .unwrap();
+    let result = sum.to_tensor().unwrap();
+    assert_device_backed(&result);
+    let host = ctx
+        .with_execution_session(|session| {
+            session.download_to_host(TensorRead::from_tensor(&result))
+        })
+        .unwrap()
+        .unwrap();
+    assert_f64_tensor_close(&host, &f64_tensor(vec![2], vec![3.0, 7.0]), 1e-10, 1e-10);
+
+    sum.backward_with(&seed).unwrap();
+    let grad = x.grad().unwrap().unwrap().to_tensor().unwrap();
+    assert_device_backed(&grad);
+    let host = ctx
+        .with_execution_session(|session| session.download_to_host(TensorRead::from_tensor(&grad)))
+        .unwrap()
+        .unwrap();
+    assert_f64_tensor_close(&host, &f64_tensor(vec![2, 2], vec![1.0; 4]), 1e-10, 1e-10);
+}
+
+#[test]
+#[ignore = "requires CUDA"]
+fn test_gpu_borrowed_concat_gather_and_index_select_stay_resident() {
+    assert!(gpu_available(), "CUDA test requires an available device");
+    let backend = CudaBackend::new(CudaDeviceId::from_ordinal(0)).unwrap();
+    let x_gpu =
+        upload_tensor(backend.runtime(), &f64_tensor(vec![3], vec![1.0, 2.0, 3.0])).unwrap();
+    let indices_gpu = upload_tensor(
+        backend.runtime(),
+        &Tensor::from_vec_col_major(vec![2, 1], vec![4_i64, 1]).unwrap(),
+    )
+    .unwrap();
+    let ctx = EagerRuntime::with_cuda_backend(backend).unwrap();
+    let x = EagerTensor::from_tensor_in(x_gpu, ctx.clone()).unwrap();
+    let indices = EagerTensor::from_tensor_in(indices_gpu, ctx.clone()).unwrap();
+    let (joined, selected, indexed) = ctx
+        .with_eager_session(|session| {
+            let joined = session.concatenate(&[&x, &x], 0)?;
+            let selected = session.gather(
+                &joined,
+                &indices,
+                GatherConfig {
+                    offset_dims: vec![],
+                    collapsed_slice_dims: vec![0],
+                    start_index_map: vec![0],
+                    index_vector_dim: 1,
+                    slice_sizes: vec![1],
+                },
+            )?;
+            let indexed = session.index_select(&joined, -1, &[4, 1])?;
+            Ok::<_, tenferro_ad::Error>((joined, selected, indexed))
+        })
+        .unwrap()
+        .unwrap();
+    let joined = joined.to_tensor().unwrap();
+    let selected = selected.to_tensor().unwrap();
+    let indexed = indexed.to_tensor().unwrap();
+    assert_device_backed(&joined);
+    assert_device_backed(&selected);
+    assert_device_backed(&indexed);
+    for output in [&selected, &indexed] {
+        let host = ctx
+            .with_execution_session(|session| {
+                session.download_to_host(TensorRead::from_tensor(output))
+            })
+            .unwrap()
+            .unwrap();
+        assert_f64_tensor_close(&host, &f64_tensor(vec![2], vec![2.0, 2.0]), 0.0, 0.0);
+    }
 }
 
 #[test]
@@ -172,12 +266,13 @@ fn test_gpu_matmul_vjp() {
     let a_gpu = EagerTensor::from_tensor_in(a_device, ctx.clone()).unwrap();
     let b_gpu = EagerTensor::from_tensor_in(b_device, ctx.clone()).unwrap();
     let cotangent_gpu = EagerTensor::from_tensor_in(cotangent_device, ctx.clone()).unwrap();
-    let y_gpu = {
-        // Def 1 (active-edge): functional VJP over untracked leaves requires
-        // explicit capture so the forward records the semantic trace.
-        let _capture = ctx.capture_trace();
-        a_gpu
-            .dot_general(
+    let y_gpu = ctx
+        .with_eager_session(|s| {
+            // Def 1 (active-edge): functional VJP over untracked leaves requires
+            // explicit capture on the session's calling thread.
+            let _capture = ctx.capture_trace();
+            s.dot_general(
+                &a_gpu,
                 &b_gpu,
                 DotGeneralConfig {
                     lhs_contracting_dims: [1].as_slice().into(),
@@ -186,8 +281,9 @@ fn test_gpu_matmul_vjp() {
                     rhs_batch_dims: [].as_slice().into(),
                 },
             )
-            .unwrap()
-    };
+        })
+        .unwrap()
+        .unwrap();
     let gpu_grad_a = ctx
         .vjp(&y_gpu, &a_gpu, &cotangent_gpu)
         .unwrap()

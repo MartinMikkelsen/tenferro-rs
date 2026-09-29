@@ -88,12 +88,14 @@ fn session_dynamic_equal_shape_chain() {
     let a = Tensor::from_vec_col_major(vec![8], a_values.clone()).unwrap();
     let b = Tensor::from_vec_col_major(vec![8], b_values.clone()).unwrap();
 
-    let session = backend.with_backend_session(|s| {
-        let x = a.add(&b, s).unwrap();
-        let x = x.exp(s).unwrap();
-        let x = x.mul(&b, s).unwrap();
-        x.reduce_sum(&[0], s).unwrap()
-    });
+    let session = backend
+        .with_backend_session(|s| {
+            let x = a.add(&b, s).unwrap();
+            let x = x.exp(s).unwrap();
+            let x = x.mul(&b, s).unwrap();
+            x.reduce_sum(&[0], s).unwrap()
+        })
+        .unwrap();
 
     // Independent value check in plain scalar math: the chain computes
     // sum_i exp(a_i + b_i) * b_i without any tenferro op, so a shared
@@ -114,12 +116,14 @@ fn session_dynamic_broadcast_chain() {
     let a = Tensor::from_vec_col_major(vec![1], a_values.clone()).unwrap();
     let b = Tensor::from_vec_col_major(vec![8], b_values.clone()).unwrap();
 
-    let session = backend.with_backend_session(|s| {
-        let x = a.add(&b, s).unwrap();
-        let x = x.exp(s).unwrap();
-        let x = x.mul(&a, s).unwrap();
-        x.reduce_sum(&[0], s).unwrap()
-    });
+    let session = backend
+        .with_backend_session(|s| {
+            let x = a.add(&b, s).unwrap();
+            let x = x.exp(s).unwrap();
+            let x = x.mul(&a, s).unwrap();
+            x.reduce_sum(&[0], s).unwrap()
+        })
+        .unwrap();
 
     // Independent value check: the broadcast chain computes
     // sum_i exp(a_0 + b_i) * a_0 in plain scalar math.
@@ -136,7 +140,10 @@ fn session_dynamic_invalid_broadcast_error() {
     let a = Tensor::from_vec_col_major(vec![2], vec![1.0_f64; 2]).unwrap();
     let b = Tensor::from_vec_col_major(vec![3], vec![1.0_f64; 3]).unwrap();
 
-    let session_error = backend.with_backend_session(|s| a.add(&b, s)).unwrap_err();
+    let session_error = backend
+        .with_backend_session(|s| a.add(&b, s))
+        .unwrap()
+        .unwrap_err();
 
     assert_incompatible_shapes_error(session_error);
 }
@@ -147,7 +154,10 @@ fn session_dynamic_dtype_error() {
     let a = Tensor::from_vec_col_major(vec![2], vec![1.0_f64; 2]).unwrap();
     let b = Tensor::from_vec_col_major(vec![2], vec![1_i32; 2]).unwrap();
 
-    let session_error = backend.with_backend_session(|s| a.add(&b, s)).unwrap_err();
+    let session_error = backend
+        .with_backend_session(|s| a.add(&b, s))
+        .unwrap()
+        .unwrap_err();
 
     // Assert the full payload (op name, source lhs dtype as expected, rhs
     // dtype as actual) for both paths, not just the error kind.
@@ -174,12 +184,14 @@ fn session_typed_equal_shape_chain() {
     let a = TypedTensor::<f64>::from_vec_col_major(vec![8], a_values.clone()).unwrap();
     let b = TypedTensor::<f64>::from_vec_col_major(vec![8], b_values.clone()).unwrap();
 
-    let session = backend.with_backend_session(|s| {
-        let x = a.add(&b, s).unwrap();
-        let x = x.exp(s).unwrap();
-        let x = x.mul(&b, s).unwrap();
-        x.reduce_sum(&[0], s).unwrap()
-    });
+    let session = backend
+        .with_backend_session(|s| {
+            let x = a.add(&b, s).unwrap();
+            let x = x.exp(s).unwrap();
+            let x = x.mul(&b, s).unwrap();
+            x.reduce_sum(&[0], s).unwrap()
+        })
+        .unwrap();
 
     // Independent value check in plain scalar math (see the dynamic twin).
     let expected: f64 = a_values
@@ -198,12 +210,14 @@ fn session_typed_broadcast_chain() {
     let a = TypedTensor::<f64>::from_vec_col_major(vec![1], a_values.clone()).unwrap();
     let b = TypedTensor::<f64>::from_vec_col_major(vec![8], b_values.clone()).unwrap();
 
-    let session = backend.with_backend_session(|s| {
-        let x = a.add(&b, s).unwrap();
-        let x = x.exp(s).unwrap();
-        let x = x.mul(&a, s).unwrap();
-        x.reduce_sum(&[0], s).unwrap()
-    });
+    let session = backend
+        .with_backend_session(|s| {
+            let x = a.add(&b, s).unwrap();
+            let x = x.exp(s).unwrap();
+            let x = x.mul(&a, s).unwrap();
+            x.reduce_sum(&[0], s).unwrap()
+        })
+        .unwrap();
 
     // Independent value check: sum_i exp(a_0 + b_i) * a_0 in plain scalar math.
     let expected: f64 = b_values
@@ -219,7 +233,10 @@ fn session_typed_invalid_broadcast_error() {
     let a = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0; 2]).unwrap();
     let b = TypedTensor::<f64>::from_vec_col_major(vec![3], vec![1.0; 3]).unwrap();
 
-    let session_error = backend.with_backend_session(|s| a.add(&b, s)).unwrap_err();
+    let session_error = backend
+        .with_backend_session(|s| a.add(&b, s))
+        .unwrap()
+        .unwrap_err();
 
     assert_incompatible_shapes_error(session_error);
 }
@@ -235,90 +252,128 @@ fn session_in_typed_validates_output_dtype() {
     let errors = [
         (
             "add",
-            backend.with_backend_session(|s| a.add(&a, s)).unwrap_err(),
+            backend
+                .with_backend_session(|s| a.add(&a, s))
+                .unwrap()
+                .unwrap_err(),
         ),
         (
             "mul",
-            backend.with_backend_session(|s| a.mul(&a, s)).unwrap_err(),
+            backend
+                .with_backend_session(|s| a.mul(&a, s))
+                .unwrap()
+                .unwrap_err(),
         ),
         (
             "exp",
-            backend.with_backend_session(|s| a.exp(s)).unwrap_err(),
+            backend
+                .with_backend_session(|s| a.exp(s))
+                .unwrap()
+                .unwrap_err(),
         ),
         (
             "reduce_sum",
             backend
                 .with_backend_session(|s| a.reduce_sum(&[0], s))
+                .unwrap()
                 .unwrap_err(),
         ),
         (
             "sub",
-            backend.with_backend_session(|s| a.sub(&a, s)).unwrap_err(),
+            backend
+                .with_backend_session(|s| a.sub(&a, s))
+                .unwrap()
+                .unwrap_err(),
         ),
         (
             "div",
-            backend.with_backend_session(|s| a.div(&a, s)).unwrap_err(),
+            backend
+                .with_backend_session(|s| a.div(&a, s))
+                .unwrap()
+                .unwrap_err(),
         ),
         (
             "pow",
-            backend.with_backend_session(|s| a.pow(&a, s)).unwrap_err(),
+            backend
+                .with_backend_session(|s| a.pow(&a, s))
+                .unwrap()
+                .unwrap_err(),
         ),
         (
             "maximum",
             backend
                 .with_backend_session(|s| a.maximum(&a, s))
+                .unwrap()
                 .unwrap_err(),
         ),
         (
             "neg",
-            backend.with_backend_session(|s| a.neg(s)).unwrap_err(),
+            backend
+                .with_backend_session(|s| a.neg(s))
+                .unwrap()
+                .unwrap_err(),
         ),
         (
             "abs",
-            backend.with_backend_session(|s| a.abs(s)).unwrap_err(),
+            backend
+                .with_backend_session(|s| a.abs(s))
+                .unwrap()
+                .unwrap_err(),
         ),
         (
             "log",
-            backend.with_backend_session(|s| a.log(s)).unwrap_err(),
+            backend
+                .with_backend_session(|s| a.log(s))
+                .unwrap()
+                .unwrap_err(),
         ),
         (
             "sqrt",
-            backend.with_backend_session(|s| a.sqrt(s)).unwrap_err(),
+            backend
+                .with_backend_session(|s| a.sqrt(s))
+                .unwrap()
+                .unwrap_err(),
         ),
         (
             "clamp",
             backend
                 .with_backend_session(|s| a.clamp(&lower, &upper, s))
+                .unwrap()
                 .unwrap_err(),
         ),
         (
             "matmul",
             backend
                 .with_backend_session(|s| matrix.matmul(&matrix, s))
+                .unwrap()
                 .unwrap_err(),
         ),
         (
             "reshape",
             backend
                 .with_backend_session(|s| matrix.reshape(&[4], s))
+                .unwrap()
                 .unwrap_err(),
         ),
         (
             "transpose",
             backend
                 .with_backend_session(|s| matrix.transpose(&[1, 0], s))
+                .unwrap()
                 .unwrap_err(),
         ),
         (
             "broadcast_in_dim",
             backend
                 .with_backend_session(|s| matrix.broadcast_in_dim(&[2, 2], &[0, 1], s))
+                .unwrap()
                 .unwrap_err(),
         ),
         (
             "compare",
             backend
                 .with_backend_session(|s| a.compare(&a, CompareDir::Gt, s))
+                .unwrap()
                 .unwrap_err(),
         ),
     ];
@@ -356,18 +411,20 @@ fn session_chain_enters_one_session() {
     // A 10-op session chain (3x add->exp->mul + final reduce_sum) must
     // execute inside exactly one backend session entry.
     backend.entries.set(0);
-    let session = backend.with_backend_session(|s| {
-        let x = a.add(&b, s).unwrap();
-        let x = x.exp(s).unwrap();
-        let x = x.mul(&a, s).unwrap();
-        let x = x.add(&b, s).unwrap();
-        let x = x.exp(s).unwrap();
-        let x = x.mul(&a, s).unwrap();
-        let x = x.add(&b, s).unwrap();
-        let x = x.exp(s).unwrap();
-        let x = x.mul(&a, s).unwrap();
-        x.reduce_sum(&[0], s).unwrap()
-    });
+    let session = backend
+        .with_backend_session(|s| {
+            let x = a.add(&b, s).unwrap();
+            let x = x.exp(s).unwrap();
+            let x = x.mul(&a, s).unwrap();
+            let x = x.add(&b, s).unwrap();
+            let x = x.exp(s).unwrap();
+            let x = x.mul(&a, s).unwrap();
+            let x = x.add(&b, s).unwrap();
+            let x = x.exp(s).unwrap();
+            let x = x.mul(&a, s).unwrap();
+            x.reduce_sum(&[0], s).unwrap()
+        })
+        .unwrap();
     assert_eq!(
         backend.entries.get(),
         1,
@@ -403,18 +460,20 @@ fn session_dynamic_binary_chain() {
     let a = Tensor::from_vec_col_major(vec![2, 2], a_values.clone()).unwrap();
     let b = Tensor::from_vec_col_major(vec![2, 2], b_values.clone()).unwrap();
 
-    let session = backend.with_backend_session(|s| {
-        a.sub(&b, s)
-            .unwrap()
-            .div(&b, s)
-            .unwrap()
-            .pow(&b, s)
-            .unwrap()
-            .maximum(&b, s)
-            .unwrap()
-            .minimum(&b, s)
-            .unwrap()
-    });
+    let session = backend
+        .with_backend_session(|s| {
+            a.sub(&b, s)
+                .unwrap()
+                .div(&b, s)
+                .unwrap()
+                .pow(&b, s)
+                .unwrap()
+                .maximum(&b, s)
+                .unwrap()
+                .minimum(&b, s)
+                .unwrap()
+        })
+        .unwrap();
 
     // Independent value check in plain scalar math.
     let expected: Vec<f64> = a_values
@@ -433,18 +492,20 @@ fn session_dynamic_binary_chain() {
     let a = Tensor::from_vec_col_major(vec![1], vec![3.0_f64]).unwrap();
     let b = Tensor::from_vec_col_major(vec![4], vec![2.0_f64; 4]).unwrap();
 
-    let session = backend.with_backend_session(|s| {
-        a.sub(&b, s)
-            .unwrap()
-            .div(&b, s)
-            .unwrap()
-            .pow(&b, s)
-            .unwrap()
-            .maximum(&b, s)
-            .unwrap()
-            .minimum(&b, s)
-            .unwrap()
-    });
+    let session = backend
+        .with_backend_session(|s| {
+            a.sub(&b, s)
+                .unwrap()
+                .div(&b, s)
+                .unwrap()
+                .pow(&b, s)
+                .unwrap()
+                .maximum(&b, s)
+                .unwrap()
+                .minimum(&b, s)
+                .unwrap()
+        })
+        .unwrap();
     let expected = [2.0_f64; 4];
     assert_close(session.as_slice::<f64>().unwrap(), &expected);
 }
@@ -455,32 +516,34 @@ fn session_dynamic_unary_chain() {
     let x_values = vec![2.0_f64, 3.0, 4.0, 5.0];
     let x = Tensor::from_vec_col_major(vec![4], x_values.clone()).unwrap();
 
-    let session = backend.with_backend_session(|s| {
-        x.neg(s)
-            .unwrap()
-            .abs(s)
-            .unwrap()
-            .sqrt(s)
-            .unwrap()
-            .rsqrt(s)
-            .unwrap()
-            .sign(s)
-            .unwrap()
-            .conj(s)
-            .unwrap()
-            .log(s)
-            .unwrap()
-            .expm1(s)
-            .unwrap()
-            .log1p(s)
-            .unwrap()
-            .sin(s)
-            .unwrap()
-            .cos(s)
-            .unwrap()
-            .tanh(s)
-            .unwrap()
-    });
+    let session = backend
+        .with_backend_session(|s| {
+            x.neg(s)
+                .unwrap()
+                .abs(s)
+                .unwrap()
+                .sqrt(s)
+                .unwrap()
+                .rsqrt(s)
+                .unwrap()
+                .sign(s)
+                .unwrap()
+                .conj(s)
+                .unwrap()
+                .log(s)
+                .unwrap()
+                .expm1(s)
+                .unwrap()
+                .log1p(s)
+                .unwrap()
+                .sin(s)
+                .unwrap()
+                .cos(s)
+                .unwrap()
+                .tanh(s)
+                .unwrap()
+        })
+        .unwrap();
 
     // Independent value check in plain scalar math; `conj` is the identity
     // for real values.
@@ -509,13 +572,15 @@ fn session_dynamic_ternary_chain() {
     let lower = Tensor::from_vec_col_major(vec![], vec![0.0_f64]).unwrap();
     let upper = Tensor::from_vec_col_major(vec![], vec![5.0_f64]).unwrap();
 
-    let session = backend.with_backend_session(|s| {
-        condition
-            .where_select(&on_true, &on_false, s)
-            .unwrap()
-            .clamp(&lower, &upper, s)
-            .unwrap()
-    });
+    let session = backend
+        .with_backend_session(|s| {
+            condition
+                .where_select(&on_true, &on_false, s)
+                .unwrap()
+                .clamp(&lower, &upper, s)
+                .unwrap()
+        })
+        .unwrap();
     // select -> [1, 6, 3, 8], then clamp(0, 5).
     let expected = [1.0_f64, 5.0, 3.0, 5.0];
     assert_close(session.as_slice::<f64>().unwrap(), &expected);
@@ -525,13 +590,15 @@ fn session_dynamic_ternary_chain() {
     let lower = Tensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
     let upper = Tensor::from_vec_col_major(vec![1], vec![3.0_f64]).unwrap();
 
-    let session = backend.with_backend_session(|s| {
-        condition
-            .where_select(&on_true, &on_false, s)
-            .unwrap()
-            .clamp(&lower, &upper, s)
-            .unwrap()
-    });
+    let session = backend
+        .with_backend_session(|s| {
+            condition
+                .where_select(&on_true, &on_false, s)
+                .unwrap()
+                .clamp(&lower, &upper, s)
+                .unwrap()
+        })
+        .unwrap();
     // select broadcasts the condition -> [1, 2, 3, 4], then clamp(2, 3).
     let expected = [2.0_f64, 2.0, 3.0, 3.0];
     assert_close(session.as_slice::<f64>().unwrap(), &expected);
@@ -542,16 +609,18 @@ fn session_dynamic_structural_chain() {
     let mut backend = CpuBackend::new();
     let x = Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap();
 
-    let session = backend.with_backend_session(|s| {
-        x.transpose(&[1, 0], s)
-            .unwrap()
-            .reshape(&[6], s)
-            .unwrap()
-            .reshape(&[2, 3], s)
-            .unwrap()
-            .transpose(&[1, 0], s)
-            .unwrap()
-    });
+    let session = backend
+        .with_backend_session(|s| {
+            x.transpose(&[1, 0], s)
+                .unwrap()
+                .reshape(&[6], s)
+                .unwrap()
+                .reshape(&[2, 3], s)
+                .unwrap()
+                .transpose(&[1, 0], s)
+                .unwrap()
+        })
+        .unwrap();
 
     // Independent permutation math: reshape preserves the col-major storage
     // order, so the chain is two transposes of [2,3] layouts on the original
@@ -570,6 +639,7 @@ fn session_dynamic_dtype_chain() {
 
     let session = backend
         .with_backend_session(|s| x.cast(DType::I32, s))
+        .unwrap()
         .unwrap();
     let expected = [1_i32, -2, 3, 0];
     assert_eq!(session.as_slice::<i32>().unwrap(), &expected);
@@ -580,11 +650,13 @@ fn session_dynamic_dtype_chain() {
 
     let session = backend
         .with_backend_session(|s| y.convert(DType::C64, s))
+        .unwrap()
         .unwrap();
     assert_eq!(session.dtype(), DType::C64);
 
     let back = backend
         .with_backend_session(|s| session.cast(DType::F64, s))
+        .unwrap()
         .unwrap();
     assert_close(back.as_slice::<f64>().unwrap(), &[1.0, 2.0]);
 }
@@ -597,7 +669,10 @@ fn session_dynamic_matmul_chain() {
     let a = Tensor::from_vec_col_major(vec![2, 3], a_values.clone()).unwrap();
     let b = Tensor::from_vec_col_major(vec![3, 2], b_values.clone()).unwrap();
 
-    let session = backend.with_backend_session(|s| a.matmul(&b, s)).unwrap();
+    let session = backend
+        .with_backend_session(|s| a.matmul(&b, s))
+        .unwrap()
+        .unwrap();
 
     // Independent value check with plain triple loops over col-major indices.
     let mut expected = vec![0.0_f64; 4];
@@ -620,7 +695,10 @@ fn session_dynamic_errors() {
 
     // Binary broadcast error.
 
-    let session_error = backend.with_backend_session(|s| a.sub(&b, s)).unwrap_err();
+    let session_error = backend
+        .with_backend_session(|s| a.sub(&b, s))
+        .unwrap()
+        .unwrap_err();
 
     assert_incompatible_shapes_error(session_error);
 
@@ -630,6 +708,7 @@ fn session_dynamic_errors() {
 
     let session_error = backend
         .with_backend_session(|s| a.clamp(&lower, &upper, s))
+        .unwrap()
         .unwrap_err();
 
     assert_incompatible_shapes_error(session_error);
@@ -638,6 +717,7 @@ fn session_dynamic_errors() {
 
     let session_error = backend
         .with_backend_session(|s| a.matmul(&b, s))
+        .unwrap()
         .unwrap_err();
 
     assert_rank_mismatch_error(session_error);
@@ -645,7 +725,10 @@ fn session_dynamic_errors() {
     // Dtype mismatch error for sub.
     let c = Tensor::from_vec_col_major(vec![2], vec![1_i32; 2]).unwrap();
 
-    let session_error = backend.with_backend_session(|s| a.sub(&c, s)).unwrap_err();
+    let session_error = backend
+        .with_backend_session(|s| a.sub(&c, s))
+        .unwrap()
+        .unwrap_err();
     let Error::Validation {
         op: "sub",
         source: ValidationError::DTypeMismatch { expected, actual },
@@ -667,18 +750,20 @@ fn session_typed_binary_chain() {
     let a = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], a_values.clone()).unwrap();
     let b = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], b_values.clone()).unwrap();
 
-    let session = backend.with_backend_session(|s| {
-        a.sub(&b, s)
-            .unwrap()
-            .div(&b, s)
-            .unwrap()
-            .pow(&b, s)
-            .unwrap()
-            .maximum(&b, s)
-            .unwrap()
-            .minimum(&b, s)
-            .unwrap()
-    });
+    let session = backend
+        .with_backend_session(|s| {
+            a.sub(&b, s)
+                .unwrap()
+                .div(&b, s)
+                .unwrap()
+                .pow(&b, s)
+                .unwrap()
+                .maximum(&b, s)
+                .unwrap()
+                .minimum(&b, s)
+                .unwrap()
+        })
+        .unwrap();
 
     let expected: Vec<f64> = a_values
         .iter()
@@ -696,18 +781,20 @@ fn session_typed_binary_chain() {
     let a = TypedTensor::<f64>::from_vec_col_major(vec![1], vec![3.0]).unwrap();
     let b = TypedTensor::<f64>::from_vec_col_major(vec![4], vec![2.0; 4]).unwrap();
 
-    let session = backend.with_backend_session(|s| {
-        a.sub(&b, s)
-            .unwrap()
-            .div(&b, s)
-            .unwrap()
-            .pow(&b, s)
-            .unwrap()
-            .maximum(&b, s)
-            .unwrap()
-            .minimum(&b, s)
-            .unwrap()
-    });
+    let session = backend
+        .with_backend_session(|s| {
+            a.sub(&b, s)
+                .unwrap()
+                .div(&b, s)
+                .unwrap()
+                .pow(&b, s)
+                .unwrap()
+                .maximum(&b, s)
+                .unwrap()
+                .minimum(&b, s)
+                .unwrap()
+        })
+        .unwrap();
     let expected = [2.0_f64; 4];
     assert_close(session.host_data().unwrap(), &expected);
 }
@@ -718,32 +805,34 @@ fn session_typed_unary_chain() {
     let x_values = vec![2.0_f64, 3.0, 4.0, 5.0];
     let x = TypedTensor::<f64>::from_vec_col_major(vec![4], x_values.clone()).unwrap();
 
-    let session = backend.with_backend_session(|s| {
-        x.neg(s)
-            .unwrap()
-            .abs(s)
-            .unwrap()
-            .sqrt(s)
-            .unwrap()
-            .rsqrt(s)
-            .unwrap()
-            .sign(s)
-            .unwrap()
-            .conj(s)
-            .unwrap()
-            .log(s)
-            .unwrap()
-            .expm1(s)
-            .unwrap()
-            .log1p(s)
-            .unwrap()
-            .sin(s)
-            .unwrap()
-            .cos(s)
-            .unwrap()
-            .tanh(s)
-            .unwrap()
-    });
+    let session = backend
+        .with_backend_session(|s| {
+            x.neg(s)
+                .unwrap()
+                .abs(s)
+                .unwrap()
+                .sqrt(s)
+                .unwrap()
+                .rsqrt(s)
+                .unwrap()
+                .sign(s)
+                .unwrap()
+                .conj(s)
+                .unwrap()
+                .log(s)
+                .unwrap()
+                .expm1(s)
+                .unwrap()
+                .log1p(s)
+                .unwrap()
+                .sin(s)
+                .unwrap()
+                .cos(s)
+                .unwrap()
+                .tanh(s)
+                .unwrap()
+        })
+        .unwrap();
 
     let mut expected: Vec<f64> = x_values.iter().map(|&v| -v).collect();
     expected = expected.iter().map(|&v| v.abs()).collect();
@@ -770,6 +859,7 @@ fn session_typed_clamp_chain() {
 
     let session = backend
         .with_backend_session(|s| x.clamp(&lower, &upper, s))
+        .unwrap()
         .unwrap();
     assert_close(session.host_data().unwrap(), &[0.0, 3.0, 1.0, 3.0]);
 
@@ -780,6 +870,7 @@ fn session_typed_clamp_chain() {
 
     let session = backend
         .with_backend_session(|s| x.clamp(&lower, &upper, s))
+        .unwrap()
         .unwrap();
     assert_close(session.host_data().unwrap(), &[1.0, 1.0, 2.0, 2.0]);
 }
@@ -794,6 +885,7 @@ fn session_typed_compare_chain() {
 
     let session = backend
         .with_backend_session(|s| a.compare(&b, CompareDir::Gt, s))
+        .unwrap()
         .unwrap();
     let expected = [true, false, false, true];
     assert_eq!(session.host_data().unwrap(), &expected);
@@ -804,6 +896,7 @@ fn session_typed_compare_chain() {
 
     let session = backend
         .with_backend_session(|s| a.compare(&b, CompareDir::Gt, s))
+        .unwrap()
         .unwrap();
     let expected = [true, false, true, false];
     assert_eq!(session.host_data().unwrap(), &expected);
@@ -819,6 +912,7 @@ fn session_typed_structural_chain() {
 
     let session = backend
         .with_backend_session(|s| x.reshape(&[6], s))
+        .unwrap()
         .unwrap();
     let expected = [1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0];
     assert_eq!(session.shape(), &[6]);
@@ -828,6 +922,7 @@ fn session_typed_structural_chain() {
 
     let session = backend
         .with_backend_session(|s| x.transpose(&[1, 0], s))
+        .unwrap()
         .unwrap();
     let expected = [1.0_f64, 3.0, 5.0, 2.0, 4.0, 6.0];
     assert_eq!(session.shape(), &[3, 2]);
@@ -839,6 +934,7 @@ fn session_typed_structural_chain() {
 
     let session = backend
         .with_backend_session(|s| row.broadcast_in_dim(&[2, 3], &[1], s))
+        .unwrap()
         .unwrap();
     let expected = [1.0_f64, 1.0, 2.0, 2.0, 3.0, 3.0];
     assert_eq!(session.shape(), &[2, 3]);
@@ -853,7 +949,10 @@ fn session_typed_matmul_chain() {
     let a = TypedTensor::<f64>::from_vec_col_major(vec![2, 3], a_values.clone()).unwrap();
     let b = TypedTensor::<f64>::from_vec_col_major(vec![3, 2], b_values.clone()).unwrap();
 
-    let session = backend.with_backend_session(|s| a.matmul(&b, s)).unwrap();
+    let session = backend
+        .with_backend_session(|s| a.matmul(&b, s))
+        .unwrap()
+        .unwrap();
 
     let mut expected = vec![0.0_f64; 4];
     for i in 0..2 {
@@ -877,6 +976,7 @@ fn session_typed_errors() {
 
     let session_error = backend
         .with_backend_session(|s| a.clamp(&b, &a, s))
+        .unwrap()
         .unwrap_err();
 
     assert_incompatible_shapes_error(session_error);
@@ -885,6 +985,7 @@ fn session_typed_errors() {
 
     let session_error = backend
         .with_backend_session(|s| a.matmul(&b, s))
+        .unwrap()
         .unwrap_err();
 
     assert_rank_mismatch_error(session_error);
@@ -901,18 +1002,20 @@ fn session_new_ops_chain_enters_one_session() {
     // A 5-op session chain (sub, log, maximum, reshape, matmul) must execute
     // inside exactly one backend session entry.
     backend.entries.set(0);
-    let session = backend.with_backend_session(|s| {
-        a.sub(&b, s)
-            .unwrap()
-            .log(s)
-            .unwrap()
-            .maximum(&m, s)
-            .unwrap()
-            .reshape(&[4, 1], s)
-            .unwrap()
-            .matmul(&rhs, s)
-            .unwrap()
-    });
+    let session = backend
+        .with_backend_session(|s| {
+            a.sub(&b, s)
+                .unwrap()
+                .log(s)
+                .unwrap()
+                .maximum(&m, s)
+                .unwrap()
+                .reshape(&[4, 1], s)
+                .unwrap()
+                .matmul(&rhs, s)
+                .unwrap()
+        })
+        .unwrap();
     assert_eq!(
         backend.entries.get(),
         1,
@@ -956,9 +1059,6 @@ impl SessionCountingBackend {
 /// `into_typed_result`.
 struct WrongDTypeSessionBackend;
 
-/// Session-type marker for [`WrongDTypeSessionBackend`].
-struct WrongDTypeSessionBackendMarker;
-
 macro_rules! panic_backend_methods {
     ($($name:ident($($arg:ident : $argty:ty),*) -> $ret:ty;)+) => {
         $(
@@ -975,16 +1075,14 @@ macro_rules! panic_backend_methods {
 /// real ops). Also excludes `BackendSessionHost`, which each backend
 /// implements explicitly.
 macro_rules! test_backend_impls {
-    ($ty:ident, $marker:ident) => {
-        struct $marker;
-
+    ($ty:ident) => {
         impl BackendRuntimeCache for $ty {
             type RuntimeCache = <CpuBackend as BackendRuntimeCache>::RuntimeCache;
         }
 
         impl TensorStructural for $ty {
             fn to_contiguous_read(&mut self, input: TensorRead<'_>) -> TensorResult {
-                CpuBackend::new().to_contiguous_read(input)
+                CpuBackend::new().with_backend_session(|__s| __s.to_contiguous_read(input)).unwrap()
             }
 
             fn copy_read_into(
@@ -992,13 +1090,37 @@ macro_rules! test_backend_impls {
                 src: TensorRead<'_>,
                 dst: TensorWrite<'_>,
             ) -> tenferro_tensor::Result<()> {
-                CpuBackend::new().copy_read_into(src, dst)
+                CpuBackend::new().with_backend_session(|__s| __s.copy_read_into(src, dst)).unwrap()
+            }
+
+            // The previous read-half default delegated owned tensors to the one-shot
+            // method and rejected borrowed views. Reproduce it explicitly rather than
+            // forwarding a view, which would widen the accepted input surface.
+            fn transpose_read(&mut self, input: TensorRead<'_>, perm: &[usize]) -> TensorResult {
+                                let _ = tenferro_tensor::backend::read_owned_tensor("transpose", input)?;
+                    let _ = perm;
+                    panic!("transpose should not be called in this test")
+            }
+
+            // The previous read-half default delegated owned tensors to the one-shot
+            // method and rejected borrowed views. Reproduce it explicitly rather than
+            // forwarding a view, which would widen the accepted input surface.
+            fn reshape_read(&mut self, input: TensorRead<'_>, shape: &[usize]) -> TensorResult {
+                                let _ = tenferro_tensor::backend::read_owned_tensor("reshape", input)?;
+                    let _ = shape;
+                    panic!("reshape should not be called in this test")
+            }
+
+            // The previous read-half default delegated owned tensors to the one-shot
+            // method and rejected borrowed views. Reproduce it explicitly rather than
+            // forwarding a view, which would widen the accepted input surface.
+            fn broadcast_in_dim_read(&mut self, input: TensorRead<'_>, shape: &[usize], dims: &[usize]) -> TensorResult {
+                                let _ = tenferro_tensor::backend::read_owned_tensor("broadcast_in_dim", input)?;
+                    let _ = (shape, dims);
+                    panic!("broadcast_in_dim should not be called in this test")
             }
 
             panic_backend_methods! {
-                transpose(input: &Tensor, perm: &[usize]) -> TensorResult;
-                reshape(input: &Tensor, shape: &[usize]) -> TensorResult;
-                broadcast_in_dim(input: &Tensor, shape: &[usize], dims: &[usize]) -> TensorResult;
                 cast(input: &Tensor, to: DType) -> TensorResult;
                 convert(input: &Tensor, to: DType) -> TensorResult;
                 extract_diagonal(input: &Tensor, axis_a: usize, axis_b: usize) -> TensorResult;
@@ -1022,14 +1144,24 @@ macro_rules! test_backend_impls {
         }
 
         impl TensorDot for $ty {
-            fn dot_general(
-                &mut self,
-                _lhs: &Tensor,
-                _rhs: &Tensor,
-                _config: &DotGeneralConfig,
-            ) -> TensorResult {
-                panic!("dot_general should not be called in this test")
-            }
+        // The previous read-half default delegated an owned pair to the one-shot
+        // method and materialized borrowed views through to_contiguous_read before
+        // contracting. Reproduce that exactly rather than forwarding a view.
+        fn dot_general_read(
+            &mut self,
+            lhs: TensorRead<'_>,
+            rhs: TensorRead<'_>,
+            _config: &DotGeneralConfig,
+        ) -> TensorResult {
+                    match (lhs.as_tensor(), rhs.as_tensor()) {
+                        (Some(_), Some(_)) => panic!("dot_general should not be called in this test"),
+                        _ => {
+                            let _ = self.to_contiguous_read(lhs)?;
+                            let _ = self.to_contiguous_read(rhs)?;
+                            panic!("dot_general should not be called in this test")
+                        }
+                    }
+                }
         }
 
         impl TensorFusion for $ty {}
@@ -1054,13 +1186,7 @@ macro_rules! test_backend_impls {
         impl BackendCachedDot for $ty {}
 
         impl BackendSession for $ty {
-            fn session_type_id(&self) -> std::any::TypeId {
-                std::any::TypeId::of::<$marker>()
-            }
 
-            unsafe fn session_data_mut(&mut self) -> *mut () {
-                self as *mut Self as *mut ()
-            }
         }
 
         impl TensorBackend for $ty {}
@@ -1080,23 +1206,122 @@ macro_rules! panic_elementwise {
                 panic!("elementwise_read_into should not be called in this test")
             }
 
-            panic_backend_methods! {
-                add(lhs: &Tensor, rhs: &Tensor) -> TensorResult;
-                sub(lhs: &Tensor, rhs: &Tensor) -> TensorResult;
-                mul(lhs: &Tensor, rhs: &Tensor) -> TensorResult;
-                neg(input: &Tensor) -> TensorResult;
-                div(lhs: &Tensor, rhs: &Tensor) -> TensorResult;
-                abs(input: &Tensor) -> TensorResult;
-                sign(input: &Tensor) -> TensorResult;
-                maximum(lhs: &Tensor, rhs: &Tensor) -> TensorResult;
-                minimum(lhs: &Tensor, rhs: &Tensor) -> TensorResult;
-                compare(lhs: &Tensor, rhs: &Tensor, dir: &CompareDir) -> TensorResult;
-                select(pred: &Tensor, on_true: &Tensor, on_false: &Tensor) -> TensorResult;
-                clamp(input: &Tensor, lower: &Tensor, upper: &Tensor) -> TensorResult;
+            // Reproduce the previous read-half default: delegate an owned tensor and
+            // reject a borrowed view.
+            fn add_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> TensorResult {
+                let _ = tenferro_tensor::backend::read_owned_tensor("add", lhs)?;
+                let _ = tenferro_tensor::backend::read_owned_tensor("add", rhs)?;
+                panic!("add should not be called in this test")
             }
 
-            fn conj(&mut self, input: &Tensor) -> TensorResult {
-                CpuBackend::new().conj(input)
+            // Reproduce the previous read-half default: delegate an owned tensor and
+            // reject a borrowed view.
+            fn sub_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> TensorResult {
+                let _ = tenferro_tensor::backend::read_owned_tensor("sub", lhs)?;
+                let _ = tenferro_tensor::backend::read_owned_tensor("sub", rhs)?;
+                panic!("sub should not be called in this test")
+            }
+
+            // Reproduce the previous read-half default: delegate an owned tensor and
+            // reject a borrowed view.
+            fn mul_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> TensorResult {
+                let _ = tenferro_tensor::backend::read_owned_tensor("mul", lhs)?;
+                let _ = tenferro_tensor::backend::read_owned_tensor("mul", rhs)?;
+                panic!("mul should not be called in this test")
+            }
+
+            // Reproduce the previous read-half default: delegate an owned tensor and
+            // reject a borrowed view.
+            fn neg_read(&mut self, input: TensorRead<'_>) -> TensorResult {
+                let _ = tenferro_tensor::backend::read_owned_tensor("neg", input)?;
+                panic!("neg should not be called in this test")
+            }
+
+            // Reproduce the previous read-half default: delegate an owned tensor and
+            // reject a borrowed view.
+            fn conj_read(&mut self, input: TensorRead<'_>) -> TensorResult {
+                let _ = tenferro_tensor::backend::read_owned_tensor("conj", input)?;
+                panic!("conj should not be called in this test")
+            }
+
+            // Reproduce the previous read-half default: delegate an owned tensor and
+            // reject a borrowed view.
+            fn div_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> TensorResult {
+                let _ = tenferro_tensor::backend::read_owned_tensor("div", lhs)?;
+                let _ = tenferro_tensor::backend::read_owned_tensor("div", rhs)?;
+                panic!("div should not be called in this test")
+            }
+
+            // Reproduce the previous read-half default: delegate an owned tensor and
+            // reject a borrowed view.
+            fn abs_read(&mut self, input: TensorRead<'_>) -> TensorResult {
+                let _ = tenferro_tensor::backend::read_owned_tensor("abs", input)?;
+                panic!("abs should not be called in this test")
+            }
+
+            // Reproduce the previous read-half default: delegate an owned tensor and
+            // reject a borrowed view.
+            fn sign_read(&mut self, input: TensorRead<'_>) -> TensorResult {
+                let _ = tenferro_tensor::backend::read_owned_tensor("sign", input)?;
+                panic!("sign should not be called in this test")
+            }
+
+            // Reproduce the previous read-half default: delegate an owned tensor and
+            // reject a borrowed view.
+            fn maximum_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> TensorResult {
+                let _ = tenferro_tensor::backend::read_owned_tensor("maximum", lhs)?;
+                let _ = tenferro_tensor::backend::read_owned_tensor("maximum", rhs)?;
+                panic!("maximum should not be called in this test")
+            }
+
+            // Reproduce the previous read-half default: delegate an owned tensor and
+            // reject a borrowed view.
+            fn minimum_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> TensorResult {
+                let _ = tenferro_tensor::backend::read_owned_tensor("minimum", lhs)?;
+                let _ = tenferro_tensor::backend::read_owned_tensor("minimum", rhs)?;
+                panic!("minimum should not be called in this test")
+            }
+
+            // Reproduce the previous read-half default: delegate an owned tensor and
+            // reject a borrowed view.
+            fn compare_read(
+                &mut self,
+                lhs: TensorRead<'_>,
+                rhs: TensorRead<'_>,
+                dir: &CompareDir,
+            ) -> TensorResult {
+                let _ = tenferro_tensor::backend::read_owned_tensor("compare", lhs)?;
+                let _ = tenferro_tensor::backend::read_owned_tensor("compare", rhs)?;
+                let _ = dir;
+                panic!("compare should not be called in this test")
+            }
+
+            // Reproduce the previous read-half default: delegate an owned tensor and
+            // reject a borrowed view.
+            fn select_read(
+                &mut self,
+                pred: TensorRead<'_>,
+                on_true: TensorRead<'_>,
+                on_false: TensorRead<'_>,
+            ) -> TensorResult {
+                let _ = tenferro_tensor::backend::read_owned_tensor("select", pred)?;
+                let _ = tenferro_tensor::backend::read_owned_tensor("select", on_true)?;
+                let _ = tenferro_tensor::backend::read_owned_tensor("select", on_false)?;
+                panic!("select should not be called in this test")
+            }
+
+            // Reproduce the previous read-half default: delegate an owned tensor and
+            // reject a borrowed view.
+            fn clamp_read(
+                &mut self,
+                input: TensorRead<'_>,
+                lower: TensorRead<'_>,
+                upper: TensorRead<'_>,
+            ) -> TensorResult {
+                let _ = tenferro_tensor::backend::read_owned_tensor("clamp", input)?;
+                let _ = tenferro_tensor::backend::read_owned_tensor("clamp", lower)?;
+                let _ = tenferro_tensor::backend::read_owned_tensor("clamp", upper)?;
+                panic!("clamp should not be called in this test")
             }
         }
     };
@@ -1105,17 +1330,75 @@ macro_rules! panic_elementwise {
 macro_rules! panic_analytic {
     ($ty:ident) => {
         impl TensorAnalytic for $ty {
-            panic_backend_methods! {
-                exp(input: &Tensor) -> TensorResult;
-                log(input: &Tensor) -> TensorResult;
-                sin(input: &Tensor) -> TensorResult;
-                cos(input: &Tensor) -> TensorResult;
-                tanh(input: &Tensor) -> TensorResult;
-                sqrt(input: &Tensor) -> TensorResult;
-                rsqrt(input: &Tensor) -> TensorResult;
-                pow(lhs: &Tensor, rhs: &Tensor) -> TensorResult;
-                expm1(input: &Tensor) -> TensorResult;
-                log1p(input: &Tensor) -> TensorResult;
+            // Reproduce the previous read-half default: delegate an owned tensor and
+            // reject a borrowed view.
+            fn exp_read(&mut self, input: TensorRead<'_>) -> TensorResult {
+                let _ = tenferro_tensor::backend::read_owned_tensor("exp", input)?;
+                panic!("exp should not be called in this test")
+            }
+
+            // Reproduce the previous read-half default: delegate an owned tensor and
+            // reject a borrowed view.
+            fn log_read(&mut self, input: TensorRead<'_>) -> TensorResult {
+                let _ = tenferro_tensor::backend::read_owned_tensor("log", input)?;
+                panic!("log should not be called in this test")
+            }
+
+            // Reproduce the previous read-half default: delegate an owned tensor and
+            // reject a borrowed view.
+            fn sin_read(&mut self, input: TensorRead<'_>) -> TensorResult {
+                let _ = tenferro_tensor::backend::read_owned_tensor("sin", input)?;
+                panic!("sin should not be called in this test")
+            }
+
+            // Reproduce the previous read-half default: delegate an owned tensor and
+            // reject a borrowed view.
+            fn cos_read(&mut self, input: TensorRead<'_>) -> TensorResult {
+                let _ = tenferro_tensor::backend::read_owned_tensor("cos", input)?;
+                panic!("cos should not be called in this test")
+            }
+
+            // Reproduce the previous read-half default: delegate an owned tensor and
+            // reject a borrowed view.
+            fn tanh_read(&mut self, input: TensorRead<'_>) -> TensorResult {
+                let _ = tenferro_tensor::backend::read_owned_tensor("tanh", input)?;
+                panic!("tanh should not be called in this test")
+            }
+
+            // Reproduce the previous read-half default: delegate an owned tensor and
+            // reject a borrowed view.
+            fn sqrt_read(&mut self, input: TensorRead<'_>) -> TensorResult {
+                let _ = tenferro_tensor::backend::read_owned_tensor("sqrt", input)?;
+                panic!("sqrt should not be called in this test")
+            }
+
+            // Reproduce the previous read-half default: delegate an owned tensor and
+            // reject a borrowed view.
+            fn rsqrt_read(&mut self, input: TensorRead<'_>) -> TensorResult {
+                let _ = tenferro_tensor::backend::read_owned_tensor("rsqrt", input)?;
+                panic!("rsqrt should not be called in this test")
+            }
+
+            // Reproduce the previous read-half default: delegate an owned tensor and
+            // reject a borrowed view.
+            fn expm1_read(&mut self, input: TensorRead<'_>) -> TensorResult {
+                let _ = tenferro_tensor::backend::read_owned_tensor("expm1", input)?;
+                panic!("expm1 should not be called in this test")
+            }
+
+            // Reproduce the previous read-half default: delegate an owned tensor and
+            // reject a borrowed view.
+            fn log1p_read(&mut self, input: TensorRead<'_>) -> TensorResult {
+                let _ = tenferro_tensor::backend::read_owned_tensor("log1p", input)?;
+                panic!("log1p should not be called in this test")
+            }
+
+            // Reproduce the previous read-half default: delegate an owned tensor and
+            // reject a borrowed view.
+            fn pow_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> TensorResult {
+                let _ = tenferro_tensor::backend::read_owned_tensor("pow", lhs)?;
+                let _ = tenferro_tensor::backend::read_owned_tensor("pow", rhs)?;
+                panic!("pow should not be called in this test")
             }
         }
     };
@@ -1124,17 +1407,36 @@ macro_rules! panic_analytic {
 macro_rules! panic_reduction {
     ($ty:ident) => {
         impl TensorReduction for $ty {
-            panic_backend_methods! {
-                reduce_sum(input: &Tensor, axes: &[usize]) -> TensorResult;
-                reduce_prod(input: &Tensor, axes: &[usize]) -> TensorResult;
-                reduce_max(input: &Tensor, axes: &[usize]) -> TensorResult;
-                reduce_min(input: &Tensor, axes: &[usize]) -> TensorResult;
+            // The previous read-half default delegated owned tensors to the
+            // one-shot method and rejected views. Reproduce it explicitly.
+            fn reduce_sum_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> TensorResult {
+                let _ = tenferro_tensor::backend::read_owned_tensor("reduce_sum", input)?;
+                let _ = axes;
+                panic!("reduce_sum should not be called in this test")
+            }
+
+            fn reduce_prod_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> TensorResult {
+                let _ = tenferro_tensor::backend::read_owned_tensor("reduce_prod", input)?;
+                let _ = axes;
+                panic!("reduce_prod should not be called in this test")
+            }
+
+            fn reduce_max_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> TensorResult {
+                let _ = tenferro_tensor::backend::read_owned_tensor("reduce_max", input)?;
+                let _ = axes;
+                panic!("reduce_max should not be called in this test")
+            }
+
+            fn reduce_min_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> TensorResult {
+                let _ = tenferro_tensor::backend::read_owned_tensor("reduce_min", input)?;
+                let _ = axes;
+                panic!("reduce_min should not be called in this test")
             }
         }
     };
 }
 
-test_backend_impls!(SessionCountingBackend, SessionCountingBackendMarker);
+test_backend_impls!(SessionCountingBackend);
 panic_elementwise!(SessionCountingBackend);
 panic_analytic!(SessionCountingBackend);
 panic_reduction!(SessionCountingBackend);
@@ -1143,7 +1445,7 @@ impl BackendSessionHost for SessionCountingBackend {
     fn with_backend_session<R: Send>(
         &mut self,
         f: impl FnOnce(&mut dyn BackendSession) -> R + Send,
-    ) -> R {
+    ) -> Result<R, tenferro_tensor::SessionEntryError> {
         self.entries.set(self.entries.get() + 1);
         self.inner.with_backend_session(f)
     }
@@ -1159,7 +1461,9 @@ impl BackendRuntimeCache for WrongDTypeSessionBackend {
 
 impl TensorStructural for WrongDTypeSessionBackend {
     fn to_contiguous_read(&mut self, input: TensorRead<'_>) -> TensorResult {
-        CpuBackend::new().to_contiguous_read(input)
+        CpuBackend::new()
+            .with_backend_session(|__s| __s.to_contiguous_read(input))
+            .unwrap()
     }
 
     fn copy_read_into(
@@ -1167,31 +1471,16 @@ impl TensorStructural for WrongDTypeSessionBackend {
         src: TensorRead<'_>,
         dst: TensorWrite<'_>,
     ) -> tenferro_tensor::Result<()> {
-        CpuBackend::new().copy_read_into(src, dst)
-    }
-
-    fn reshape(&mut self, _input: &Tensor, _shape: &[usize]) -> TensorResult {
-        Ok(wrong_dtype_tensor())
+        CpuBackend::new()
+            .with_backend_session(|__s| __s.copy_read_into(src, dst))
+            .unwrap()
     }
 
     fn reshape_read(&mut self, _input: TensorRead<'_>, _shape: &[usize]) -> TensorResult {
         Ok(wrong_dtype_tensor())
     }
 
-    fn transpose(&mut self, _input: &Tensor, _perm: &[usize]) -> TensorResult {
-        Ok(wrong_dtype_tensor())
-    }
-
     fn transpose_read(&mut self, _input: TensorRead<'_>, _perm: &[usize]) -> TensorResult {
-        Ok(wrong_dtype_tensor())
-    }
-
-    fn broadcast_in_dim(
-        &mut self,
-        _input: &Tensor,
-        _shape: &[usize],
-        _dims: &[usize],
-    ) -> TensorResult {
         Ok(wrong_dtype_tensor())
     }
 
@@ -1228,13 +1517,23 @@ impl TensorIndexing for WrongDTypeSessionBackend {
 }
 
 impl TensorDot for WrongDTypeSessionBackend {
-    fn dot_general(
+    // The previous read-half default delegated an owned pair to the one-shot
+    // method and materialized borrowed views through to_contiguous_read before
+    // contracting. Reproduce that exactly rather than forwarding a view.
+    fn dot_general_read(
         &mut self,
-        _lhs: &Tensor,
-        _rhs: &Tensor,
+        lhs: TensorRead<'_>,
+        rhs: TensorRead<'_>,
         _config: &DotGeneralConfig,
     ) -> TensorResult {
-        Ok(wrong_dtype_tensor())
+        match (lhs.as_tensor(), rhs.as_tensor()) {
+            (Some(_), Some(_)) => Ok(wrong_dtype_tensor()),
+            _ => {
+                let _ = self.to_contiguous_read(lhs)?;
+                let _ = self.to_contiguous_read(rhs)?;
+                Ok(wrong_dtype_tensor())
+            }
+        }
     }
 }
 
@@ -1259,15 +1558,7 @@ impl TensorDeviceTransfer for WrongDTypeSessionBackend {
 
 impl BackendCachedDot for WrongDTypeSessionBackend {}
 
-impl BackendSession for WrongDTypeSessionBackend {
-    fn session_type_id(&self) -> std::any::TypeId {
-        std::any::TypeId::of::<WrongDTypeSessionBackendMarker>()
-    }
-
-    unsafe fn session_data_mut(&mut self) -> *mut () {
-        self as *mut Self as *mut ()
-    }
-}
+impl BackendSession for WrongDTypeSessionBackend {}
 
 impl TensorBackend for WrongDTypeSessionBackend {}
 
@@ -1284,18 +1575,9 @@ impl TensorElementwise for WrongDTypeSessionBackend {
 
     panic_backend_methods! {
         rem(lhs: &Tensor, rhs: &Tensor) -> TensorResult;
-        select(pred: &Tensor, on_true: &Tensor, on_false: &Tensor) -> TensorResult;
-    }
-
-    fn add(&mut self, _lhs: &Tensor, _rhs: &Tensor) -> TensorResult {
-        Ok(wrong_dtype_tensor())
     }
 
     fn add_read(&mut self, _lhs: TensorRead<'_>, _rhs: TensorRead<'_>) -> TensorResult {
-        Ok(wrong_dtype_tensor())
-    }
-
-    fn sub(&mut self, _lhs: &Tensor, _rhs: &Tensor) -> TensorResult {
         Ok(wrong_dtype_tensor())
     }
 
@@ -1303,15 +1585,7 @@ impl TensorElementwise for WrongDTypeSessionBackend {
         Ok(wrong_dtype_tensor())
     }
 
-    fn mul(&mut self, _lhs: &Tensor, _rhs: &Tensor) -> TensorResult {
-        Ok(wrong_dtype_tensor())
-    }
-
     fn mul_read(&mut self, _lhs: TensorRead<'_>, _rhs: TensorRead<'_>) -> TensorResult {
-        Ok(wrong_dtype_tensor())
-    }
-
-    fn div(&mut self, _lhs: &Tensor, _rhs: &Tensor) -> TensorResult {
         Ok(wrong_dtype_tensor())
     }
 
@@ -1319,19 +1593,7 @@ impl TensorElementwise for WrongDTypeSessionBackend {
         Ok(wrong_dtype_tensor())
     }
 
-    fn maximum(&mut self, _lhs: &Tensor, _rhs: &Tensor) -> TensorResult {
-        Ok(wrong_dtype_tensor())
-    }
-
     fn maximum_read(&mut self, _lhs: TensorRead<'_>, _rhs: TensorRead<'_>) -> TensorResult {
-        Ok(wrong_dtype_tensor())
-    }
-
-    fn minimum(&mut self, _lhs: &Tensor, _rhs: &Tensor) -> TensorResult {
-        Ok(wrong_dtype_tensor())
-    }
-
-    fn neg(&mut self, _input: &Tensor) -> TensorResult {
         Ok(wrong_dtype_tensor())
     }
 
@@ -1339,19 +1601,7 @@ impl TensorElementwise for WrongDTypeSessionBackend {
         Ok(wrong_dtype_tensor())
     }
 
-    fn abs(&mut self, _input: &Tensor) -> TensorResult {
-        Ok(wrong_dtype_tensor())
-    }
-
     fn abs_read(&mut self, _input: TensorRead<'_>) -> TensorResult {
-        Ok(wrong_dtype_tensor())
-    }
-
-    fn sign(&mut self, _input: &Tensor) -> TensorResult {
-        Ok(wrong_dtype_tensor())
-    }
-
-    fn compare(&mut self, _lhs: &Tensor, _rhs: &Tensor, _dir: &CompareDir) -> TensorResult {
         Ok(wrong_dtype_tensor())
     }
 
@@ -1364,10 +1614,6 @@ impl TensorElementwise for WrongDTypeSessionBackend {
         Ok(wrong_dtype_tensor())
     }
 
-    fn clamp(&mut self, _input: &Tensor, _lower: &Tensor, _upper: &Tensor) -> TensorResult {
-        Ok(wrong_dtype_tensor())
-    }
-
     fn clamp_read(
         &mut self,
         _input: TensorRead<'_>,
@@ -1377,30 +1623,45 @@ impl TensorElementwise for WrongDTypeSessionBackend {
         Ok(wrong_dtype_tensor())
     }
 
-    fn conj(&mut self, input: &Tensor) -> TensorResult {
-        CpuBackend::new().conj(input)
+    // Reproduce the previous read-half default: delegate an owned tensor and
+    // reject a borrowed view.
+    fn conj_read(&mut self, input: TensorRead<'_>) -> TensorResult {
+        let _ = tenferro_tensor::backend::read_owned_tensor("conj", input)?;
+        panic!("conj should not be called in this test")
+    }
+
+    // Reproduce the previous read-half default: delegate an owned tensor and
+    // reject a borrowed view.
+    fn sign_read(&mut self, input: TensorRead<'_>) -> TensorResult {
+        let _ = tenferro_tensor::backend::read_owned_tensor("sign", input)?;
+        panic!("sign should not be called in this test")
+    }
+
+    // Reproduce the previous read-half default: delegate an owned tensor and
+    // reject a borrowed view.
+    fn minimum_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> TensorResult {
+        let _ = tenferro_tensor::backend::read_owned_tensor("minimum", lhs)?;
+        let _ = tenferro_tensor::backend::read_owned_tensor("minimum", rhs)?;
+        panic!("minimum should not be called in this test")
+    }
+
+    // Reproduce the previous read-half default: delegate an owned tensor and
+    // reject a borrowed view.
+    fn select_read(
+        &mut self,
+        pred: TensorRead<'_>,
+        on_true: TensorRead<'_>,
+        on_false: TensorRead<'_>,
+    ) -> TensorResult {
+        let _ = tenferro_tensor::backend::read_owned_tensor("select", pred)?;
+        let _ = tenferro_tensor::backend::read_owned_tensor("select", on_true)?;
+        let _ = tenferro_tensor::backend::read_owned_tensor("select", on_false)?;
+        panic!("select should not be called in this test")
     }
 }
 
 impl TensorAnalytic for WrongDTypeSessionBackend {
-    panic_backend_methods! {
-        sin(input: &Tensor) -> TensorResult;
-        cos(input: &Tensor) -> TensorResult;
-        tanh(input: &Tensor) -> TensorResult;
-        rsqrt(input: &Tensor) -> TensorResult;
-        expm1(input: &Tensor) -> TensorResult;
-        log1p(input: &Tensor) -> TensorResult;
-    }
-
-    fn exp(&mut self, _input: &Tensor) -> TensorResult {
-        Ok(wrong_dtype_tensor())
-    }
-
     fn exp_read(&mut self, _input: TensorRead<'_>) -> TensorResult {
-        Ok(wrong_dtype_tensor())
-    }
-
-    fn log(&mut self, _input: &Tensor) -> TensorResult {
         Ok(wrong_dtype_tensor())
     }
 
@@ -1408,40 +1669,90 @@ impl TensorAnalytic for WrongDTypeSessionBackend {
         Ok(wrong_dtype_tensor())
     }
 
-    fn sqrt(&mut self, _input: &Tensor) -> TensorResult {
-        Ok(wrong_dtype_tensor())
-    }
-
     fn sqrt_read(&mut self, _input: TensorRead<'_>) -> TensorResult {
-        Ok(wrong_dtype_tensor())
-    }
-
-    fn pow(&mut self, _lhs: &Tensor, _rhs: &Tensor) -> TensorResult {
         Ok(wrong_dtype_tensor())
     }
 
     fn pow_read(&mut self, _lhs: TensorRead<'_>, _rhs: TensorRead<'_>) -> TensorResult {
         Ok(wrong_dtype_tensor())
     }
+    // Reproduce the previous read-half default: delegate an owned tensor and
+    // reject a borrowed view.
+    fn sin_read(&mut self, input: tenferro_tensor::TensorRead<'_>) -> TensorResult {
+        let _ = tenferro_tensor::backend::read_owned_tensor("sin", input)?;
+        panic!("sin should not be called in this test")
+    }
+
+    // Reproduce the previous read-half default: delegate an owned tensor and
+    // reject a borrowed view.
+    fn cos_read(&mut self, input: tenferro_tensor::TensorRead<'_>) -> TensorResult {
+        let _ = tenferro_tensor::backend::read_owned_tensor("cos", input)?;
+        panic!("cos should not be called in this test")
+    }
+
+    // Reproduce the previous read-half default: delegate an owned tensor and
+    // reject a borrowed view.
+    fn tanh_read(&mut self, input: tenferro_tensor::TensorRead<'_>) -> TensorResult {
+        let _ = tenferro_tensor::backend::read_owned_tensor("tanh", input)?;
+        panic!("tanh should not be called in this test")
+    }
+
+    // Reproduce the previous read-half default: delegate an owned tensor and
+    // reject a borrowed view.
+    fn rsqrt_read(&mut self, input: tenferro_tensor::TensorRead<'_>) -> TensorResult {
+        let _ = tenferro_tensor::backend::read_owned_tensor("rsqrt", input)?;
+        panic!("rsqrt should not be called in this test")
+    }
+
+    // Reproduce the previous read-half default: delegate an owned tensor and
+    // reject a borrowed view.
+    fn expm1_read(&mut self, input: tenferro_tensor::TensorRead<'_>) -> TensorResult {
+        let _ = tenferro_tensor::backend::read_owned_tensor("expm1", input)?;
+        panic!("expm1 should not be called in this test")
+    }
+
+    // Reproduce the previous read-half default: delegate an owned tensor and
+    // reject a borrowed view.
+    fn log1p_read(&mut self, input: tenferro_tensor::TensorRead<'_>) -> TensorResult {
+        let _ = tenferro_tensor::backend::read_owned_tensor("log1p", input)?;
+        panic!("log1p should not be called in this test")
+    }
 }
 
 impl TensorReduction for WrongDTypeSessionBackend {
-    panic_backend_methods! {
-        reduce_prod(input: &Tensor, axes: &[usize]) -> TensorResult;
-        reduce_max(input: &Tensor, axes: &[usize]) -> TensorResult;
-        reduce_min(input: &Tensor, axes: &[usize]) -> TensorResult;
-    }
-
-    fn reduce_sum(&mut self, _input: &Tensor, _axes: &[usize]) -> TensorResult {
-        Ok(wrong_dtype_tensor())
-    }
-
     fn reduce_sum_read(&mut self, _input: TensorRead<'_>, _axes: &[usize]) -> TensorResult {
         Ok(wrong_dtype_tensor())
     }
+
+    // The previous read-half default delegated owned tensors to the one-shot
+    // method and rejected views. Reproduce it explicitly.
+    fn reduce_prod_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> TensorResult {
+        let _ = tenferro_tensor::backend::read_owned_tensor("reduce_prod", input)?;
+        let _ = axes;
+        panic!("reduce_prod should not be called in this test")
+    }
+
+    fn reduce_max_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> TensorResult {
+        let _ = tenferro_tensor::backend::read_owned_tensor("reduce_max", input)?;
+        let _ = axes;
+        panic!("reduce_max should not be called in this test")
+    }
+
+    fn reduce_min_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> TensorResult {
+        let _ = tenferro_tensor::backend::read_owned_tensor("reduce_min", input)?;
+        let _ = axes;
+        panic!("reduce_min should not be called in this test")
+    }
 }
 
-impl BackendSessionHost for WrongDTypeSessionBackend {}
+impl BackendSessionHost for WrongDTypeSessionBackend {
+    fn with_backend_session<R: Send>(
+        &mut self,
+        f: impl FnOnce(&mut dyn tenferro_tensor::BackendSession) -> R + Send,
+    ) -> Result<R, tenferro_tensor::SessionEntryError> {
+        tenferro_tensor::with_session_entry_guard("test backend", || f(self))
+    }
+}
 
 fn wrong_dtype_tensor() -> Tensor {
     Tensor::from_typed::<f64>(TypedTensor::from_vec_col_major(vec![], vec![1.0]).unwrap())

@@ -25,12 +25,25 @@ provider calls both cross the selected all-allowed domain executor exactly
 once. The executor entry owns admission and caller-thread placement; the BLAS
 runtime, rather than the executor's Rayon workers, owns provider fan-out.
 
+## External provider placement (#1938 D8)
+
+tenferro confines its own workers to a managed domain's CPU set and uses every
+domain's declared CPU set for resource exclusion. It makes no promise about
+where threads created by an external provider (OpenBLAS, MKL, Accelerate,
+OpenMP) run, or how many exist beyond the provider's declared count control.
+Cooperative-domain bundle validation therefore checks the thread count only;
+the former `CpuPlacementGuarantee` declaration and its `PlacementNotEnforceable`
+rejection were removed, because the rejection itself implied an enforcement the
+backend cannot provide. An `AllAllowed` domain must still declare exactly the
+process-allowed set, since that is its exclusion identity. Caller-managed
+domains keep their separate rule below.
+
 ## Caller-managed external admission
 
 An external domain explicitly selects one of two admission contracts:
 
-- **cooperative CPU-set admission** retains the existing resolved placement,
-  placement guarantee, and process-wide overlap arbitration; or
+- **cooperative CPU-set admission** retains the resolved placement and
+  process-wide overlap arbitration on its declared CPU set; or
 - **caller-managed admission** declares no CPU set. The supplied executor's
   workers are the complete CPU universe for that domain, and the caller owns
   admission and oversubscription across caller-managed domains.
@@ -71,7 +84,7 @@ configuration error when faer is not compiled. Provider-domain validation has a
 distinct caller-managed branch with no advisory or process-all-allowed bypass.
 It accepts only thread controls `PerCallUpperBound`, `Sequential`, or
 `BinaryClampToOne` and placement controls `EngineWorkers` or `CallingThread`.
-Caller-managed domains carry no `CpuPlacementGuarantee`. A bundle with external
+A bundle with external
 workers, uncontrolled thread count, or no placement control fails with a typed
 construction error before execution. The current BLAS/LAPACK operation-family
 path is unsupported because its process-global or provider-owned workers cannot

@@ -18,11 +18,17 @@ fn evaluate(a: &TracedTensor, input: Tensor) -> Vec<Tensor> {
     #[cfg(feature = "autodiff")]
     {
         use tenferro_ad::{EagerRuntime, EagerTensor};
-        use tenferro_linalg::EagerTensorLinalgExt;
+        use tenferro_linalg::EagerSessionLinalgExt;
         let runtime = EagerRuntime::with_cpu_backend(CpuBackend::with_threads(1).unwrap()).unwrap();
-        let eager = EagerTensor::from_tensor_in(input, runtime).unwrap();
-        let (sign, log) = eager.slogdet().unwrap();
-        for (actual, expected) in [eager.det().unwrap(), sign, log].iter().zip(&result) {
+        let eager = EagerTensor::from_tensor_in(input, runtime.clone()).unwrap();
+        let (det, sign, log) = runtime
+            .with_eager_session(|session| {
+                let (sign, log) = session.slogdet(&eager)?;
+                Ok::<_, tenferro_ad::Error>((session.det(&eager)?, sign, log))
+            })
+            .unwrap()
+            .unwrap();
+        for (actual, expected) in [det, sign, log].iter().zip(&result) {
             let actual = actual.to_tensor().unwrap();
             assert_eq!(actual.shape(), expected.shape());
             if let Ok(values) = actual.as_slice::<f64>() {

@@ -4,8 +4,8 @@ use std::path::{Path, PathBuf};
 
 use tenferro_cpu::CpuBackend;
 use tenferro_tensor::{
-    BackendSession, BackendSessionHost, TensorAnalytic, TensorBackend, TensorBuffer,
-    TensorDeviceTransfer, TensorDot, TensorElementwise, TensorFusion, TensorIndexing,
+    BackendRuntimeCache, BackendSession, BackendSessionHost, TensorAnalytic, TensorBackend,
+    TensorBuffer, TensorDeviceTransfer, TensorDot, TensorElementwise, TensorFusion, TensorIndexing,
     TensorReduction, TensorStructural,
 };
 
@@ -266,19 +266,9 @@ fn contains_include_macro(tokens: &[String]) -> bool {
         .any(|window| window[0] == "include" && window[1] == "!")
 }
 
-fn accepts_backend_capabilities<B>()
+fn accepts_owner_capabilities<B>()
 where
-    B: TensorElementwise
-        + TensorAnalytic
-        + TensorStructural
-        + TensorReduction
-        + TensorIndexing
-        + TensorDot
-        + TensorFusion
-        + TensorBuffer
-        + TensorDeviceTransfer
-        + BackendSessionHost
-        + TensorBackend,
+    B: BackendRuntimeCache + TensorDeviceTransfer + BackendSessionHost + TensorBackend,
 {
 }
 
@@ -298,16 +288,20 @@ where
 }
 
 #[test]
-fn cpu_backend_exposes_narrow_capability_bounds() {
-    accepts_backend_capabilities::<CpuBackend>();
+fn cpu_backend_exposes_only_owner_capabilities() {
+    // The operation capabilities live on the execution session; the owner keeps
+    // the runtime cache, device transfer and session-host capabilities.
+    accepts_owner_capabilities::<CpuBackend>();
 }
 
 #[test]
 fn backend_session_exposes_narrow_capability_bounds() {
     let mut backend = CpuBackend::new();
-    backend.with_backend_session(|session| {
-        accepts_session_capabilities(session);
-    });
+    backend
+        .with_backend_session(|session| {
+            accepts_session_capabilities(session);
+        })
+        .unwrap();
 }
 
 #[test]
@@ -333,14 +327,13 @@ fn read_elementwise_and_analytic_paths_do_not_materialize_views() {
 }
 
 #[test]
-fn cpu_surfaces_override_elementwise_read_into_with_pooled_context() {
-    let backend_source = include_str!("../../src/backend.rs");
+fn cpu_session_overrides_elementwise_read_into_with_pooled_context() {
+    // The operation implementations live on the execution session only.
     let session_source = include_str!("../../src/exec_session.rs");
 
-    for (surface, source) in [
-        ("CpuBackend", backend_source),
-        ("CpuExecSession", session_source),
-    ] {
+    {
+        let surface = "CpuExecSession";
+        let source = session_source;
         let elementwise_impl = source
             .split_once(&format!("impl TensorElementwise for {surface}"))
             .expect("TensorElementwise implementation must exist")
@@ -356,14 +349,12 @@ fn cpu_surfaces_override_elementwise_read_into_with_pooled_context() {
 
 #[test]
 fn structural_read_paths_dispatch_directly_to_typed_view_helpers() {
-    let backend_source = include_str!("../../src/backend.rs");
     let session_source = include_str!("../../src/exec_session.rs");
     let structural_source = include_str!("../../src/structural.rs");
 
-    for (surface, source) in [
-        ("CpuBackend", backend_source),
-        ("CpuExecSession", session_source),
-    ] {
+    {
+        let surface = "CpuExecSession";
+        let source = session_source;
         let structural_impl = source
             .split_once(&format!("impl TensorStructural for {surface}"))
             .expect("TensorStructural implementation must exist")
@@ -578,9 +569,40 @@ fn tensor_public_surface_has_no_context_free_materialization_api() {
         "to_contiguous",
         "to_tensor",
     ]);
+    // D4 host-container compaction: tenferro-tensor owns a host container whose
+    // compaction copies host elements with no backend, session or device, and
+    // `ErasedHostTensor` exposes exactly that. It is the named exception to this
+    // rule, so those two modules are excluded from the *public materialization*
+    // name check while every other check below still covers them. The exclusion
+    // is only sound while they stay host-only, which the next assertion pins.
+    const HOST_CONTAINER_MODULES: [&str; 2] = ["host_container.rs", "erased_host.rs"];
+    // A host-only exception has to stay host-only, so the excluded modules are
+    // also required to contain no backend/device vocabulary: the identifiers a
+    // context-free materialization could hide behind, including under a new name.
+    const SESSION_IDENTIFIERS: [&str; 7] = [
+        "BackendSession",
+        "BackendSessionHost",
+        "TensorStructural",
+        "BackendAllocation",
+        "BackendStorage",
+        "ProviderKind",
+        "AllocationGroup",
+    ];
     for path in files {
         let source = fs::read_to_string(&path).expect("Rust source file must be readable");
         let tokens = rust_tokens(&source);
+        let is_host_container = HOST_CONTAINER_MODULES
+            .iter()
+            .any(|module| path.ends_with(module));
+        if is_host_container {
+            for identifier in SESSION_IDENTIFIERS {
+                assert!(
+                    !source.contains(identifier),
+                    "{} is the host-only container exception and must not reach {identifier}",
+                    path.display()
+                );
+            }
+        }
         assert!(
             !contains_include_macro(&tokens),
             "`include!` can hide generated public API and is forbidden in tenferro-tensor source: {}",
@@ -596,8 +618,10 @@ fn tensor_public_surface_has_no_context_free_materialization_api() {
             path.display(),
             forbidden_macro_identifiers
         );
-        for name in public_function_names(&tokens) {
-            public_functions.entry(name).or_default().push(path.clone());
+        if !is_host_container {
+            for name in public_function_names(&tokens) {
+                public_functions.entry(name).or_default().push(path.clone());
+            }
         }
         for name in function_names(&tokens) {
             all_functions.entry(name).or_default().push(path.clone());
@@ -715,7 +739,6 @@ fn cpu_provider_dispatch_has_no_runtime_registry_lookup_or_legacy_staging() {
     let exec_session = include_str!("../../src/exec_session.rs");
     for function in [
         "with_linalg_pool",
-        "dot_general",
         "dot_general_read",
         "dot_general_read_into",
         "dot_general_read_into_accum",
@@ -730,21 +753,11 @@ fn cpu_provider_dispatch_has_no_runtime_registry_lookup_or_legacy_staging() {
         assert_direct_dispatch(&format!("exec_session::{function}"), body);
     }
 
-    // backend.rs also owns opt-in profiling state, so scanning the entire file
-    // would reject a HashMap that is not part of contraction dispatch. Scan all
-    // session-entry and contraction bodies instead.
+    // The contraction bodies live on the execution session (scanned above);
+    // backend.rs keeps the session-entry plumbing, which also owns opt-in
+    // profiling state.
     let backend = include_str!("../../src/backend.rs");
     for function in [
-        "with_linalg_pool",
-        "dot_general",
-        "dot_general_read",
-        "dot_general_read_into",
-        "dot_general_read_into_accum",
-        "dot_general_with_conj",
-        "dot_general_cached",
-        "dot_general_with_conj_cached",
-        "dot_general_read_into_accum_cached",
-        "grouped_gemm_cached",
         "run_backend_session_cached",
         "with_backend_session",
         "with_backend_session_cached",

@@ -14,51 +14,47 @@ This document specifies the current dense tensor data model split between
 
 The split is intentional:
 
-- `tenferro-tensor-core` is a lightweight rank/layout metadata and host-only
-  adapter layer.
-- `tenferro-tensor` adds runtime tensor storage, placement metadata, typed
-  views, and backend traits.
+- `tenferro-tensor-core` is a lightweight rank/layout, dtype and scalar
+  metadata layer with no tensor container.
+- `tenferro-tensor` owns every tensor type: the host container family
+  (`HostTensor`, `DefaultScalars`, `ScalarSet`, `ErasedHostTensor`, moved from
+  core by #1938), runtime tensor storage, placement metadata, typed views and
+  backend traits.
 - `tenferro-cpu` owns CPU backend implementations, CPU kernels, provider
   selection, and CPU execution resources.
 
 `tenferro-tensor-core` must not require computation backends, GPU runtimes,
 provider selection, graph execution, or AD. Crates that need only dtype tags,
-host tensor data, scalar traits, shape/stride metadata, or metadata-only views
-should depend on `tenferro-tensor-core`.
+scalar traits, shape/stride metadata, or metadata-only layouts should depend
+on `tenferro-tensor-core`; host tensor data needs `tenferro-tensor`, but no
+backend construction, session or AD registration.
 
 ---
 
 ## II. `tenferro-tensor-core`
 
-`tenferro-tensor-core` owns backend-independent host tensor metadata and
-contiguous host storage.
+`tenferro-tensor-core` owns backend-independent metadata only.
 
 Current public concepts:
 
-- `DType`: runtime dtype tags for the scalars a set declares. The set tenferro
-  ships declares `F32`, `F64`, `I32`, `I64`, `Bool`, `C32`, and `C64`; a
-  downstream set declares its own members, and a value whose scalar no preset
-  declares carries `DType::External(TypeId)`. A set is declared once with
-  `define_scalar_set!`, which generates the tag enum, the value enum, and the
-  membership implementations.
-- `TensorScalar`: sealed scalar trait for the members of a declared scalar set.
-  The open boundary a downstream scalar implements is `Scalar` together with the
-  arithmetic and domain traits, and an externally defined scalar travels in an
-  erased host tensor rather than through `TensorScalar`.
-- `HostTensor<T>`: owned typed host tensor with contiguous column-major data.
-- `Tensor`: dynamic host tensor enum over the supported scalar types.
-- `HostTensorView<'a, T>` and `TensorView<'a>`: borrowed metadata-only views.
-- `TensorRef<'a>`: borrowed dynamic tensor reference.
-- `ShapeVec` and `StrideVec`: compact shape and signed-stride vectors.
-- `SliceSpec`: explicit slice descriptor. A zero step is invalid.
-
-Core tensors are host-resident and backend-independent. They have no device
-placement, no backend-owned buffers, no GPU handles, and no execution methods.
+- `DType`: runtime dtype tags. The preset set declares `F32`, `F64`, `I32`,
+  `I64`, `Bool`, `C32`, and `C64`; a value whose scalar no preset declares
+  carries `DType::External(TypeId)`. Tag enums are declared with
+  `define_scalar_tag!`; `define_scalar_set!` (in `tenferro-tensor`) builds a
+  tag enum plus a host-tensor value enum on top of it.
+- `TensorScalar`: sealed scalar trait (`Real` plus `dtype()`) for the preset
+  members. The open boundary a downstream scalar implements is `Scalar`
+  together with the arithmetic and domain traits.
+- Promotion facts: `MemberKind`, `MemberSpec`, `promote_specs`,
+  `promote_in_set`.
+- `TensorLayout<R>`, `Rank<N>`, `DynRank`, `TensorRank`, `ShapeVec`,
+  `StrideVec`, `SliceSpec` and checked layout validation. A zero slice step is
+  invalid.
 
 ### Metadata-only views
 
-Core views describe shape, signed strides, and an offset into borrowed host
-storage. The view operations are metadata-only:
+Layouts describe shape, signed strides, and an offset into borrowed storage.
+The view operations are metadata-only:
 
 - `reshape_view`
 - `transpose_view`
@@ -68,13 +64,10 @@ Views may be non-contiguous. `as_slice()` succeeds only when the view is
 slice-contiguous for the borrowed storage. `TensorLayout` metadata slicing
 supports signed strides and negative steps when reachable-range validation
 proves every logical element maps inside the backing allocation. Zero step
-remains invalid.
-
-The current `tenferro-tensor-core` host adapters
-`HostTensorView::slice_view` and `TensorView::slice_view` are a narrower
-positive-step compatibility surface. Runtime views in `tenferro-tensor`
-(`TypedTensorView` and `TypedTensorViewMut`) use the general reachable-range
-contract for negative-step metadata views.
+remains invalid. The host-container views `HostTensorView::slice_view` and the
+erased host view are a narrower positive-step surface; runtime views
+(`TypedTensorView`, `TypedTensorViewMut`) use the general reachable-range
+contract.
 
 ---
 
@@ -86,17 +79,18 @@ and scalar model, then adds runtime storage and backend placement.
 The current typed runtime tensor shape is:
 
 ```rust
-pub struct TypedTensor<T, R = DynRank> {
-    pub buffer: Buffer<T>,
-    layout: TensorLayout<R>,
-    pub placement: Placement,
-}
-
-pub enum Buffer<T> {
-    Host(Vec<T>),
-    Backend(Arc<dyn BackendBuffer<T>>),
+pub struct TypedTensor<T, R = DynRank, D: Representation = Dynamic> {
+    shape: R::Shape,
+    placement: Placement,
+    storage: D::Storage<T, R>, // Host: Vec<T>; Gpu: group root; Dynamic: either
 }
 ```
+
+`Host` gives infallible host access, `Clone`, `Index`/`IndexMut` and owning
+host mappings; `Gpu` and `Dynamic` expose checked host access. `into_host`,
+`into_gpu` and `into_dynamic` convert between representations without copying;
+a rejected narrowing returns the unchanged owner. The owned layout is derived
+from the shape (column-major).
 
 `Tensor` is the dynamic runtime enum over the supported scalar types:
 
@@ -298,8 +292,10 @@ The trailing-batch convention also applies to `DotGeneral` / `BatchedGemm`
 
 Current implementation ownership:
 
-- `crates/tenferro-tensor-core/src/lib.rs` for the host-only data model and
-  metadata-only views
+- `crates/tenferro-tensor-core/src/lib.rs` for dtype, scalar and layout
+  metadata
+- `crates/tenferro-tensor/src/host_container.rs`, `scalar_set.rs` and
+  `erased_host.rs` for the host container family
 - `crates/tenferro-tensor/src/types.rs` for runtime dense tensor storage and
   placement metadata
 - `crates/tenferro-tensor/src/backend.rs` for backend traits

@@ -3,7 +3,7 @@
 //! This crate exists to show that the ordinary CPU numerical path in
 //! `tenferro-cpu` does not require the preset scalar types. It defines its own
 //! real scalar as a two-`f64` expansion, stores it in
-//! [`tenferro_tensor_core::HostTensor`], and executes through
+//! [`tenferro_tensor::HostTensor`], and executes through
 //! [`tenferro_cpu::scalar_binary_into`] and [`tenferro_cpu::scalar_fold`] using
 //! the same traversal the preset scalars use.
 //!
@@ -20,7 +20,7 @@ pub mod conversion;
 mod dense;
 pub mod extension;
 
-tenferro_tensor_core::define_scalar_set! {
+tenferro_tensor::define_scalar_set! {
     /// Tag for the external extended-precision set.
     ///
     /// # Examples
@@ -42,7 +42,7 @@ tenferro_tensor_core::define_scalar_set! {
     ///
     /// ```rust
     /// use tenferro_df64_proof::{Df64, ExtendedSet, ExtendedTag};
-    /// use tenferro_tensor_core::{HostTensor, ScalarSet};
+    /// use tenferro_tensor::{HostTensor, ScalarSet};
     ///
     /// let value = ExtendedSet::Df64(
     ///     HostTensor::from_vec_col_major(vec![1], vec![Df64::from_f64(2.0)])?,

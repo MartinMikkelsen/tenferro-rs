@@ -34,7 +34,6 @@ mod eager;
 mod eager_backend;
 pub(crate) mod eager_exec;
 pub(crate) mod eager_ops;
-pub(crate) mod eager_ops_elementwise;
 pub mod extension;
 pub mod prelude;
 // semantic_compat removed in Unification 7.
@@ -46,8 +45,8 @@ mod transform_cache;
 
 pub use context::{AdContext, AdContextBuilder, AdContextCacheStats};
 pub use eager::{
-    CpuPlacementBoundEager, EagerNoGradGuard, EagerRuntime, EagerRuntimeCacheStats, EagerTensor,
-    EagerTraceCaptureGuard, GradientValue, Gradients, IntoValueError, ValueGuard,
+    CpuPlacementBoundEager, EagerNoGradGuard, EagerRuntime, EagerRuntimeCacheStats, EagerSession,
+    EagerTensor, EagerTraceCaptureGuard, GradientValue, Gradients, IntoValueError, ValueGuard,
 };
 pub use shape_packing::EagerSliceBuilder;
 pub(crate) use tenferro_runtime::{extension_cache, scalar_semantics};

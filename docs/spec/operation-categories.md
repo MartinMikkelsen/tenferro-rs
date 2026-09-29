@@ -24,12 +24,15 @@ and `DynRank` (default). `DynRank` is the canonical rank for AD and traced execu
 (`TracedTensor`/`EagerTensor` are rank-erased); do not push const-generic `Rank<N>`
 through the AD/traced surfaces. This is current design intent, not a frozen contract.
 
-**API style.** Core AD operations on `EagerTensor` and `TracedTensor` are methods
-or associated functions, not module free functions. Single-output operations use
-methods (`x.exp()`, `x.matmul(&y)`, `x.gather(&idx, config)`); operations with no
-natural receiver use associated functions (`TracedTensor::concatenate(...)`,
-`EagerTensor::where_select(...)`). Non-AD concrete operations use
-backend-explicit crate-root session extension traits (`TensorSessionOpsExt`,
+**API style.** Traced core operations use `TracedTensor` methods or associated
+functions, not module free functions (`x.exp()`, `x.matmul(&y)`,
+`TracedTensor::concatenate(...)`). Eager core operations use methods on a
+runtime-bound `EagerSession` within `EagerRuntime::with_eager_session`:
+`session.exp(&x)`, `session.dynamic_slice(&x, &starts, &sizes)`, and
+`session.where_select(&condition, &on_true, &on_false)`; `EagerTensor` is the
+value/trace handle and does not implicitly enter the backend for each operation.
+Non-AD concrete operations use backend-explicit crate-root session extension
+traits (`TensorSessionOpsExt`,
 `TypedTensorSessionOpsExt`, and `TypedTensorMaskSessionOpsExt`) because
 `Tensor` and `TypedTensor` are owned by `tenferro-tensor`, not
 `tenferro-runtime`. Extension
@@ -238,7 +241,8 @@ ecosystems (e.g. rust-ndarray#1591).
 
 ## Enforcement
 
-`scripts/check-operation-categories.py` verifies that the implemented public surface
-matches this contract (especially the Eager/Traced parity rule), in the same spirit
-as the other repository boundary checks. The contract and its parity matrix are
+`scripts/check-operation-categories.py` checks the required public method names
+on `EagerSession` (across `eager.rs` and `shape_packing.rs`) and `TracedTensor`,
+including the Eager/Traced parity rule. It does not validate runtime behavior;
+focused operation tests cover that separately. The contract and its parity matrix are
 frozen together with the public API (see the API-freeze issue).

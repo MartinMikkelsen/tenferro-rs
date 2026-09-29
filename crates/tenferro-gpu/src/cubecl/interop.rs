@@ -22,6 +22,13 @@ use super::error::unsupported_dtype;
 use super::{dispatch, CudaRuntime};
 
 /// CubeCL-owned byte allocation kept alive for CUDA-library workspace calls.
+// INVARIANT: dropping the handle needs no retirement event. The buffer is only
+// reachable through the `!Send` raw `DeviceBytes<'s>`, so it drops on the thread
+// whose captured CubeCL stream ran the vendor work; CubeCL CUDA keeps one memory
+// pool per stream, so the freed block is reused only by later work on that same
+// stream, which is ordered after the vendor call. Workspaces that can drop on
+// another thread (the cuTENSOR plan cache) retire through
+// `WorkspaceRetirementQueue` instead.
 pub struct DeviceByteBuffer {
     handle: Option<cubecl_runtime::server::Handle>,
     ptr: *mut c_void,

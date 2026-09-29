@@ -1,6 +1,7 @@
 use super::super::blas1::blas1_len;
 use cudarc::cublas::sys as cublas;
 use num_complex::{Complex32, Complex64};
+use tenferro_tensor::BackendSessionHost;
 
 #[test]
 fn blas1_length_stays_within_the_portable_cublas_interface() {
@@ -17,7 +18,7 @@ fn blas1_length_stays_within_the_portable_cublas_interface() {
 #[ignore = "requires CUDA 12.8+ GPU"]
 fn cuda_axpby_reads_an_offset_strided_source_in_place() {
     use num_complex::Complex64;
-    use tenferro_tensor::{BackendSession, ContractionScalar, TensorRead, TensorView, TensorWrite};
+    use tenferro_tensor::{ContractionScalar, TensorRead, TensorView, TensorWrite};
 
     use super::super::blas1::{
         reset_strided_source_passes_for_test, strided_source_passes_for_test,
@@ -52,12 +53,15 @@ fn cuda_axpby_reads_an_offset_strided_source_in_place() {
             }
         }
         let host_x = tensor_c64(vec![2, 3], host_region);
-        cpu.axpby_read_into_accum(
-            alpha,
-            TensorRead::from_tensor(&host_x),
-            beta,
-            TensorWrite::from_tensor(&mut expected),
-        )
+        cpu.with_backend_session(|__s| {
+            __s.axpby_read_into_accum(
+                alpha,
+                TensorRead::from_tensor(&host_x),
+                beta,
+                TensorWrite::from_tensor(&mut expected),
+            )
+        })
+        .unwrap()
         .unwrap();
     }
 
@@ -71,12 +75,15 @@ fn cuda_axpby_reads_an_offset_strided_source_in_place() {
         .unwrap();
 
     reset_strided_source_passes_for_test();
-    gpu.axpby_read_into_accum(
-        alpha,
-        TensorRead::from_view(TensorView::C64(source_region)),
-        beta,
-        TensorWrite::from_tensor(&mut gpu_destination),
-    )
+    gpu.with_backend_session(|__s| {
+        __s.axpby_read_into_accum(
+            alpha,
+            TensorRead::from_view(TensorView::C64(source_region)),
+            beta,
+            TensorWrite::from_tensor(&mut gpu_destination),
+        )
+    })
+    .unwrap()
     .unwrap();
     assert_eq!(
         strided_source_passes_for_test(),
@@ -101,7 +108,7 @@ fn cuda_axpby_reads_an_offset_strided_source_in_place() {
 #[ignore = "requires CUDA 12.8+ GPU"]
 fn cuda_axpby_keeps_compact_operands_on_cublas() {
     use num_complex::Complex64;
-    use tenferro_tensor::{BackendSession, ContractionScalar, TensorRead, TensorWrite};
+    use tenferro_tensor::{ContractionScalar, TensorRead, TensorWrite};
 
     use super::super::blas1::{
         reset_strided_source_passes_for_test, strided_source_passes_for_test,
@@ -115,12 +122,15 @@ fn cuda_axpby_keeps_compact_operands_on_cublas() {
     let mut gpu_y = upload(&gpu, &host_y);
 
     reset_strided_source_passes_for_test();
-    gpu.axpby_read_into_accum(
-        ContractionScalar::C64(Complex64::new(1.0, 0.0)),
-        TensorRead::from_tensor(&gpu_x),
-        ContractionScalar::C64(Complex64::new(1.0, 0.0)),
-        TensorWrite::from_tensor(&mut gpu_y),
-    )
+    gpu.with_backend_session(|__s| {
+        __s.axpby_read_into_accum(
+            ContractionScalar::C64(Complex64::new(1.0, 0.0)),
+            TensorRead::from_tensor(&gpu_x),
+            ContractionScalar::C64(Complex64::new(1.0, 0.0)),
+            TensorWrite::from_tensor(&mut gpu_y),
+        )
+    })
+    .unwrap()
     .unwrap();
 
     assert_eq!(strided_source_passes_for_test(), 0);

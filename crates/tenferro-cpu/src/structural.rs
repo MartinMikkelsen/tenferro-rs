@@ -272,7 +272,7 @@ where
     map_into(&mut out.as_uninit_view_mut()?, &src, MaybeUninit::new)
         .map_err(|err| crate::Error::backend_source(op, err))?;
     // SAFETY: the successful copy replay writes every logical destination element.
-    let mut out = unsafe { out.assume_init_as::<R>()? };
+    let mut out = unsafe { out.assume_init_as_recycled::<R>()? };
     out.set_placement(view.placement().clone());
     Ok(out)
 }

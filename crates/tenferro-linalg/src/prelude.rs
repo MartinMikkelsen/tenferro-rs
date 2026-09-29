@@ -12,6 +12,6 @@ pub use tenferro_runtime::{Tensor, TensorRead, TracedTensor, TypedTensor};
 pub use tenferro_tensor::BackendSessionHost;
 
 #[cfg(feature = "autodiff")]
-pub use crate::EagerTensorLinalgExt;
+pub use crate::{EagerSessionLinalgExt, EagerTensorLinalgExt};
 #[cfg(feature = "autodiff")]
-pub use tenferro_ad::{EagerRuntime, EagerTensor};
+pub use tenferro_ad::{EagerRuntime, EagerSession, EagerTensor};

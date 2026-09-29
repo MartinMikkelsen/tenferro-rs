@@ -251,7 +251,8 @@ fn owned_and_borrowed_full_svd_agree_for_every_dtype_and_shape() {
                             "full and thin spectra disagree: {full} vs {thin}"
                         );
                     }
-                });
+                })
+                .unwrap();
             }
         }
     }
@@ -315,7 +316,8 @@ fn full_svd_read_consumes_strided_offset_and_reversed_views_unchanged() {
                         "{label}: borrowed and owned spectra disagree"
                     );
                 }
-            });
+            })
+            .unwrap();
         }
 
         assert_eq!(
@@ -352,7 +354,8 @@ fn full_svd_keeps_square_factors_when_a_core_dimension_is_empty() {
                     assert_isometric(&u, m, m, 1.0e-12, "empty U");
                     assert_isometric(&vt, n, n, 1.0e-12, "empty Vt");
                 }
-            });
+            })
+            .unwrap();
         }
     }
 }
@@ -401,7 +404,8 @@ fn full_svd_handles_batched_inputs_per_matrix() {
                     }
                 }
             }
-        });
+        })
+        .unwrap();
     }
 }
 
@@ -426,7 +430,8 @@ fn typed_full_svd_returns_real_singular_values() {
             // `TypedSvd<Complex64>` types the singular values as f64.
             let values: &[f64] = s.as_slice().unwrap();
             assert!(values[0] >= values[1] && values[1] >= 0.0);
-        });
+        })
+        .unwrap();
     }
 }
 
@@ -440,7 +445,8 @@ fn full_svd_read_rejects_unsupported_dtypes_before_provider_entry() {
                 .svd_full_read(session)
                 .unwrap_err();
             assert_eq!(error.kind(), ErrorKind::Unsupported);
-        });
+        })
+        .unwrap();
     }
 }
 
@@ -460,23 +466,27 @@ fn faer_view_path_does_not_pool_an_input_copy() {
     );
 
     let mut view_host = faer_backend();
-    view_host.with_backend_session(|session| {
-        TensorRead::from_tensor(&owned)
-            .svd_full_read(session)
-            .unwrap();
-    });
+    view_host
+        .with_backend_session(|session| {
+            TensorRead::from_tensor(&owned)
+                .svd_full_read(session)
+                .unwrap();
+        })
+        .unwrap();
     let view_stats = view_host.buffer_pool_stats().unwrap();
 
     let mut packed_host = faer_backend();
-    packed_host.with_backend_session(|session| {
-        let reversed = base
-            .as_view()
-            .try_slice(&[StridedSliceSpec::reverse(), StridedSliceSpec::reverse()])
-            .unwrap();
-        TensorRead::from_view(TensorView::F64(reversed))
-            .svd_full_read(session)
-            .unwrap();
-    });
+    packed_host
+        .with_backend_session(|session| {
+            let reversed = base
+                .as_view()
+                .try_slice(&[StridedSliceSpec::reverse(), StridedSliceSpec::reverse()])
+                .unwrap();
+            TensorRead::from_view(TensorView::F64(reversed))
+                .svd_full_read(session)
+                .unwrap();
+        })
+        .unwrap();
     let packed_stats = packed_host.buffer_pool_stats().unwrap();
 
     let input_copy_bytes = m * n * std::mem::size_of::<f64>();
@@ -500,6 +510,7 @@ fn owned_full_svd_reports_unsupported_dtypes_from_the_provider_boundary() {
         host.with_backend_session(|session| {
             let error = input.svd_full(session).unwrap_err();
             assert_eq!(error.kind(), ErrorKind::Unsupported);
-        });
+        })
+        .unwrap();
     }
 }

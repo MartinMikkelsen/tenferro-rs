@@ -52,6 +52,7 @@ fn compact_factor_and_append_reconstructs_f64() {
             assert_close(&product(f64_data(&q), 4, 4, f64_data(&r), 4), &expected);
             Ok::<(), tenferro_tensor::Error>(())
         })
+        .unwrap()
         .unwrap();
 }
 
@@ -73,6 +74,7 @@ fn compact_from_factors_reconstructs_f64() {
             );
             Ok::<(), tenferro_tensor::Error>(())
         })
+        .unwrap()
         .unwrap();
 }
 

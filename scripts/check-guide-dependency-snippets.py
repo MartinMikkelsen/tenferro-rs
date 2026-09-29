@@ -96,14 +96,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         vec![2, 2],
         vec![0.0_f64, 2.0, 1.0, 3.0],
     )?;
-    let (p, l, u, q, parity) = backend.with_backend_session(|session| a.full_piv_lu(session))?;
+    let (p, l, u, q, parity) = backend.with_backend_session(|session| a.full_piv_lu(session))??;
 
     let reconstructed = backend.with_backend_session(|session| {
         let pt = p.transpose(&[1, 0], session)?;
         let pt_l = pt.matmul(&l, session)?;
         let pt_lu = pt_l.matmul(&u, session)?;
         pt_lu.matmul(&q, session)
-    })?;
+    })??;
     assert!(max_abs_diff(&reconstructed, &a) < 1.0e-12);
 
     assert_eq!(parity.shape(), &[] as &[usize]);
@@ -111,7 +111,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     assert!(parity_value == 1.0 || parity_value == -1.0);
 
     let b = Tensor::from_vec_col_major(vec![2, 1], vec![-1.0_f64, 5.0])?;
-    let x = backend.with_backend_session(|session| a.full_piv_lu_solve(&b, session))?;
+    let x = backend.with_backend_session(|session| a.full_piv_lu_solve(&b, session))??;
     assert_eq!(x.shape(), &[2, 1]);
 
     Ok(())
@@ -146,7 +146,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let sum = lhs.add(&rhs, session)?;
         let product = lhs.mul(&rhs, session)?;
         sum.compare(&product, CompareDir::Lt, session)
-    })?;
+    })??;
     assert_eq!(mask.as_slice()?, &[false, true, true]);
 
     let ctx = EagerRuntime::new()?;

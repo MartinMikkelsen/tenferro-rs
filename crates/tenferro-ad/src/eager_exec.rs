@@ -8,17 +8,13 @@ use tenferro_runtime::program::{ProgramInputSpec, SemanticProgramBuilder};
 use tenferro_runtime::{ErrorPhase, GraphCompiler, Runtime};
 use tenferro_tensor::DotGeneralConfig;
 use tenferro_tensor::{
-    BackendSession, DType, PadConfig, SliceConfig, Tensor, TensorBackend, TensorRead, TypedTensor,
+    BackendSession, BackendSessionHost, DType, PadConfig, SliceConfig, Tensor, TensorRead,
+    TypedTensor,
 };
 
 use crate::error::{Error, Result};
 use crate::scalar_semantics::dynamic_truncate_size;
 use crate::shape_infer::{promote_dtype, promote_dtype_for_binary_op, promote_dtypes};
-
-enum PromotedTensor<'a> {
-    Borrowed(&'a Tensor),
-    Owned(Box<Tensor>),
-}
 
 enum PromotedTensorRead<'a> {
     Borrowed(Box<TensorRead<'a>>),
@@ -98,15 +94,6 @@ pub(crate) fn eager_input_promotion_plan(
     }
 }
 
-impl<'a> PromotedTensor<'a> {
-    fn tensor(&'a self) -> &'a Tensor {
-        match self {
-            Self::Borrowed(tensor) => tensor,
-            Self::Owned(tensor) => tensor,
-        }
-    }
-}
-
 impl PromotedTensorRead<'_> {
     fn tensor_read(&self) -> TensorRead<'_> {
         match self {
@@ -123,44 +110,6 @@ impl<'a> ConcreteTensorRead<'a> {
             Self::Owned(tensor) => tensor,
         }
     }
-}
-
-fn promote_to_dtype<'a>(
-    exec: &mut dyn BackendSession,
-    tensor: &'a Tensor,
-    promoted: DType,
-) -> Result<PromotedTensor<'a>> {
-    if tensor.dtype() == promoted {
-        Ok(PromotedTensor::Borrowed(tensor))
-    } else {
-        Ok(PromotedTensor::Owned(Box::new(
-            exec.convert(tensor, promoted).map_err(Error::from)?,
-        )))
-    }
-}
-
-/// If the two tensors have different dtypes, insert Convert ops so they
-/// both match the promoted result dtype. Returns the (possibly converted)
-/// tensors.
-fn promote_binary_to_dtype<'a>(
-    exec: &mut dyn BackendSession,
-    a: &'a Tensor,
-    b: &'a Tensor,
-    promoted: DType,
-) -> Result<(PromotedTensor<'a>, PromotedTensor<'a>)> {
-    let a = promote_to_dtype(exec, a, promoted)?;
-    let b = promote_to_dtype(exec, b, promoted)?;
-    Ok((a, b))
-}
-
-fn promote_binary<'a>(
-    exec: &mut dyn BackendSession,
-    a: &'a Tensor,
-    b: &'a Tensor,
-    op: &StdTensorOp,
-) -> Result<(PromotedTensor<'a>, PromotedTensor<'a>)> {
-    let plan = eager_input_promotion_plan(op, 2, |index| [a.dtype(), b.dtype()][index]);
-    promote_binary_to_dtype(exec, a, b, plan.target_dtype(0, a.dtype()))
 }
 
 fn materialize_tensor_read(exec: &mut dyn BackendSession, input: TensorRead<'_>) -> Result<Tensor> {
@@ -245,30 +194,28 @@ fn promote_binary_reads<'a>(
     promote_binary_reads_to_dtype(exec, a, b, promoted)
 }
 
-pub(crate) fn exec_dot_general_with_conj_on_tensor_reads<B: TensorBackend>(
+pub(crate) fn exec_dot_general_with_conj_on_tensor_reads_in_session(
     lhs: TensorRead<'_>,
     rhs: TensorRead<'_>,
     config: &DotGeneralConfig,
     lhs_conj: bool,
     rhs_conj: bool,
-    backend: &mut B,
+    exec: &mut dyn BackendSession,
 ) -> Result<Tensor> {
     let op = StdTensorOp::DotGeneral {
         config: config.clone(),
     };
     let plan = eager_input_promotion_plan(&op, 2, |index| [lhs.dtype(), rhs.dtype()][index]);
     let promoted = plan.target_dtype(0, lhs.dtype());
-    backend.with_backend_session(|exec| {
-        let (lhs, rhs) = promote_binary_reads_to_dtype(exec, lhs, rhs, promoted)?;
-        exec.dot_general_with_conj_read(
-            lhs.tensor_read(),
-            rhs.tensor_read(),
-            config,
-            lhs_conj,
-            rhs_conj,
-        )
-        .map_err(Error::from)
-    })
+    let (lhs, rhs) = promote_binary_reads_to_dtype(exec, lhs, rhs, promoted)?;
+    exec.dot_general_with_conj_read(
+        lhs.tensor_read(),
+        rhs.tensor_read(),
+        config,
+        lhs_conj,
+        rhs_conj,
+    )
+    .map_err(Error::from)
 }
 
 /// Execute a single [`StdTensorOp`] on concrete tensors.
@@ -276,7 +223,7 @@ pub(crate) fn exec_dot_general_with_conj_on_tensor_reads<B: TensorBackend>(
 /// This core helper rejects extension ops because they require a runtime owner
 /// with an installed extension module.
 #[cfg(test)]
-pub(crate) fn exec_op_on_tensors<B: TensorBackend>(
+pub(crate) fn exec_op_on_tensors<B: BackendSessionHost>(
     op: &StdTensorOp,
     inputs: &[&Tensor],
     backend: &mut B,
@@ -288,7 +235,7 @@ pub(crate) fn exec_op_on_tensors<B: TensorBackend>(
     exec_standard_op_on_tensors(op, inputs, backend)
 }
 
-pub(crate) fn exec_op_on_tensors_with_runtime<B: TensorBackend>(
+pub(crate) fn exec_op_on_tensors_with_runtime<B: BackendSessionHost>(
     op: &StdTensorOp,
     inputs: &[&Tensor],
     backend: &mut B,
@@ -305,7 +252,7 @@ pub(crate) fn exec_op_on_tensors_with_runtime<B: TensorBackend>(
     exec_standard_op_on_tensors(op, inputs, backend)
 }
 
-pub(crate) fn exec_op_on_tensor_reads_with_runtime<B: TensorBackend>(
+pub(crate) fn exec_op_on_tensor_reads_with_runtime<B: BackendSessionHost>(
     op: &StdTensorOp,
     inputs: &[TensorRead<'_>],
     backend: &mut B,
@@ -316,7 +263,7 @@ pub(crate) fn exec_op_on_tensor_reads_with_runtime<B: TensorBackend>(
             return Err(missing_extension_module_error(ext.as_ref()));
         };
         let concrete_inputs =
-            backend.with_backend_session(|exec| concrete_tensor_reads(exec, inputs))?;
+            backend.with_backend_session(|exec| concrete_tensor_reads(exec, inputs))??;
         let input_refs: Vec<&Tensor> = concrete_inputs.iter().map(|input| input.tensor()).collect();
         return execute_extension_op_via_runtime(Arc::clone(ext), &input_refs, runtime);
     }
@@ -402,15 +349,6 @@ fn pad_to_match_high_padding(target_size: usize, current_size: usize) -> Result<
     })
 }
 
-fn upload_generated_host_tensor<B: TensorBackend>(
-    backend: &mut B,
-    tensor: Tensor,
-) -> Result<Tensor> {
-    backend
-        .upload_host_tensor(TensorRead::from_tensor(&tensor))
-        .map_err(Error::from)
-}
-
 fn shape_of_host_tensor(axis: usize, shape: &[usize]) -> Result<Tensor> {
     if axis >= shape.len() {
         return Err(axis_out_of_bounds("ShapeOf", axis, shape.len()));
@@ -422,43 +360,56 @@ fn shape_of_host_tensor(axis: usize, shape: &[usize]) -> Result<Tensor> {
     )?))
 }
 
-fn execute_generated_host_output_on_backend_reads<B: TensorBackend>(
+fn generated_host_output(
+    op: &StdTensorOp,
+    input_shape: Option<&[usize]>,
+) -> Result<Option<Tensor>> {
+    match op {
+        StdTensorOp::Constant { dtype, bytes } => constant_tensor(*dtype, bytes).map(Some),
+        StdTensorOp::ShapeOf { axis } => {
+            let shape = input_shape.ok_or_else(|| invalid_config("ShapeOf", "missing input"))?;
+            shape_of_host_tensor(*axis, shape).map(Some)
+        }
+        _ => Ok(None),
+    }
+}
+
+pub(crate) fn exec_standard_op_on_tensor_reads_with_session(
     op: &StdTensorOp,
     inputs: &[TensorRead<'_>],
-    backend: &mut B,
-) -> Result<Option<Tensor>> {
-    let host = match op {
-        StdTensorOp::Constant { dtype, bytes } => constant_tensor(*dtype, bytes)?,
-        StdTensorOp::ShapeOf { axis } => shape_of_host_tensor(*axis, inputs[0].shape())?,
-        _ => return Ok(None),
-    };
-    upload_generated_host_tensor(backend, host).map(Some)
+    exec: &mut dyn BackendSession,
+) -> Result<Vec<Tensor>> {
+    if let Some(host) = generated_host_output(op, inputs.first().map(TensorRead::shape))? {
+        return exec
+            .upload_host_tensor(TensorRead::from_tensor(&host))
+            .map(|output| vec![output])
+            .map_err(Error::from);
+    }
+    exec_standard_op_on_tensor_reads_in_session(op, inputs, exec)
 }
 
-fn execute_generated_host_output_on_backend_tensors<B: TensorBackend>(
+pub(crate) fn exec_standard_op_on_tensors_with_session(
     op: &StdTensorOp,
     inputs: &[&Tensor],
-    backend: &mut B,
-) -> Result<Option<Tensor>> {
-    let host = match op {
-        StdTensorOp::Constant { dtype, bytes } => constant_tensor(*dtype, bytes)?,
-        StdTensorOp::ShapeOf { axis } => shape_of_host_tensor(*axis, inputs[0].shape())?,
-        _ => return Ok(None),
-    };
-    upload_generated_host_tensor(backend, host).map(Some)
+    exec: &mut dyn BackendSession,
+) -> Result<Vec<Tensor>> {
+    if let Some(host) = generated_host_output(op, inputs.first().map(|tensor| tensor.shape()))? {
+        return exec
+            .upload_host_tensor(TensorRead::from_tensor(&host))
+            .map(|output| vec![output])
+            .map_err(Error::from);
+    }
+    exec_standard_op_on_tensors_in_session(op, inputs, exec)
 }
 
-fn exec_standard_op_on_tensor_reads<B: TensorBackend>(
+fn exec_standard_op_on_tensor_reads<B: BackendSessionHost>(
     op: &StdTensorOp,
     inputs: &[TensorRead<'_>],
     backend: &mut B,
 ) -> Result<Vec<Tensor>> {
-    if let Some(output) = execute_generated_host_output_on_backend_reads(op, inputs, backend)? {
-        return Ok(vec![output]);
-    }
-
-    backend
-        .with_backend_session(|exec| exec_standard_op_on_tensor_reads_in_session(op, inputs, exec))
+    backend.with_backend_session(|exec| {
+        exec_standard_op_on_tensor_reads_with_session(op, inputs, exec)
+    })?
 }
 
 pub(crate) fn exec_standard_op_on_tensor_reads_in_session(
@@ -721,234 +672,27 @@ pub(crate) fn exec_standard_op_on_tensor_reads_in_session(
     Ok(result)
 }
 
-fn exec_standard_op_on_tensors<B: TensorBackend>(
+fn exec_standard_op_on_tensors<B: BackendSessionHost>(
     op: &StdTensorOp,
     inputs: &[&Tensor],
     backend: &mut B,
 ) -> Result<Vec<Tensor>> {
-    if let Some(output) = execute_generated_host_output_on_backend_tensors(op, inputs, backend)? {
-        return Ok(vec![output]);
-    }
-
-    backend.with_backend_session(|exec| {
-        let promotion_plan =
-            eager_input_promotion_plan(op, inputs.len(), |index| inputs[index].dtype());
-        let target_dtype = |index| promotion_plan.target_dtype(index, inputs[index].dtype());
-        let result = match op {
-            StdTensorOp::Add => {
-                let (a, b) = promote_binary(exec, inputs[0], inputs[1], op)?;
-                vec![exec.add(a.tensor(), b.tensor())?]
-            }
-            StdTensorOp::Sub => {
-                let (a, b) = promote_binary(exec, inputs[0], inputs[1], op)?;
-                vec![exec.sub(a.tensor(), b.tensor())?]
-            }
-            StdTensorOp::Mul => {
-                let (a, b) = promote_binary(exec, inputs[0], inputs[1], op)?;
-                vec![exec.mul(a.tensor(), b.tensor())?]
-            }
-            StdTensorOp::Neg => vec![exec.neg(inputs[0])?],
-            StdTensorOp::Div => {
-                let (a, b) = promote_binary(exec, inputs[0], inputs[1], op)?;
-                vec![exec.div(a.tensor(), b.tensor())?]
-            }
-            StdTensorOp::Rem => {
-                let (a, b) = promote_binary(exec, inputs[0], inputs[1], op)?;
-                vec![exec.rem(a.tensor(), b.tensor())?]
-            }
-            StdTensorOp::Exp => vec![exec.exp(inputs[0])?],
-            StdTensorOp::Log => vec![exec.log(inputs[0])?],
-            StdTensorOp::Sin => vec![exec.sin(inputs[0])?],
-            StdTensorOp::Cos => vec![exec.cos(inputs[0])?],
-            StdTensorOp::Tanh => vec![exec.tanh(inputs[0])?],
-            StdTensorOp::Sqrt => vec![exec.sqrt(inputs[0])?],
-            StdTensorOp::Rsqrt => vec![exec.rsqrt(inputs[0])?],
-            StdTensorOp::Pow => {
-                let (a, b) = promote_binary(exec, inputs[0], inputs[1], op)?;
-                vec![exec.pow(a.tensor(), b.tensor())?]
-            }
-            StdTensorOp::Abs => vec![exec.abs(inputs[0])?],
-            StdTensorOp::Sign => vec![exec.sign(inputs[0])?],
-            StdTensorOp::Conj => vec![exec.conj(inputs[0])?],
-            StdTensorOp::Maximum => {
-                let (a, b) = promote_binary(exec, inputs[0], inputs[1], op)?;
-                vec![exec.maximum(a.tensor(), b.tensor())?]
-            }
-            StdTensorOp::Minimum => {
-                let (a, b) = promote_binary(exec, inputs[0], inputs[1], op)?;
-                vec![exec.minimum(a.tensor(), b.tensor())?]
-            }
-            StdTensorOp::Compare(dir) => {
-                let (a, b) = promote_binary(exec, inputs[0], inputs[1], op)?;
-                vec![exec.compare(a.tensor(), b.tensor(), dir)?]
-            }
-            StdTensorOp::Transpose { perm } => vec![exec.transpose(inputs[0], perm)?],
-            StdTensorOp::ReduceSum { axes, .. } => vec![exec.reduce_sum(inputs[0], axes)?],
-            StdTensorOp::ReduceSumSquares { axes, .. } => {
-                vec![exec.reduce_sum_squares_read(
-                    tenferro_tensor::TensorRead::from_tensor(inputs[0]),
-                    axes,
-                )?]
-            }
-            StdTensorOp::DotGeneral { config, .. } => {
-                let (a, b) = promote_binary(exec, inputs[0], inputs[1], op)?;
-                vec![exec.dot_general(a.tensor(), b.tensor(), config)?]
-            }
-            StdTensorOp::Reshape { to_shape, .. } => {
-                let shape = resolve_tensor_shape_exprs(inputs, to_shape)?;
-                vec![exec.reshape(inputs[0], &shape)?]
-            }
-            StdTensorOp::BroadcastInDim { shape, dims } => {
-                let shape = resolve_tensor_shape_exprs(inputs, shape)?;
-                vec![exec.broadcast_in_dim(inputs[0], &shape, dims)?]
-            }
-            StdTensorOp::ExtractDiag { axis_a, axis_b } => {
-                vec![exec.extract_diagonal(inputs[0], *axis_a, *axis_b)?]
-            }
-            StdTensorOp::EmbedDiag { axis_a, axis_b } => {
-                vec![exec.embed_diagonal(inputs[0], *axis_a, *axis_b)?]
-            }
-            StdTensorOp::Tril { k } => vec![exec.tril(inputs[0], *k)?],
-            StdTensorOp::Triu { k } => vec![exec.triu(inputs[0], *k)?],
-            StdTensorOp::Slice(config) => vec![exec.slice(inputs[0], config)?],
-            StdTensorOp::Pad(config) => vec![exec.pad(inputs[0], config)?],
-            StdTensorOp::Reverse { axes } => vec![exec.reverse(inputs[0], axes)?],
-            StdTensorOp::ReduceProd { axes, .. } => vec![exec.reduce_prod(inputs[0], axes)?],
-            StdTensorOp::ReduceMax { axes, .. } => vec![exec.reduce_max(inputs[0], axes)?],
-            StdTensorOp::ReduceMin { axes, .. } => vec![exec.reduce_min(inputs[0], axes)?],
-            StdTensorOp::Expm1 => vec![exec.expm1(inputs[0])?],
-            StdTensorOp::Log1p => vec![exec.log1p(inputs[0])?],
-            StdTensorOp::Convert { to, .. } => vec![exec.cast(inputs[0], *to)?],
-            StdTensorOp::Constant { .. } => {
-                return Err(Error::Internal(
-                    "Constant reached eager backend session after dispatcher handling".to_string(),
-                ));
-            }
-            StdTensorOp::Select => {
-                let b = promote_to_dtype(exec, inputs[1], target_dtype(1))?;
-                let c = promote_to_dtype(exec, inputs[2], target_dtype(2))?;
-                vec![exec.select(inputs[0], b.tensor(), c.tensor())?]
-            }
-            StdTensorOp::Clamp => {
-                let input = promote_to_dtype(exec, inputs[0], target_dtype(0))?;
-                let lower = promote_to_dtype(exec, inputs[1], target_dtype(1))?;
-                let upper = promote_to_dtype(exec, inputs[2], target_dtype(2))?;
-                vec![exec.clamp(input.tensor(), lower.tensor(), upper.tensor())?]
-            }
-            StdTensorOp::Concatenate { axis, .. } => {
-                let mut promoted_inputs = Vec::with_capacity(inputs.len());
-                for (index, input) in inputs.iter().enumerate() {
-                    promoted_inputs.push(promote_to_dtype(exec, input, target_dtype(index))?);
-                }
-                let promoted_refs: Vec<&Tensor> =
-                    promoted_inputs.iter().map(PromotedTensor::tensor).collect();
-                vec![exec.concatenate(&promoted_refs, *axis)?]
-            }
-            StdTensorOp::Gather(config) => {
-                vec![exec.gather(inputs[0], inputs[1], config)?]
-            }
-            StdTensorOp::GatherDynamicSliceSizes {
-                offset_dims,
-                collapsed_slice_dims,
-                start_index_map,
-                index_vector_dim,
-                slice_sizes,
-            } => {
-                let slice_sizes = resolve_tensor_shape_exprs(inputs, slice_sizes)?;
-                let config = tenferro_tensor::GatherConfig {
-                    offset_dims: offset_dims.clone(),
-                    collapsed_slice_dims: collapsed_slice_dims.clone(),
-                    start_index_map: start_index_map.clone(),
-                    index_vector_dim: *index_vector_dim,
-                    slice_sizes,
-                };
-                vec![exec.gather(inputs[0], inputs[1], &config)?]
-            }
-            StdTensorOp::Scatter(config) => {
-                let operand = promote_to_dtype(exec, inputs[0], target_dtype(0))?;
-                let updates = promote_to_dtype(exec, inputs[2], target_dtype(2))?;
-                vec![exec.scatter(operand.tensor(), inputs[1], updates.tensor(), config)?]
-            }
-            StdTensorOp::DynamicSlice { slice_sizes } => {
-                vec![exec.dynamic_slice(inputs[0], inputs[1], slice_sizes)?]
-            }
-            StdTensorOp::DynamicUpdateSlice => {
-                let operand = promote_to_dtype(exec, inputs[0], target_dtype(0))?;
-                let update = promote_to_dtype(exec, inputs[1], target_dtype(1))?;
-                vec![exec.dynamic_update_slice(operand.tensor(), update.tensor(), inputs[2])?]
-            }
-            StdTensorOp::ShapeOf { .. } => {
-                return Err(Error::Internal(
-                    "ShapeOf reached eager backend session after dispatcher handling".to_string(),
-                ));
-            }
-            StdTensorOp::DynamicTruncate { axis } => {
-                let input = inputs[0];
-                if *axis >= input.shape().len() {
-                    return Err(axis_out_of_bounds(
-                        "DynamicTruncate",
-                        *axis,
-                        input.shape().len(),
-                    ));
-                }
-                let size_tensor = inputs[1];
-                let axis_extent = input.shape()[*axis];
-                let size = dynamic_truncate_size(size_tensor, axis_extent)?;
-                let rank = input.shape().len();
-                let mut limits = input.shape().to_vec();
-                limits[*axis] = size;
-                let config = SliceConfig {
-                    starts: vec![0; rank],
-                    limits,
-                    strides: vec![1; rank],
-                };
-                vec![exec.slice(input, &config)?]
-            }
-            StdTensorOp::PadToMatch { axis } => {
-                let input = inputs[0];
-                let reference = inputs[1];
-                if *axis >= input.shape().len() {
-                    return Err(axis_out_of_bounds("PadToMatch", *axis, input.shape().len()));
-                }
-                if *axis >= reference.shape().len() {
-                    return Err(axis_out_of_bounds(
-                        "PadToMatch",
-                        *axis,
-                        reference.shape().len(),
-                    ));
-                }
-                let target_size = reference.shape()[*axis];
-                let current_size = input.shape()[*axis];
-                if current_size >= target_size {
-                    vec![input.duplicate()?]
-                } else {
-                    let rank = input.shape().len();
-                    let mut high = vec![0i64; rank];
-                    high[*axis] = pad_to_match_high_padding(target_size, current_size)?;
-                    let config = PadConfig {
-                        edge_padding_low: vec![0i64; rank],
-                        edge_padding_high: high,
-                        interior_padding: vec![0i64; rank],
-                    };
-                    vec![exec.pad(input, &config)?]
-                }
-            }
-            StdTensorOp::Extension(_) => {
-                return Err(Error::Internal(
-                    "Extension reached eager backend session after extension dispatch".to_string(),
-                ));
-            }
-        };
-        Ok(result)
-    })
+    backend
+        .with_backend_session(|exec| exec_standard_op_on_tensors_with_session(op, inputs, exec))?
 }
 
-fn resolve_tensor_shape_exprs(inputs: &[&Tensor], exprs: &[DimExpr]) -> Result<Vec<usize>> {
-    let input_shapes: Vec<&[usize]> = inputs.iter().map(|tensor| tensor.shape()).collect();
-    DimExpr::eval_all(exprs, &input_shapes).map_err(|err| Error::ShapeExpressionEvaluation {
-        expression: format!("{exprs:?}"),
-        cause: err.into(),
-    })
+pub(crate) fn exec_standard_op_on_tensors_in_session(
+    op: &StdTensorOp,
+    inputs: &[&Tensor],
+    exec: &mut dyn BackendSession,
+) -> Result<Vec<Tensor>> {
+    // One dispatch table: owned inputs are reads of their tensors, so the owned
+    // and borrowed entry points cannot drift apart.
+    let reads: Vec<TensorRead<'_>> = inputs
+        .iter()
+        .map(|tensor| TensorRead::from_tensor(tensor))
+        .collect();
+    exec_standard_op_on_tensor_reads_in_session(op, &reads, exec)
 }
 
 fn resolve_tensor_read_shape_exprs(

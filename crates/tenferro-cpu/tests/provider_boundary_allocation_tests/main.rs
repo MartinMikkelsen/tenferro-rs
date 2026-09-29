@@ -13,13 +13,12 @@ use tenferro_cpu::{
     discover_cpu_topology, CpuBackend, CpuBackendKind, CpuDomainExecutor,
     CpuDomainExecutorCapabilities, CpuDomainExecutorError, CpuExecutorAffinity,
     CpuExecutorReentrancy, CpuExecutorShutdown, CpuInnerParallelism, CpuPlacementControl,
-    CpuPlacementGuarantee, CpuProviderBundle, CpuProviderExecutionCapabilities,
-    CpuThreadCountControl, ExternalCpuDomain, ResolvedCpuPlacement, ScopedCpuJob, ScopedCpuJobs,
+    CpuProviderBundle, CpuProviderExecutionCapabilities, CpuThreadCountControl, ExternalCpuDomain,
+    ResolvedCpuPlacement, ScopedCpuJob, ScopedCpuJobs,
 };
 use tenferro_tensor::{
     BackendSessionHost, ContractionScalar, CpuDomainId, DType, DotGeneralAccumulation,
-    DotGeneralConfig, SliceConfig, Tensor, TensorBuffer, TensorDot, TensorElementwise,
-    TensorIndexing, TensorRead, TensorReduction, TensorWrite,
+    DotGeneralConfig, SliceConfig, Tensor, TensorBuffer, TensorRead, TensorWrite,
 };
 
 struct CountingAllocator;
@@ -236,7 +235,6 @@ fn warmed_public_session_request_provider_dispatch_does_not_allocate() {
         ResolvedCpuPlacement::AllAllowed { cpus: allowed_cpus },
         Arc::new(InlineExecutor),
         NonZeroUsize::new(1).unwrap(),
-        CpuPlacementGuarantee::ExactDeclared,
     )
     .unwrap();
     let mut backend = CpuBackend::from_external_managed_domains_with_provider_bundle(
@@ -256,30 +254,32 @@ fn warmed_public_session_request_provider_dispatch_does_not_allocate() {
     };
     let accumulation = DotGeneralAccumulation::overwrite(DType::F64).unwrap();
 
-    let count = backend.with_backend_session(|session| {
-        let mut dispatch = || {
-            session
-                .dot_general_read_into_accum(
-                    TensorRead::from_tensor(black_box(&lhs)),
-                    TensorRead::from_tensor(black_box(&rhs)),
-                    black_box(&config),
-                    black_box(accumulation),
-                    TensorWrite::from_tensor(black_box(&mut output)),
-                )
-                .unwrap();
-            black_box(output.as_slice::<f64>().unwrap()[0]);
-        };
-        for _ in 0..WARMUP {
-            dispatch();
-        }
-        // Some coverage toolchains lazily allocate after the global allocator
-        // probe is enabled. The second back-to-back window must still prove
-        // steady-state provider dispatch is allocation-free.
-        let first_count = count_repeated(&mut dispatch, ITERATIONS);
-        let steady_count = count_repeated(&mut dispatch, ITERATIONS);
-        black_box(first_count);
-        steady_count
-    });
+    let count = backend
+        .with_backend_session(|session| {
+            let mut dispatch = || {
+                session
+                    .dot_general_read_into_accum(
+                        TensorRead::from_tensor(black_box(&lhs)),
+                        TensorRead::from_tensor(black_box(&rhs)),
+                        black_box(&config),
+                        black_box(accumulation),
+                        TensorWrite::from_tensor(black_box(&mut output)),
+                    )
+                    .unwrap();
+                black_box(output.as_slice::<f64>().unwrap()[0]);
+            };
+            for _ in 0..WARMUP {
+                dispatch();
+            }
+            // Some coverage toolchains lazily allocate after the global allocator
+            // probe is enabled. The second back-to-back window must still prove
+            // steady-state provider dispatch is allocation-free.
+            let first_count = count_repeated(&mut dispatch, ITERATIONS);
+            let steady_count = count_repeated(&mut dispatch, ITERATIONS);
+            black_box(first_count);
+            steady_count
+        })
+        .unwrap();
 
     assert_eq!(count.allocations, 0);
     assert_eq!(count.bytes, 0);
@@ -297,25 +297,27 @@ fn warmed_compact_axpby_has_no_steady_state_allocation() {
     let x = Tensor::from_vec_col_major(vec![65_536], vec![1.0_f64; 65_536]).unwrap();
     let mut y = Tensor::from_vec_col_major(vec![65_536], vec![2.0_f64; 65_536]).unwrap();
 
-    let count = backend.with_backend_session(|session| {
-        let mut dispatch = || {
-            session
-                .axpby_read_into_accum(
-                    ContractionScalar::F64(0.5),
-                    TensorRead::from_tensor(black_box(&x)),
-                    ContractionScalar::F64(0.5),
-                    TensorWrite::from_tensor(black_box(&mut y)),
-                )
-                .unwrap();
-        };
-        for _ in 0..32 {
-            dispatch();
-        }
-        let first = count_repeated(&mut dispatch, ITERATIONS);
-        let steady = count_repeated(&mut dispatch, ITERATIONS);
-        black_box(first);
-        steady
-    });
+    let count = backend
+        .with_backend_session(|session| {
+            let mut dispatch = || {
+                session
+                    .axpby_read_into_accum(
+                        ContractionScalar::F64(0.5),
+                        TensorRead::from_tensor(black_box(&x)),
+                        ContractionScalar::F64(0.5),
+                        TensorWrite::from_tensor(black_box(&mut y)),
+                    )
+                    .unwrap();
+            };
+            for _ in 0..32 {
+                dispatch();
+            }
+            let first = count_repeated(&mut dispatch, ITERATIONS);
+            let steady = count_repeated(&mut dispatch, ITERATIONS);
+            black_box(first);
+            steady
+        })
+        .unwrap();
 
     eprintln!("AXPBY steady-state allocation probe: {count:?}");
     let full_vector_bytes = 65_536 * std::mem::size_of::<f64>();
@@ -355,40 +357,88 @@ fn warmed_tiny_cpu_backend_cases_do_not_exceed_fixed_main_allocations() {
     };
 
     for _ in 0..32 {
-        let output = backend.add(&matrix, &rhs).unwrap();
+        let output = backend
+            .with_backend_session(|__s| {
+                __s.add_read(
+                    TensorRead::from_tensor(&matrix),
+                    TensorRead::from_tensor(&rhs),
+                )
+            })
+            .unwrap()
+            .unwrap();
         backend.reclaim_buffer(output);
-        let output = backend.reduce_sum(&matrix, &[0]).unwrap();
+        let output = backend
+            .with_backend_session(|__s| __s.reduce_sum_read(TensorRead::from_tensor(&matrix), &[0]))
+            .unwrap()
+            .unwrap();
         backend.reclaim_buffer(output);
-        let output = backend.slice(&matrix, &slice).unwrap();
+        let output = backend
+            .with_backend_session(|__s| __s.slice(&matrix, &slice))
+            .unwrap()
+            .unwrap();
         backend.reclaim_buffer(output);
-        let output = backend.dot_general(&matrix, &rhs, &dot).unwrap();
+        let output = backend
+            .with_backend_session(|__s| {
+                __s.dot_general_read(
+                    TensorRead::from_tensor(&matrix),
+                    TensorRead::from_tensor(&rhs),
+                    &dot,
+                )
+            })
+            .unwrap()
+            .unwrap();
         backend.reclaim_buffer(output);
     }
 
     let elementwise = count_repeated(
         || {
-            let output = backend.add(&matrix, &rhs).unwrap();
+            let output = backend
+                .with_backend_session(|__s| {
+                    __s.add_read(
+                        TensorRead::from_tensor(&matrix),
+                        TensorRead::from_tensor(&rhs),
+                    )
+                })
+                .unwrap()
+                .unwrap();
             backend.reclaim_buffer(output);
         },
         ITERATIONS,
     );
     let reduction = count_repeated(
         || {
-            let output = backend.reduce_sum(&matrix, &[0]).unwrap();
+            let output = backend
+                .with_backend_session(|__s| {
+                    __s.reduce_sum_read(TensorRead::from_tensor(&matrix), &[0])
+                })
+                .unwrap()
+                .unwrap();
             backend.reclaim_buffer(output);
         },
         ITERATIONS,
     );
     let slice_count = count_repeated(
         || {
-            let output = backend.slice(&matrix, &slice).unwrap();
+            let output = backend
+                .with_backend_session(|__s| __s.slice(&matrix, &slice))
+                .unwrap()
+                .unwrap();
             backend.reclaim_buffer(output);
         },
         ITERATIONS,
     );
     let dot_count = count_repeated(
         || {
-            let output = backend.dot_general(&matrix, &rhs, &dot).unwrap();
+            let output = backend
+                .with_backend_session(|__s| {
+                    __s.dot_general_read(
+                        TensorRead::from_tensor(&matrix),
+                        TensorRead::from_tensor(&rhs),
+                        &dot,
+                    )
+                })
+                .unwrap()
+                .unwrap();
             backend.reclaim_buffer(output);
         },
         ITERATIONS,

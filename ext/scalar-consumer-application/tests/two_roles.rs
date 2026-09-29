@@ -17,7 +17,7 @@ use tenferro_runtime::extension::apply;
 use tenferro_runtime::{Error, ErrorPhase, GraphCompiler, Runtime, TracedTensor};
 use tenferro_scalar_consumer_algorithm::{factor_norm_gradient, ScalarSupport};
 use tenferro_tensor::{DType, Tensor};
-use tenferro_tensor_core::{ErasedHostTensor, HostTensor};
+use tenferro_tensor::{ErasedHostTensor, HostTensor};
 
 /// Canonical standard support: the linalg factorization, with values already `f64`.
 struct Standard;

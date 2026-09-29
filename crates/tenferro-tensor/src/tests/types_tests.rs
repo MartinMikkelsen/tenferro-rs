@@ -538,7 +538,7 @@ fn typed_tensor_try_into_rank_validates_rank() {
     let err = tensor.try_into_rank::<3>().unwrap_err();
 
     assert!(matches!(
-        err,
+        err.error(),
         Error::Validation {
             source: ValidationError::RankMismatch {
                 expected: 3,
@@ -660,7 +660,7 @@ fn typed_tensor_owned_layout_is_always_compact() {
     let tensor = TypedTensor::<i32>::from_vec_col_major(vec![3], vec![1, 2, 3]).unwrap();
     assert_eq!(
         tensor.layout(),
-        &TensorLayout::compact(vec![3].into()).unwrap()
+        TensorLayout::compact(vec![3].into()).unwrap()
     );
 }
 
@@ -716,7 +716,7 @@ fn tensor_owned_export_reports_dtype_mismatch() {
         .unwrap_err();
 
     assert!(matches!(
-        err,
+        err.error(),
         Error::Validation {
             source: ValidationError::DTypeMismatch { .. },
             ..
@@ -749,8 +749,9 @@ fn backend_buffer_handle_metadata_and_host_export_errors_are_explicit() {
     .unwrap();
     let col_err = tensor.into_vec_col_major().unwrap_err();
 
-    assert!(matches!(col_err, Error::RuntimeState { .. }));
+    assert!(matches!(col_err.error(), Error::RuntimeState { .. }));
     assert!(col_err
+        .error()
         .to_string()
         .contains("backend buffers cannot be exported"));
 
@@ -769,7 +770,7 @@ fn backend_buffer_handle_metadata_and_host_export_errors_are_explicit() {
     .unwrap();
     let parts_err = tensor.into_parts().unwrap_err();
 
-    assert!(matches!(parts_err, Error::RuntimeState { .. }));
+    assert!(matches!(parts_err.error(), Error::RuntimeState { .. }));
 }
 
 #[test]
@@ -2318,7 +2319,7 @@ fn erased_payload_accessors_cover_every_preset_dtype() {
 
 #[test]
 fn an_external_payload_is_carried_by_the_value_type() {
-    use tenferro_tensor_core::{ErasedHostTensor, HostTensor};
+    use crate::{ErasedHostTensor, HostTensor};
 
     let payload =
         ErasedHostTensor::new(HostTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap());

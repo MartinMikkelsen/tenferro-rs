@@ -1,4 +1,7 @@
 use super::*;
+use tenferro_tensor::BackendSessionHost;
+use tenferro_tensor::DotGeneralConfig;
+use tenferro_tensor::TensorRead;
 
 fn input() -> Tensor {
     Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap()
@@ -35,14 +38,36 @@ fn shared_scope_installs_once_and_reuses_resources_across_operations() {
                         rhs_batch_dims: [].as_slice().into(),
                     };
                     for iteration in 0..16 {
-                        assert!(backend.add(&x, &wrong).is_err());
-                        let y = backend.add(&x, &x).unwrap();
+                        assert!(backend
+                            .with_backend_session(|__s| __s.add_read(
+                                TensorRead::from_tensor(&x),
+                                TensorRead::from_tensor(&wrong)
+                            ))
+                            .unwrap()
+                            .is_err());
+                        let y = backend
+                            .with_backend_session(|__s| {
+                                __s.add_read(
+                                    TensorRead::from_tensor(&x),
+                                    TensorRead::from_tensor(&x),
+                                )
+                            })
+                            .unwrap()
+                            .unwrap();
                         assert_eq!(y.as_slice::<f64>().unwrap(), &[2.0, 4.0, 6.0, 8.0]);
                         backend.reclaim_buffer(y);
                         let run = |session: &mut dyn BackendSession| {
-                            let y = session.mul(&x, &x).unwrap();
+                            let y = session
+                                .mul_read(TensorRead::from_tensor(&x), TensorRead::from_tensor(&x))
+                                .unwrap();
                             assert_eq!(y.as_slice::<f64>().unwrap(), &[1.0, 4.0, 9.0, 16.0]);
-                            let product = session.dot_general(&x, &x, &config).unwrap();
+                            let product = session
+                                .dot_general_read(
+                                    TensorRead::from_tensor(&x),
+                                    TensorRead::from_tensor(&x),
+                                    &config,
+                                )
+                                .unwrap();
                             assert_eq!(
                                 product.as_slice::<f64>().unwrap(),
                                 &[7.0, 10.0, 15.0, 22.0]
@@ -59,17 +84,28 @@ fn shared_scope_installs_once_and_reuses_resources_across_operations() {
                             .unwrap();
                         };
                         if iteration % 2 == 0 {
-                            backend.with_backend_session_cached(&mut cache, run);
+                            backend
+                                .with_backend_session_cached(&mut cache, run)
+                                .unwrap();
                         } else {
-                            backend.with_backend_session(run);
+                            backend.with_backend_session(run).unwrap();
                         }
-                        assert_eq!(backend.install(|| std::thread::current().id()), thread);
+                        assert_eq!(
+                            backend.install(|| std::thread::current().id()).unwrap(),
+                            thread
+                        );
                     }
                 })
                 .unwrap();
             assert_eq!(context.executor_install_calls_for_test() - before, 1);
             assert_eq!(
-                backend.add(&x, &x).unwrap().as_slice::<f64>().unwrap(),
+                backend
+                    .with_backend_session(|__s| __s
+                        .add_read(TensorRead::from_tensor(&x), TensorRead::from_tensor(&x)))
+                    .unwrap()
+                    .unwrap()
+                    .as_slice::<f64>()
+                    .unwrap(),
                 &[2.0, 4.0, 6.0, 8.0]
             );
             assert_eq!(context.executor_install_calls_for_test() - before, 2);
@@ -85,12 +121,21 @@ fn shared_scope_rejects_wrong_witness_and_nested_scopes() {
     let x = input();
     owner
         .with_execution_scope(|| {
-            let error = other.add(&x, &x).unwrap_err();
-            assert!(matches!(error, crate::Error::RuntimeState { .. }));
-            let invalid_session = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                other.with_backend_session(|_| ());
-            }));
-            assert!(invalid_session.is_err());
+            let error = match other.execution_admission() {
+                Ok(_) => panic!("a backend outside the active scope must be rejected"),
+                Err(error) => error,
+            };
+            assert!(matches!(
+                error,
+                tenferro_tensor::SessionEntryError::IncompatibleContext { .. }
+            ));
+            let mut ran = false;
+            let invalid_session = other.with_backend_session(|_| ran = true);
+            assert!(matches!(
+                invalid_session,
+                Err(tenferro_tensor::SessionEntryError::IncompatibleContext { .. })
+            ));
+            assert!(!ran);
             assert!(owner.with_execution_scope(|| ()).is_err());
             #[cfg(all(feature = "cpu-blas", feature = "cpu-faer"))]
             {
@@ -99,20 +144,31 @@ fn shared_scope_rejects_wrong_witness_and_nested_scopes() {
                 } else {
                     CpuBackendKind::Blas
                 };
-                let mut different_provider =
+                let different_provider =
                     CpuBackend::with_threads_and_kind(1, different_kind).unwrap();
                 assert!(matches!(
-                    different_provider.add(&x, &x),
-                    Err(crate::Error::RuntimeState { .. })
+                    different_provider.execution_admission(),
+                    Err(tenferro_tensor::SessionEntryError::IncompatibleContext { .. })
                 ));
             }
             assert_eq!(
-                backend.add(&x, &x).unwrap().as_slice::<f64>().unwrap(),
+                backend
+                    .with_backend_session(|__s| __s
+                        .add_read(TensorRead::from_tensor(&x), TensorRead::from_tensor(&x)))
+                    .unwrap()
+                    .unwrap()
+                    .as_slice::<f64>()
+                    .unwrap(),
                 &[2.0, 4.0, 6.0, 8.0]
             );
         })
         .unwrap();
-    assert!(other.add(&x, &x).is_ok());
+    assert!(other
+        .with_backend_session(
+            |__s| __s.add_read(TensorRead::from_tensor(&x), TensorRead::from_tensor(&x))
+        )
+        .unwrap()
+        .is_ok());
 }
 
 #[test]
@@ -121,15 +177,40 @@ fn shared_scope_preserves_borrowed_session_reentry_guard_and_unwind_recovery() {
     let mut backend = owner.clone();
     let mut reentrant = owner.clone();
     let x = input();
+    let nested = owner
+        .with_execution_scope(|| {
+            backend
+                .with_backend_session(|_| {
+                    reentrant.with_backend_session(|__s| {
+                        __s.add_read(TensorRead::from_tensor(&x), TensorRead::from_tensor(&x))
+                    })
+                })
+                .unwrap()
+        })
+        .unwrap();
+    assert!(
+        matches!(
+            nested,
+            Err(tenferro_tensor::SessionEntryError::Reentered { .. })
+        ),
+        "{nested:?}"
+    );
     let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         owner
             .with_execution_scope(|| {
-                backend.with_backend_session(|_| reentrant.add(&x, &x).unwrap());
+                backend
+                    .with_backend_session(|_| panic!("session callback panic"))
+                    .unwrap();
             })
             .unwrap();
     }));
-    assert!(panic_message(failed.unwrap_err()).contains(crate::arbiter::BACKEND_REENTRY_PANIC));
-    assert!(backend.add(&x, &x).is_ok());
+    assert_eq!(panic_message(failed.unwrap_err()), "session callback panic");
+    assert!(backend
+        .with_backend_session(
+            |__s| __s.add_read(TensorRead::from_tensor(&x), TensorRead::from_tensor(&x))
+        )
+        .unwrap()
+        .is_ok());
     let returned = owner
         .with_execution_scope(|| -> std::result::Result<(), &'static str> { Err("callback error") })
         .unwrap();
@@ -148,7 +229,15 @@ fn shared_scope_does_not_admit_child_worker_backend_reentry() {
             rayon::scope(move |scope| {
                 scope.spawn(move |_| {
                     let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        worker.add(&input(), &input()).unwrap();
+                        worker
+                            .with_backend_session(|__s| {
+                                __s.add_read(
+                                    TensorRead::from_tensor(&input()),
+                                    TensorRead::from_tensor(&input()),
+                                )
+                            })
+                            .unwrap()
+                            .unwrap();
                     }));
                     send.send(failed.is_err()).unwrap();
                 });
@@ -157,7 +246,13 @@ fn shared_scope_does_not_admit_child_worker_backend_reentry() {
             });
         })
         .unwrap();
-    assert!(backend.add(&input(), &input()).is_ok());
+    assert!(backend
+        .with_backend_session(|__s| __s.add_read(
+            TensorRead::from_tensor(&input()),
+            TensorRead::from_tensor(&input())
+        ))
+        .unwrap()
+        .is_ok());
 }
 
 #[test]
@@ -182,5 +277,5 @@ fn shared_scope_holds_blas_exclusion_until_callback_unwinds() {
             .unwrap();
     }));
     assert_eq!(panic_message(failed.unwrap_err()), "scope callback panic");
-    assert_eq!(other.install(|| 23), 23);
+    assert_eq!(other.install(|| 23).unwrap(), 23);
 }

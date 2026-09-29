@@ -47,18 +47,19 @@ fn tensor(shape: Vec<usize>, seed: usize) -> Tensor {
     Tensor::from_vec_col_major(shape, data).unwrap()
 }
 
-fn reduce_all(tensor: &EagerTensor) -> EagerTensor {
-    let axes: Vec<usize> = (0..tensor.shape().len()).collect();
-    tensor.reduce_sum(Some(&axes)).unwrap()
-}
-
 fn fixture(ctx: &Arc<EagerRuntime>, left_bond: usize, right_bond: usize, seed: usize) -> Fixture {
     let shape = vec![left_bond, PHYSICAL_DIM, right_bond];
     let x = EagerTensor::requires_grad_in(tensor(shape.clone(), seed), Arc::clone(ctx)).unwrap();
     let weight = EagerTensor::from_tensor_in(tensor(shape, seed + 1000), Arc::clone(ctx)).unwrap();
-    let weighted = x.mul(&weight).unwrap();
-    let quadratic = weighted.mul(&x).unwrap();
-    let loss = reduce_all(&quadratic);
+    let loss = ctx
+        .with_eager_session(|s| {
+            let weighted = s.mul(&x, &weight)?;
+            let quadratic = s.mul(&weighted, &x)?;
+            let axes: Vec<usize> = (0..quadratic.shape().len()).collect();
+            s.reduce_sum(&quadratic, Some(&axes))
+        })
+        .unwrap()
+        .unwrap();
     Fixture {
         ctx: Arc::clone(ctx),
         x,

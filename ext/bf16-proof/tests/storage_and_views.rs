@@ -8,7 +8,7 @@
 //! read sees the permuted order without any narrowing.
 
 use tenferro_bf16_proof::Bf16;
-use tenferro_tensor_core::{ErasedHostTensor, HostTensor};
+use tenferro_tensor::{ErasedHostTensor, HostTensor};
 
 fn payload(values: &[f32], shape: &[usize]) -> ErasedHostTensor {
     let host = HostTensor::from_vec_col_major(

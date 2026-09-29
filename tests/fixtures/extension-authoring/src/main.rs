@@ -16,8 +16,8 @@ use tenferro_runtime::{
     RuntimeFailureReasonRef, Tensor, TracedTensor,
 };
 use tenferro_tensor::{
-    BackendStorageHandle, Placement, StorageBuffer, TensorBackend, TensorRead, TensorView,
-    TypedTensor, TypedTensorView,
+    BackendSession, BackendSessionHost, BackendStorageHandle, Placement, StorageBuffer, TensorRead,
+    TensorView, TypedTensor, TypedTensorView,
 };
 
 const IDENTITY_FAMILY: &str = "fixture.identity.v1";
@@ -114,7 +114,7 @@ identity_op!(BorrowedOp, BORROWED_FAMILY, 4);
 // reaches the family's engine and returns its typed WrongOperationFamily error.
 identity_op!(WrongFamilyOp, IDENTITY_FAMILY, 1);
 
-fn execute_identity<B: TensorBackend + 'static>(
+fn execute_identity<B: BackendSession + ?Sized>(
     _op: &IdentityOp,
     inputs: &[TensorRead<'_>],
     context: &mut ExtensionExecutionContext<'_, B>,
@@ -124,7 +124,7 @@ fn execute_identity<B: TensorBackend + 'static>(
         .to_contiguous_read(inputs[0].clone())?])
 }
 
-fn execute_second<B: TensorBackend + 'static>(
+fn execute_second<B: BackendSession + ?Sized>(
     _op: &SecondOp,
     inputs: &[TensorRead<'_>],
     context: &mut ExtensionExecutionContext<'_, B>,
@@ -144,7 +144,7 @@ fn sum_four(slices: [&[f64]; 4], shape: &[usize]) -> tenferro_tensor::Result<Ten
     Tensor::from_vec_col_major(shape.to_vec(), data)
 }
 
-fn execute_borrowed<B: TensorBackend + 'static>(
+fn execute_borrowed<B: BackendSession + ?Sized>(
     _op: &BorrowedOp,
     inputs: &[TensorRead<'_>],
     _context: &mut ExtensionExecutionContext<'_, B>,
@@ -162,7 +162,7 @@ fn execute_borrowed<B: TensorBackend + 'static>(
     Ok(vec![sum_four(slices, inputs[0].shape())?])
 }
 
-fn execute_host_only<B: TensorBackend + 'static>(
+fn execute_host_only<B: BackendSession + ?Sized>(
     _op: &IdentityOp,
     inputs: &[TensorRead<'_>],
     _context: &mut ExtensionExecutionContext<'_, B>,
@@ -315,28 +315,35 @@ fn main() -> Result<(), Box<dyn StdError>> {
         .collect::<Vec<_>>();
     let mut borrowed_backend = CpuBackend::new();
     let mut borrowed_caches = ExtensionCacheStore::new();
-    let mut borrowed_context =
-        ExtensionExecutionContext::new(&mut borrowed_backend, &mut borrowed_caches);
     let borrowed_reads = borrowed_inputs
         .iter()
         .map(TensorRead::from_tensor)
         .collect::<Vec<_>>();
-    execute_borrowed(&BorrowedOp, &borrowed_reads, &mut borrowed_context)?;
     let direct_slices = [
         borrowed_inputs[0].as_slice::<f64>()?,
         borrowed_inputs[1].as_slice::<f64>()?,
         borrowed_inputs[2].as_slice::<f64>()?,
         borrowed_inputs[3].as_slice::<f64>()?,
     ];
-    let output_baseline_bytes = measure_allocated_bytes(|| {
-        let output = sum_four(direct_slices, &[1024]).expect("baseline output should build");
-        assert_eq!(output.as_slice::<f64>().unwrap()[0], 6.0);
-    });
-    let borrowed_bytes = measure_allocated_bytes(|| {
-        let output = execute_borrowed(&BorrowedOp, &borrowed_reads, &mut borrowed_context)
-            .expect("borrowed extension should execute");
-        assert_eq!(output[0].as_slice::<f64>().unwrap()[0], 6.0);
-    });
+    // The extension context borrows a backend session, never the owner.
+    let (output_baseline_bytes, borrowed_bytes) = borrowed_backend.with_backend_session(
+        |session| -> tenferro_tensor::Result<(usize, usize)> {
+            let mut borrowed_context =
+                ExtensionExecutionContext::new(session, &mut borrowed_caches);
+            execute_borrowed(&BorrowedOp, &borrowed_reads, &mut borrowed_context)?;
+            let output_baseline_bytes = measure_allocated_bytes(|| {
+                let output =
+                    sum_four(direct_slices, &[1024]).expect("baseline output should build");
+                assert_eq!(output.as_slice::<f64>().unwrap()[0], 6.0);
+            });
+            let borrowed_bytes = measure_allocated_bytes(|| {
+                let output = execute_borrowed(&BorrowedOp, &borrowed_reads, &mut borrowed_context)
+                    .expect("borrowed extension should execute");
+                assert_eq!(output[0].as_slice::<f64>().unwrap()[0], 6.0);
+            });
+            Ok((output_baseline_bytes, borrowed_bytes))
+        },
+    )??;
     assert_eq!(BORROWED_CALLBACKS.load(Ordering::SeqCst), 3);
     assert_eq!(MATERIALIZATION_CALLBACKS.load(Ordering::SeqCst), 0);
     for (slot, pointer) in caller_pointers.iter().copied().enumerate() {
@@ -358,17 +365,19 @@ fn main() -> Result<(), Box<dyn StdError>> {
         &noncompact_data,
     )?);
     let noncompact_read = TensorRead::from_view(noncompact_view);
-    let mut materialize_context =
-        ExtensionExecutionContext::new(&mut materialize_backend, &mut materialize_caches);
     MATERIALIZATION_CALLBACKS.store(0, Ordering::SeqCst);
-    let materialized_bytes = measure_allocated_bytes(|| {
-        execute_second(
-            &SecondOp,
-            std::slice::from_ref(&noncompact_read),
-            &mut materialize_context,
-        )
-        .expect("explicit materialization should execute");
-    });
+    let materialized_bytes = materialize_backend.with_backend_session(|session| {
+        let mut materialize_context =
+            ExtensionExecutionContext::new(session, &mut materialize_caches);
+        measure_allocated_bytes(|| {
+            execute_second(
+                &SecondOp,
+                std::slice::from_ref(&noncompact_read),
+                &mut materialize_context,
+            )
+            .expect("explicit materialization should execute");
+        })
+    })?;
     assert_eq!(MATERIALIZATION_CALLBACKS.load(Ordering::SeqCst), 1);
     assert!(
         materialized_bytes >= input_bytes,
@@ -381,13 +390,15 @@ fn main() -> Result<(), Box<dyn StdError>> {
         Placement::default(),
     )?);
     let mut host_caches = ExtensionCacheStore::new();
-    let mut host_context = ExtensionExecutionContext::new(&mut backend, &mut host_caches);
-    let host_error = execute_host_only(
-        &IdentityOp,
-        &[TensorRead::from_tensor(&backend_tensor)],
-        &mut host_context,
-    )
-    .expect_err("host-only typed access must reject backend-owned input");
+    let host_error = backend.with_backend_session(|session| {
+        let mut host_context = ExtensionExecutionContext::new(session, &mut host_caches);
+        execute_host_only(
+            &IdentityOp,
+            &[TensorRead::from_tensor(&backend_tensor)],
+            &mut host_context,
+        )
+        .expect_err("host-only typed access must reject backend-owned input")
+    })?;
     assert!(matches!(
         host_error,
         tenferro_tensor::Error::RuntimeState { .. }

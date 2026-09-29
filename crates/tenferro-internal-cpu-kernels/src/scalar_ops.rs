@@ -17,7 +17,7 @@ pub use op::{AddOp, BinaryScalarOp, MulOp, SubOp};
 
 use strided_kernel::{reduce, zip_map2_into, StridedView, StridedViewMut};
 use tenferro_tensor::col_major_strides;
-use tenferro_tensor_core::HostTensor;
+use tenferro_tensor::HostTensor;
 
 fn strides_for(shape: &[usize]) -> crate::Result<Vec<isize>> {
     col_major_strides(shape)
@@ -43,7 +43,7 @@ fn require_same_shape(op: &'static str, lhs: &[usize], rhs: &[usize]) -> crate::
 ///
 /// ```rust
 /// use tenferro_internal_cpu_kernels::scalar_ops::{scalar_binary_into, AddOp};
-/// use tenferro_tensor_core::HostTensor;
+/// use tenferro_tensor::HostTensor;
 ///
 /// let lhs = HostTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?;
 /// let rhs = HostTensor::from_vec_col_major(vec![2], vec![10.0_f64, 20.0])?;
@@ -97,7 +97,7 @@ where
 ///
 /// ```rust
 /// use tenferro_internal_cpu_kernels::scalar_ops::{scalar_fold, AddOp};
-/// use tenferro_tensor_core::HostTensor;
+/// use tenferro_tensor::HostTensor;
 ///
 /// let values = HostTensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0])?;
 /// let total = scalar_fold::<f64, AddOp>("sum", &values, 0.0_f64)?;

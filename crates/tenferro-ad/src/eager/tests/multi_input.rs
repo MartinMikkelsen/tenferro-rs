@@ -16,7 +16,13 @@ fn backward_shares_one_vjp_across_leaves_and_separates_active_masks() {
     let x = leaf(vec![2.0_f64, 3.0]);
     let y = leaf(vec![5.0_f64, 7.0]);
     let unused = leaf(vec![11.0_f64, 13.0]);
-    let loss = x.mul(&y).unwrap().reduce_sum(Some(&[0])).unwrap();
+    let loss = ctx
+        .with_eager_session(|s| {
+            let product = s.mul(&x, &y)?;
+            s.reduce_sum(&product, Some(&[0]))
+        })
+        .unwrap()
+        .unwrap();
     let first = loss.backward().unwrap();
     assert_eq!(first.len(), 2);
     assert_eq!(

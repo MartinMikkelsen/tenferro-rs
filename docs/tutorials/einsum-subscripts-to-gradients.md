@@ -114,7 +114,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         &[250.0, 601.0, 372.0, 894.0],
     );
 
-    let loss = product.reduce_sum(Some(&[0, 1]))?;
+    let loss = runtime.with_eager_session(|s| s.reduce_sum(&product, Some(&[0, 1])))??;
     let grad_a = runtime.grad(&loss, &a)?;
     let grad_value = grad_a.value()?;
 

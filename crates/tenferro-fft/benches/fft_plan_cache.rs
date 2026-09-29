@@ -36,9 +36,11 @@ fn bench_c64_fft_plan_cache(c: &mut Criterion) {
         group.bench_function(BenchmarkId::new("direct_one_shot", &id), |bench| {
             let mut backend = CpuBackend::new();
             bench.iter(|| {
-                let output = backend.with_backend_session(|session| {
-                    black_box(&input).fft(None, 0, FftNorm::Backward, session)
-                });
+                let output = backend
+                    .with_backend_session(|session| {
+                        black_box(&input).fft(None, 0, FftNorm::Backward, session)
+                    })
+                    .unwrap();
                 black_box(output.unwrap());
             });
         });
@@ -50,13 +52,16 @@ fn bench_c64_fft_plan_cache(c: &mut Criterion) {
                 .with_backend_session(|session| {
                     executor.fft(&input, None, 0, FftNorm::Backward, session)
                 })
+                .unwrap()
                 .unwrap();
             assert_eq!(executor.cache_stats().entries, 1);
 
             bench.iter(|| {
-                let output = backend.with_backend_session(|session| {
-                    executor.fft(black_box(&input), None, 0, FftNorm::Backward, session)
-                });
+                let output = backend
+                    .with_backend_session(|session| {
+                        executor.fft(black_box(&input), None, 0, FftNorm::Backward, session)
+                    })
+                    .unwrap();
                 black_box(output.unwrap());
             });
         });
@@ -74,9 +79,11 @@ fn bench_f64_rfft_plan_cache(c: &mut Criterion) {
         group.bench_function(BenchmarkId::new("direct_one_shot", &id), |bench| {
             let mut backend = CpuBackend::new();
             bench.iter(|| {
-                let output = backend.with_backend_session(|session| {
-                    black_box(&input).rfft(None, 0, FftNorm::Backward, session)
-                });
+                let output = backend
+                    .with_backend_session(|session| {
+                        black_box(&input).rfft(None, 0, FftNorm::Backward, session)
+                    })
+                    .unwrap();
                 black_box(output.unwrap());
             });
         });
@@ -88,13 +95,16 @@ fn bench_f64_rfft_plan_cache(c: &mut Criterion) {
                 .with_backend_session(|session| {
                     executor.rfft(&input, None, 0, FftNorm::Backward, session)
                 })
+                .unwrap()
                 .unwrap();
             assert_eq!(executor.cache_stats().entries, 1);
 
             bench.iter(|| {
-                let output = backend.with_backend_session(|session| {
-                    executor.rfft(black_box(&input), None, 0, FftNorm::Backward, session)
-                });
+                let output = backend
+                    .with_backend_session(|session| {
+                        executor.rfft(black_box(&input), None, 0, FftNorm::Backward, session)
+                    })
+                    .unwrap();
                 black_box(output.unwrap());
             });
         });

@@ -10,9 +10,12 @@ pub fn with_cpu_linalg<R>(
 where
     R: Send,
 {
-    backend.with_backend_session(|session| {
-        with_cpu_exec_session(session, f).expect("CPU backend session should expose CpuExecSession")
-    })
+    backend
+        .with_backend_session(|session| {
+            with_cpu_exec_session(session, f)
+                .expect("CPU backend session should expose CpuExecSession")
+        })
+        .unwrap()
 }
 
 /// Build a CPU runtime with the linalg extension module installed.

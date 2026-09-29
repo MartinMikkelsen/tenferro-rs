@@ -136,8 +136,9 @@ pub trait TensorSessionOpsExt {
     /// let mut backend = CpuBackend::new();
     /// let a = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
     /// let b = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]).unwrap();
-    /// let sum = backend.with_backend_session(|session| a.add(&b, session)).unwrap();
+    /// let sum = backend.with_backend_session(|session| a.add(&b, session))??;
     /// assert_eq!(sum.as_slice::<f64>().unwrap(), &[4.0, 6.0]);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     ///
     /// # Errors
@@ -165,8 +166,9 @@ pub trait TensorSessionOpsExt {
     /// let mut backend = CpuBackend::new();
     /// let a = Tensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
     /// let b = Tensor::from_vec_col_major(vec![4], vec![3.0_f64; 4]).unwrap();
-    /// let product = backend.with_backend_session(|session| a.mul(&b, session)).unwrap();
+    /// let product = backend.with_backend_session(|session| a.mul(&b, session))??;
     /// assert_eq!(product.as_slice::<f64>().unwrap(), &[6.0; 4]);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     ///
     /// # Errors
@@ -190,10 +192,11 @@ pub trait TensorSessionOpsExt {
     ///
     /// let mut backend = CpuBackend::new();
     /// let x = Tensor::from_vec_col_major(vec![2], vec![0.0_f64, 1.0]).unwrap();
-    /// let y = backend.with_backend_session(|session| x.exp(session)).unwrap();
+    /// let y = backend.with_backend_session(|session| x.exp(session))??;
     /// let y = y.as_slice::<f64>().unwrap();
     /// assert!((y[0] - 1.0).abs() < 1.0e-12);
     /// assert!((y[1] - std::f64::consts::E).abs() < 1.0e-12);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     ///
     /// # Errors
@@ -213,8 +216,9 @@ pub trait TensorSessionOpsExt {
     ///
     /// let mut backend = CpuBackend::new();
     /// let x = Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]).unwrap();
-    /// let sums = backend.with_backend_session(|session| x.reduce_sum(&[1], session)).unwrap();
+    /// let sums = backend.with_backend_session(|session| x.reduce_sum(&[1], session))??;
     /// assert_eq!(sums.as_slice::<f64>().unwrap(), &[3.0, 3.0]);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     ///
     /// # Errors
@@ -238,8 +242,9 @@ pub trait TensorSessionOpsExt {
     ///
     /// let mut backend = CpuBackend::new();
     /// let x = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
-    /// let y = backend.with_backend_session(|session| x.convert(DType::C64, session)).unwrap();
+    /// let y = backend.with_backend_session(|session| x.convert(DType::C64, session))??;
     /// assert_eq!(y.dtype(), DType::C64);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     ///
     /// # Errors
@@ -266,8 +271,9 @@ pub trait TensorSessionOpsExt {
     ///
     /// let mut backend = CpuBackend::new();
     /// let x = Tensor::from_vec_col_major(vec![2], vec![1.2_f64, -2.8]).unwrap();
-    /// let y = backend.with_backend_session(|session| x.cast(DType::I32, session)).unwrap();
+    /// let y = backend.with_backend_session(|session| x.cast(DType::I32, session))??;
     /// assert_eq!(y.as_slice::<i32>().unwrap(), &[1, -2]);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     ///
     /// # Errors
@@ -293,8 +299,9 @@ pub trait TensorSessionOpsExt {
     /// let mut backend = CpuBackend::new();
     /// let a = Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 4.0]).unwrap();
     /// let b = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 8.0]).unwrap();
-    /// let y = backend.with_backend_session(|session| a.sub(&b, session)).unwrap();
+    /// let y = backend.with_backend_session(|session| a.sub(&b, session))??;
     /// assert_eq!(y.as_slice::<f64>().unwrap(), &[1.0, -4.0]);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     ///
     /// # Errors
@@ -319,8 +326,9 @@ pub trait TensorSessionOpsExt {
     /// let mut backend = CpuBackend::new();
     /// let a = Tensor::from_vec_col_major(vec![2], vec![4.0_f64, 8.0]).unwrap();
     /// let b = Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 4.0]).unwrap();
-    /// let y = backend.with_backend_session(|session| a.div(&b, session)).unwrap();
+    /// let y = backend.with_backend_session(|session| a.div(&b, session))??;
     /// assert_eq!(y.as_slice::<f64>().unwrap(), &[2.0, 2.0]);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     ///
     /// # Errors
@@ -347,8 +355,9 @@ pub trait TensorSessionOpsExt {
     /// let mut backend = CpuBackend::new();
     /// let a = Tensor::from_vec_col_major(vec![2], vec![5.0_f64, 7.0]).unwrap();
     /// let b = Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 4.0]).unwrap();
-    /// let y = backend.with_backend_session(|session| a.rem(&b, session)).unwrap();
+    /// let y = backend.with_backend_session(|session| a.rem(&b, session))??;
     /// assert_eq!(y.as_slice::<f64>().unwrap(), &[1.0, 3.0]);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     ///
     /// # Errors
@@ -374,8 +383,9 @@ pub trait TensorSessionOpsExt {
     /// let mut backend = CpuBackend::new();
     /// let a = Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0]).unwrap();
     /// let b = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 2.0]).unwrap();
-    /// let y = backend.with_backend_session(|session| a.pow(&b, session)).unwrap();
+    /// let y = backend.with_backend_session(|session| a.pow(&b, session))??;
     /// assert_eq!(y.as_slice::<f64>().unwrap(), &[8.0, 9.0]);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     ///
     /// # Errors
@@ -402,8 +412,9 @@ pub trait TensorSessionOpsExt {
     /// let mut backend = CpuBackend::new();
     /// let a = Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 4.0]).unwrap();
     /// let b = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 8.0]).unwrap();
-    /// let y = backend.with_backend_session(|session| a.maximum(&b, session)).unwrap();
+    /// let y = backend.with_backend_session(|session| a.maximum(&b, session))??;
     /// assert_eq!(y.as_slice::<f64>().unwrap(), &[2.0, 8.0]);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     ///
     /// # Errors
@@ -428,8 +439,9 @@ pub trait TensorSessionOpsExt {
     /// let mut backend = CpuBackend::new();
     /// let a = Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 4.0]).unwrap();
     /// let b = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 8.0]).unwrap();
-    /// let y = backend.with_backend_session(|session| a.minimum(&b, session)).unwrap();
+    /// let y = backend.with_backend_session(|session| a.minimum(&b, session))??;
     /// assert_eq!(y.as_slice::<f64>().unwrap(), &[1.0, 4.0]);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     ///
     /// # Errors
@@ -453,8 +465,9 @@ pub trait TensorSessionOpsExt {
     ///
     /// let mut backend = CpuBackend::new();
     /// let x = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, -2.0]).unwrap();
-    /// let y = backend.with_backend_session(|session| x.neg(session)).unwrap();
+    /// let y = backend.with_backend_session(|session| x.neg(session))??;
     /// assert_eq!(y.as_slice::<f64>().unwrap(), &[-1.0, 2.0]);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     ///
     /// # Errors
@@ -474,8 +487,9 @@ pub trait TensorSessionOpsExt {
     ///
     /// let mut backend = CpuBackend::new();
     /// let x = Tensor::from_vec_col_major(vec![2], vec![-1.0_f64, 2.0]).unwrap();
-    /// let y = backend.with_backend_session(|session| x.abs(session)).unwrap();
+    /// let y = backend.with_backend_session(|session| x.abs(session))??;
     /// assert_eq!(y.as_slice::<f64>().unwrap(), &[1.0, 2.0]);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     ///
     /// # Errors
@@ -495,8 +509,9 @@ pub trait TensorSessionOpsExt {
     ///
     /// let mut backend = CpuBackend::new();
     /// let x = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, -2.0]).unwrap();
-    /// let y = backend.with_backend_session(|session| x.sign(session)).unwrap();
+    /// let y = backend.with_backend_session(|session| x.sign(session))??;
     /// assert_eq!(y.as_slice::<f64>().unwrap(), &[1.0, -1.0]);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     ///
     /// # Errors
@@ -518,8 +533,9 @@ pub trait TensorSessionOpsExt {
     ///
     /// let mut backend = CpuBackend::new();
     /// let x = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, -2.0]).unwrap();
-    /// let y = backend.with_backend_session(|session| x.conj(session)).unwrap();
+    /// let y = backend.with_backend_session(|session| x.conj(session))??;
     /// assert_eq!(y.as_slice::<f64>().unwrap(), &[1.0, -2.0]);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     ///
     /// # Errors
@@ -539,10 +555,11 @@ pub trait TensorSessionOpsExt {
     ///
     /// let mut backend = CpuBackend::new();
     /// let x = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, std::f64::consts::E]).unwrap();
-    /// let y = backend.with_backend_session(|session| x.log(session)).unwrap();
+    /// let y = backend.with_backend_session(|session| x.log(session))??;
     /// let y = y.as_slice::<f64>().unwrap();
     /// assert!(y[0].abs() < 1.0e-12);
     /// assert!((y[1] - 1.0).abs() < 1.0e-12);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     ///
     /// # Errors
@@ -562,10 +579,11 @@ pub trait TensorSessionOpsExt {
     ///
     /// let mut backend = CpuBackend::new();
     /// let x = Tensor::from_vec_col_major(vec![2], vec![0.0_f64, 1.0]).unwrap();
-    /// let y = backend.with_backend_session(|session| x.expm1(session)).unwrap();
+    /// let y = backend.with_backend_session(|session| x.expm1(session))??;
     /// let y = y.as_slice::<f64>().unwrap();
     /// assert!(y[0].abs() < 1.0e-12);
     /// assert!((y[1] - (std::f64::consts::E - 1.0)).abs() < 1.0e-12);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     ///
     /// # Errors
@@ -585,10 +603,11 @@ pub trait TensorSessionOpsExt {
     ///
     /// let mut backend = CpuBackend::new();
     /// let x = Tensor::from_vec_col_major(vec![2], vec![0.0_f64, std::f64::consts::E - 1.0]).unwrap();
-    /// let y = backend.with_backend_session(|session| x.log1p(session)).unwrap();
+    /// let y = backend.with_backend_session(|session| x.log1p(session))??;
     /// let y = y.as_slice::<f64>().unwrap();
     /// assert!(y[0].abs() < 1.0e-12);
     /// assert!((y[1] - 1.0).abs() < 1.0e-12);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     ///
     /// # Errors
@@ -608,10 +627,11 @@ pub trait TensorSessionOpsExt {
     ///
     /// let mut backend = CpuBackend::new();
     /// let x = Tensor::from_vec_col_major(vec![2], vec![0.0_f64, std::f64::consts::FRAC_PI_2]).unwrap();
-    /// let y = backend.with_backend_session(|session| x.sin(session)).unwrap();
+    /// let y = backend.with_backend_session(|session| x.sin(session))??;
     /// let y = y.as_slice::<f64>().unwrap();
     /// assert!(y[0].abs() < 1.0e-12);
     /// assert!((y[1] - 1.0).abs() < 1.0e-12);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     ///
     /// # Errors
@@ -631,10 +651,11 @@ pub trait TensorSessionOpsExt {
     ///
     /// let mut backend = CpuBackend::new();
     /// let x = Tensor::from_vec_col_major(vec![2], vec![0.0_f64, std::f64::consts::PI]).unwrap();
-    /// let y = backend.with_backend_session(|session| x.cos(session)).unwrap();
+    /// let y = backend.with_backend_session(|session| x.cos(session))??;
     /// let y = y.as_slice::<f64>().unwrap();
     /// assert!((y[0] - 1.0).abs() < 1.0e-12);
     /// assert!((y[1] + 1.0).abs() < 1.0e-12);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     ///
     /// # Errors
@@ -654,10 +675,11 @@ pub trait TensorSessionOpsExt {
     ///
     /// let mut backend = CpuBackend::new();
     /// let x = Tensor::from_vec_col_major(vec![2], vec![0.0_f64, 1.0]).unwrap();
-    /// let y = backend.with_backend_session(|session| x.tanh(session)).unwrap();
+    /// let y = backend.with_backend_session(|session| x.tanh(session))??;
     /// let y = y.as_slice::<f64>().unwrap();
     /// assert!(y[0].abs() < 1.0e-12);
     /// assert!((y[1] - 0.7615941559557649).abs() < 1.0e-12);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     ///
     /// # Errors
@@ -677,8 +699,9 @@ pub trait TensorSessionOpsExt {
     ///
     /// let mut backend = CpuBackend::new();
     /// let x = Tensor::from_vec_col_major(vec![2], vec![4.0_f64, 9.0]).unwrap();
-    /// let y = backend.with_backend_session(|session| x.sqrt(session)).unwrap();
+    /// let y = backend.with_backend_session(|session| x.sqrt(session))??;
     /// assert_eq!(y.as_slice::<f64>().unwrap(), &[2.0, 3.0]);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     ///
     /// # Errors
@@ -698,10 +721,11 @@ pub trait TensorSessionOpsExt {
     ///
     /// let mut backend = CpuBackend::new();
     /// let x = Tensor::from_vec_col_major(vec![2], vec![4.0_f64, 1.0]).unwrap();
-    /// let y = backend.with_backend_session(|session| x.rsqrt(session)).unwrap();
+    /// let y = backend.with_backend_session(|session| x.rsqrt(session))??;
     /// let y = y.as_slice::<f64>().unwrap();
     /// assert!((y[0] - 0.5).abs() < 1.0e-12);
     /// assert!((y[1] - 1.0).abs() < 1.0e-12);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     ///
     /// # Errors
@@ -724,8 +748,9 @@ pub trait TensorSessionOpsExt {
     /// let mut backend = CpuBackend::new();
     /// let a = Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 4.0]).unwrap();
     /// let b = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 8.0]).unwrap();
-    /// let y = backend.with_backend_session(|session| a.compare(&b, CompareDir::Gt, session)).unwrap();
+    /// let y = backend.with_backend_session(|session| a.compare(&b, CompareDir::Gt, session))??;
     /// assert_eq!(y.as_slice::<bool>().unwrap(), &[true, false]);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     ///
     /// # Errors
@@ -752,8 +777,9 @@ pub trait TensorSessionOpsExt {
     /// let condition = Tensor::from_vec_col_major(vec![2], vec![true, false]).unwrap();
     /// let on_true = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
     /// let on_false = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]).unwrap();
-    /// let y = backend.with_backend_session(|session| condition.where_select(&on_true, &on_false, session)).unwrap();
+    /// let y = backend.with_backend_session(|session| condition.where_select(&on_true, &on_false, session))??;
     /// assert_eq!(y.as_slice::<f64>().unwrap(), &[1.0, 4.0]);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     ///
     /// # Errors
@@ -780,8 +806,9 @@ pub trait TensorSessionOpsExt {
     /// let x = Tensor::from_vec_col_major(vec![2], vec![-2.0_f64, 4.0]).unwrap();
     /// let lower = Tensor::from_vec_col_major(vec![], vec![0.0_f64]).unwrap();
     /// let upper = Tensor::from_vec_col_major(vec![], vec![3.0_f64]).unwrap();
-    /// let y = backend.with_backend_session(|session| x.clamp(&lower, &upper, session)).unwrap();
+    /// let y = backend.with_backend_session(|session| x.clamp(&lower, &upper, session))??;
     /// assert_eq!(y.as_slice::<f64>().unwrap(), &[0.0, 3.0]);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     ///
     /// # Errors
@@ -807,8 +834,9 @@ pub trait TensorSessionOpsExt {
     /// let mut backend = CpuBackend::new();
     /// let a = Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]).unwrap();
     /// let b = Tensor::from_vec_col_major(vec![3, 2], vec![1.0_f64; 6]).unwrap();
-    /// let c = backend.with_backend_session(|session| a.matmul(&b, session)).unwrap();
+    /// let c = backend.with_backend_session(|session| a.matmul(&b, session))??;
     /// assert_eq!(c.shape(), &[2, 2]);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     ///
     /// # Errors
@@ -832,8 +860,9 @@ pub trait TensorSessionOpsExt {
     ///
     /// let mut backend = CpuBackend::new();
     /// let x = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap();
-    /// let y = backend.with_backend_session(|session| x.reshape(&[4], session)).unwrap();
+    /// let y = backend.with_backend_session(|session| x.reshape(&[4], session))??;
     /// assert_eq!(y.shape(), &[4]);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     ///
     /// # Errors
@@ -858,8 +887,9 @@ pub trait TensorSessionOpsExt {
     ///
     /// let mut backend = CpuBackend::new();
     /// let x = Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]).unwrap();
-    /// let y = backend.with_backend_session(|session| x.transpose(&[1, 0], session)).unwrap();
+    /// let y = backend.with_backend_session(|session| x.transpose(&[1, 0], session))??;
     /// assert_eq!(y.shape(), &[3, 2]);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     ///
     /// # Errors
@@ -888,8 +918,9 @@ pub trait TypedTensorSessionOpsExt<T: TensorScalar> {
     /// let mut backend = CpuBackend::new();
     /// let a = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 2.0]).unwrap();
     /// let b = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![3.0, 4.0]).unwrap();
-    /// let sum = backend.with_backend_session(|session| a.add(&b, session)).unwrap();
+    /// let sum = backend.with_backend_session(|session| a.add(&b, session))??;
     /// assert_eq!(sum.host_data().unwrap(), &[4.0, 6.0]);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     ///
     /// # Errors
@@ -914,8 +945,9 @@ pub trait TypedTensorSessionOpsExt<T: TensorScalar> {
     /// let mut backend = CpuBackend::new();
     /// let a = TypedTensor::<f64>::from_vec_col_major(vec![1], vec![2.0]).unwrap();
     /// let b = TypedTensor::<f64>::from_vec_col_major(vec![4], vec![3.0; 4]).unwrap();
-    /// let product = backend.with_backend_session(|session| a.mul(&b, session)).unwrap();
+    /// let product = backend.with_backend_session(|session| a.mul(&b, session))??;
     /// assert_eq!(product.host_data().unwrap(), &[6.0; 4]);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     ///
     /// # Errors
@@ -939,10 +971,11 @@ pub trait TypedTensorSessionOpsExt<T: TensorScalar> {
     ///
     /// let mut backend = CpuBackend::new();
     /// let x = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![0.0, 1.0]).unwrap();
-    /// let y = backend.with_backend_session(|session| x.exp(session)).unwrap();
+    /// let y = backend.with_backend_session(|session| x.exp(session))??;
     /// let y = y.host_data().unwrap();
     /// assert!((y[0] - 1.0).abs() < 1.0e-12);
     /// assert!((y[1] - std::f64::consts::E).abs() < 1.0e-12);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     ///
     /// # Errors
@@ -962,8 +995,9 @@ pub trait TypedTensorSessionOpsExt<T: TensorScalar> {
     ///
     /// let mut backend = CpuBackend::new();
     /// let x = TypedTensor::<f64>::from_vec_col_major(vec![2, 3], vec![1.0; 6]).unwrap();
-    /// let sums = backend.with_backend_session(|session| x.reduce_sum(&[1], session)).unwrap();
+    /// let sums = backend.with_backend_session(|session| x.reduce_sum(&[1], session))??;
     /// assert_eq!(sums.host_data().unwrap(), &[3.0, 3.0]);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     ///
     /// # Errors
@@ -989,8 +1023,9 @@ pub trait TypedTensorSessionOpsExt<T: TensorScalar> {
     /// let mut backend = CpuBackend::new();
     /// let a = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![2.0, 4.0]).unwrap();
     /// let b = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 8.0]).unwrap();
-    /// let y = backend.with_backend_session(|session| a.sub(&b, session)).unwrap();
+    /// let y = backend.with_backend_session(|session| a.sub(&b, session))??;
     /// assert_eq!(y.host_data().unwrap(), &[1.0, -4.0]);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     ///
     /// # Errors
@@ -1015,8 +1050,9 @@ pub trait TypedTensorSessionOpsExt<T: TensorScalar> {
     /// let mut backend = CpuBackend::new();
     /// let a = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![4.0, 8.0]).unwrap();
     /// let b = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![2.0, 4.0]).unwrap();
-    /// let y = backend.with_backend_session(|session| a.div(&b, session)).unwrap();
+    /// let y = backend.with_backend_session(|session| a.div(&b, session))??;
     /// assert_eq!(y.host_data().unwrap(), &[2.0, 2.0]);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     ///
     /// # Errors
@@ -1042,8 +1078,9 @@ pub trait TypedTensorSessionOpsExt<T: TensorScalar> {
     /// let mut backend = CpuBackend::new();
     /// let a = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![5.0, 7.0]).unwrap();
     /// let b = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![2.0, 4.0]).unwrap();
-    /// let y = backend.with_backend_session(|session| a.rem(&b, session)).unwrap();
+    /// let y = backend.with_backend_session(|session| a.rem(&b, session))??;
     /// assert_eq!(y.host_data().unwrap(), &[1.0, 3.0]);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     ///
     /// # Errors
@@ -1069,8 +1106,9 @@ pub trait TypedTensorSessionOpsExt<T: TensorScalar> {
     /// let mut backend = CpuBackend::new();
     /// let a = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![2.0, 3.0]).unwrap();
     /// let b = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![3.0, 2.0]).unwrap();
-    /// let y = backend.with_backend_session(|session| a.pow(&b, session)).unwrap();
+    /// let y = backend.with_backend_session(|session| a.pow(&b, session))??;
     /// assert_eq!(y.host_data().unwrap(), &[8.0, 9.0]);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     ///
     /// # Errors
@@ -1096,8 +1134,9 @@ pub trait TypedTensorSessionOpsExt<T: TensorScalar> {
     /// let mut backend = CpuBackend::new();
     /// let a = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![2.0, 4.0]).unwrap();
     /// let b = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 8.0]).unwrap();
-    /// let y = backend.with_backend_session(|session| a.maximum(&b, session)).unwrap();
+    /// let y = backend.with_backend_session(|session| a.maximum(&b, session))??;
     /// assert_eq!(y.host_data().unwrap(), &[2.0, 8.0]);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     ///
     /// # Errors
@@ -1122,8 +1161,9 @@ pub trait TypedTensorSessionOpsExt<T: TensorScalar> {
     /// let mut backend = CpuBackend::new();
     /// let a = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![2.0, 4.0]).unwrap();
     /// let b = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 8.0]).unwrap();
-    /// let y = backend.with_backend_session(|session| a.minimum(&b, session)).unwrap();
+    /// let y = backend.with_backend_session(|session| a.minimum(&b, session))??;
     /// assert_eq!(y.host_data().unwrap(), &[1.0, 4.0]);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     ///
     /// # Errors
@@ -1147,8 +1187,9 @@ pub trait TypedTensorSessionOpsExt<T: TensorScalar> {
     ///
     /// let mut backend = CpuBackend::new();
     /// let x = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, -2.0]).unwrap();
-    /// let y = backend.with_backend_session(|session| x.neg(session)).unwrap();
+    /// let y = backend.with_backend_session(|session| x.neg(session))??;
     /// assert_eq!(y.host_data().unwrap(), &[-1.0, 2.0]);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     ///
     /// # Errors
@@ -1159,17 +1200,26 @@ pub trait TypedTensorSessionOpsExt<T: TensorScalar> {
     fn neg(&self, session: &mut dyn BackendSession) -> tenferro_tensor::Result<TypedTensor<T>>;
     /// Elementwise absolute value inside a session.
     ///
+    /// The result has the real counterpart dtype `T::Real`: complex magnitude
+    /// is real, and real or integer inputs keep their own dtype.
+    ///
     /// # Examples
     ///
     /// ```rust
+    /// use num_complex::Complex64;
     /// use tenferro_cpu::CpuBackend;
     /// use tenferro_runtime::{TypedTensor, TypedTensorSessionOpsExt};
     /// use tenferro_tensor::BackendSessionHost;
     ///
     /// let mut backend = CpuBackend::new();
-    /// let x = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![-1.0, 2.0]).unwrap();
-    /// let y = backend.with_backend_session(|session| x.abs(session)).unwrap();
-    /// assert_eq!(y.host_data().unwrap(), &[1.0, 2.0]);
+    /// let x = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![-1.0, 2.0])?;
+    /// let y = backend.with_backend_session(|session| x.abs(session))??;
+    /// assert_eq!(y.host_data()?, &[1.0, 2.0]);
+    ///
+    /// let z = TypedTensor::<Complex64>::from_vec_col_major(vec![1], vec![Complex64::new(3.0, 4.0)])?;
+    /// let magnitude: TypedTensor<f64> = backend.with_backend_session(|session| z.abs(session))??;
+    /// assert_eq!(magnitude.host_data()?, &[5.0]);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     ///
     /// # Errors
@@ -1177,7 +1227,10 @@ pub trait TypedTensorSessionOpsExt<T: TensorScalar> {
     /// Returns [`tenferro_tensor::Error::Unsupported`] for an unsupported
     /// dtype or [`tenferro_tensor::Error::BackendSource`] for a typed backend
     /// failure.
-    fn abs(&self, session: &mut dyn BackendSession) -> tenferro_tensor::Result<TypedTensor<T>>;
+    fn abs(
+        &self,
+        session: &mut dyn BackendSession,
+    ) -> tenferro_tensor::Result<TypedTensor<T::Real>>;
     /// Elementwise sign inside a session.
     ///
     /// # Examples
@@ -1189,8 +1242,9 @@ pub trait TypedTensorSessionOpsExt<T: TensorScalar> {
     ///
     /// let mut backend = CpuBackend::new();
     /// let x = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, -2.0]).unwrap();
-    /// let y = backend.with_backend_session(|session| x.sign(session)).unwrap();
+    /// let y = backend.with_backend_session(|session| x.sign(session))??;
     /// assert_eq!(y.host_data().unwrap(), &[1.0, -1.0]);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     ///
     /// # Errors
@@ -1212,8 +1266,9 @@ pub trait TypedTensorSessionOpsExt<T: TensorScalar> {
     ///
     /// let mut backend = CpuBackend::new();
     /// let x = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, -2.0]).unwrap();
-    /// let y = backend.with_backend_session(|session| x.conj(session)).unwrap();
+    /// let y = backend.with_backend_session(|session| x.conj(session))??;
     /// assert_eq!(y.host_data().unwrap(), &[1.0, -2.0]);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     ///
     /// # Errors
@@ -1233,10 +1288,11 @@ pub trait TypedTensorSessionOpsExt<T: TensorScalar> {
     ///
     /// let mut backend = CpuBackend::new();
     /// let x = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, std::f64::consts::E]).unwrap();
-    /// let y = backend.with_backend_session(|session| x.log(session)).unwrap();
+    /// let y = backend.with_backend_session(|session| x.log(session))??;
     /// let y = y.host_data().unwrap();
     /// assert!(y[0].abs() < 1.0e-12);
     /// assert!((y[1] - 1.0).abs() < 1.0e-12);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     ///
     /// # Errors
@@ -1256,10 +1312,11 @@ pub trait TypedTensorSessionOpsExt<T: TensorScalar> {
     ///
     /// let mut backend = CpuBackend::new();
     /// let x = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![0.0, 1.0]).unwrap();
-    /// let y = backend.with_backend_session(|session| x.expm1(session)).unwrap();
+    /// let y = backend.with_backend_session(|session| x.expm1(session))??;
     /// let y = y.host_data().unwrap();
     /// assert!(y[0].abs() < 1.0e-12);
     /// assert!((y[1] - (std::f64::consts::E - 1.0)).abs() < 1.0e-12);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     ///
     /// # Errors
@@ -1279,10 +1336,11 @@ pub trait TypedTensorSessionOpsExt<T: TensorScalar> {
     ///
     /// let mut backend = CpuBackend::new();
     /// let x = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![0.0, std::f64::consts::E - 1.0]).unwrap();
-    /// let y = backend.with_backend_session(|session| x.log1p(session)).unwrap();
+    /// let y = backend.with_backend_session(|session| x.log1p(session))??;
     /// let y = y.host_data().unwrap();
     /// assert!(y[0].abs() < 1.0e-12);
     /// assert!((y[1] - 1.0).abs() < 1.0e-12);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     ///
     /// # Errors
@@ -1302,10 +1360,11 @@ pub trait TypedTensorSessionOpsExt<T: TensorScalar> {
     ///
     /// let mut backend = CpuBackend::new();
     /// let x = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![0.0, std::f64::consts::FRAC_PI_2]).unwrap();
-    /// let y = backend.with_backend_session(|session| x.sin(session)).unwrap();
+    /// let y = backend.with_backend_session(|session| x.sin(session))??;
     /// let y = y.host_data().unwrap();
     /// assert!(y[0].abs() < 1.0e-12);
     /// assert!((y[1] - 1.0).abs() < 1.0e-12);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     ///
     /// # Errors
@@ -1325,10 +1384,11 @@ pub trait TypedTensorSessionOpsExt<T: TensorScalar> {
     ///
     /// let mut backend = CpuBackend::new();
     /// let x = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![0.0, std::f64::consts::PI]).unwrap();
-    /// let y = backend.with_backend_session(|session| x.cos(session)).unwrap();
+    /// let y = backend.with_backend_session(|session| x.cos(session))??;
     /// let y = y.host_data().unwrap();
     /// assert!((y[0] - 1.0).abs() < 1.0e-12);
     /// assert!((y[1] + 1.0).abs() < 1.0e-12);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     ///
     /// # Errors
@@ -1348,10 +1408,11 @@ pub trait TypedTensorSessionOpsExt<T: TensorScalar> {
     ///
     /// let mut backend = CpuBackend::new();
     /// let x = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![0.0, 1.0]).unwrap();
-    /// let y = backend.with_backend_session(|session| x.tanh(session)).unwrap();
+    /// let y = backend.with_backend_session(|session| x.tanh(session))??;
     /// let y = y.host_data().unwrap();
     /// assert!(y[0].abs() < 1.0e-12);
     /// assert!((y[1] - 0.7615941559557649).abs() < 1.0e-12);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     ///
     /// # Errors
@@ -1371,8 +1432,9 @@ pub trait TypedTensorSessionOpsExt<T: TensorScalar> {
     ///
     /// let mut backend = CpuBackend::new();
     /// let x = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![4.0, 9.0]).unwrap();
-    /// let y = backend.with_backend_session(|session| x.sqrt(session)).unwrap();
+    /// let y = backend.with_backend_session(|session| x.sqrt(session))??;
     /// assert_eq!(y.host_data().unwrap(), &[2.0, 3.0]);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     ///
     /// # Errors
@@ -1392,10 +1454,11 @@ pub trait TypedTensorSessionOpsExt<T: TensorScalar> {
     ///
     /// let mut backend = CpuBackend::new();
     /// let x = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![4.0, 1.0]).unwrap();
-    /// let y = backend.with_backend_session(|session| x.rsqrt(session)).unwrap();
+    /// let y = backend.with_backend_session(|session| x.rsqrt(session))??;
     /// let y = y.host_data().unwrap();
     /// assert!((y[0] - 0.5).abs() < 1.0e-12);
     /// assert!((y[1] - 1.0).abs() < 1.0e-12);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     ///
     /// # Errors
@@ -1418,8 +1481,9 @@ pub trait TypedTensorSessionOpsExt<T: TensorScalar> {
     /// let mut backend = CpuBackend::new();
     /// let a = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![2.0, 4.0]).unwrap();
     /// let b = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 8.0]).unwrap();
-    /// let y = backend.with_backend_session(|session| a.compare(&b, CompareDir::Gt, session)).unwrap();
+    /// let y = backend.with_backend_session(|session| a.compare(&b, CompareDir::Gt, session))??;
     /// assert_eq!(y.host_data().unwrap(), &[true, false]);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     ///
     /// # Errors
@@ -1447,8 +1511,9 @@ pub trait TypedTensorSessionOpsExt<T: TensorScalar> {
     /// let x = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![-2.0, 4.0]).unwrap();
     /// let lower = TypedTensor::<f64>::from_vec_col_major(vec![], vec![0.0]).unwrap();
     /// let upper = TypedTensor::<f64>::from_vec_col_major(vec![], vec![3.0]).unwrap();
-    /// let y = backend.with_backend_session(|session| x.clamp(&lower, &upper, session)).unwrap();
+    /// let y = backend.with_backend_session(|session| x.clamp(&lower, &upper, session))??;
     /// assert_eq!(y.host_data().unwrap(), &[0.0, 3.0]);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     ///
     /// # Errors
@@ -1475,8 +1540,9 @@ pub trait TypedTensorSessionOpsExt<T: TensorScalar> {
     /// let mut backend = CpuBackend::new();
     /// let a = TypedTensor::<f64>::from_vec_col_major(vec![2, 3], vec![1.0; 6]).unwrap();
     /// let b = TypedTensor::<f64>::from_vec_col_major(vec![3, 2], vec![1.0; 6]).unwrap();
-    /// let c = backend.with_backend_session(|session| a.matmul(&b, session)).unwrap();
+    /// let c = backend.with_backend_session(|session| a.matmul(&b, session))??;
     /// assert_eq!(c.shape(), &[2, 2]);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     ///
     /// # Errors
@@ -1501,8 +1567,9 @@ pub trait TypedTensorSessionOpsExt<T: TensorScalar> {
     ///
     /// let mut backend = CpuBackend::new();
     /// let x = TypedTensor::<f64>::from_vec_col_major(vec![2, 3], vec![1.0; 6]).unwrap();
-    /// let y = backend.with_backend_session(|session| x.reshape(&[3, 2], session)).unwrap();
+    /// let y = backend.with_backend_session(|session| x.reshape(&[3, 2], session))??;
     /// assert_eq!(y.shape(), &[3, 2]);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     ///
     /// # Errors
@@ -1527,8 +1594,9 @@ pub trait TypedTensorSessionOpsExt<T: TensorScalar> {
     ///
     /// let mut backend = CpuBackend::new();
     /// let x = TypedTensor::<f64>::from_vec_col_major(vec![2, 3], vec![1.0; 6]).unwrap();
-    /// let y = backend.with_backend_session(|session| x.transpose(&[1, 0], session)).unwrap();
+    /// let y = backend.with_backend_session(|session| x.transpose(&[1, 0], session))??;
     /// assert_eq!(y.shape(), &[3, 2]);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     ///
     /// # Errors
@@ -1554,8 +1622,9 @@ pub trait TypedTensorSessionOpsExt<T: TensorScalar> {
     ///
     /// let mut backend = CpuBackend::new();
     /// let row = TypedTensor::<f64>::from_vec_col_major(vec![3], vec![1.0, 2.0, 3.0]).unwrap();
-    /// let matrix = backend.with_backend_session(|session| row.broadcast_in_dim(&[2, 3], &[1], session)).unwrap();
+    /// let matrix = backend.with_backend_session(|session| row.broadcast_in_dim(&[2, 3], &[1], session))??;
     /// assert_eq!(matrix.shape(), &[2, 3]);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     ///
     /// # Errors
@@ -1594,9 +1663,10 @@ pub trait TypedTensorSessionOpsExt<T: TensorScalar> {
 /// let on_true = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 2.0]).unwrap();
 /// let on_false = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![3.0, 4.0]).unwrap();
 /// let selected = backend
-///     .with_backend_session(|session| condition.where_select(&on_true, &on_false, session))
+///     .with_backend_session(|session| condition.where_select(&on_true, &on_false, session))?
 ///     .unwrap();
 /// assert_eq!(selected.host_data().unwrap(), &[1.0, 4.0]);
+/// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 pub trait TypedTensorMaskSessionOpsExt {
     /// Select typed values using this bool tensor as condition.

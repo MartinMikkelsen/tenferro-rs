@@ -141,3 +141,48 @@ fn batched_faer_lanes_report_a_singular_member() {
         );
     }
 }
+
+/// Every forced batch strategy with a route reproduces the one-thread batch,
+/// and a strategy without a route fails with a typed error (#1938 D9).
+#[test]
+fn forced_batch_strategies_reproduce_the_serial_batch_or_fail_typed() {
+    use tenferro_cpu::{CpuBatchPolicy, CpuBatchStrategy};
+
+    let n = 8usize;
+    let batch = 8usize;
+    let a_data = pivoting(n, batch, 11);
+    let a = || faer_tensor(&[n, n, batch], &a_data);
+    let mut serial = CpuBackend::with_threads_and_kind(1, CpuBackendKind::Faer).unwrap();
+    let reference = with_cpu_linalg(&mut serial, |s| s.lu_factor(&a())).unwrap();
+
+    for strategy in [
+        CpuBatchStrategy::Sequential,
+        CpuBatchStrategy::ProviderItems,
+        CpuBatchStrategy::OuterParallel,
+    ] {
+        let mut backend = CpuBackend::with_threads_and_kind(4, CpuBackendKind::Faer)
+            .unwrap()
+            .with_batch_policy(CpuBatchPolicy::new(strategy));
+        let factors = with_cpu_linalg(&mut backend, |s| s.lu_factor(&a())).unwrap();
+        // Sequential and outer lanes run each item with `Par::Seq`, which is
+        // bit-identical to the serial loop; provider items may use faer's own
+        // parallelism, which changes nothing for pivoted LU of this size.
+        assert_eq!(data(&factors[0]), data(&reference[0]), "{strategy:?}");
+        assert_eq!(data(&factors[1]), data(&reference[1]), "{strategy:?}");
+    }
+
+    for (threads, strategy) in [
+        (1, CpuBatchStrategy::OuterParallel),
+        (4, CpuBatchStrategy::WholeBatchVendor),
+    ] {
+        let mut backend = CpuBackend::with_threads_and_kind(threads, CpuBackendKind::Faer)
+            .unwrap()
+            .with_batch_policy(CpuBatchPolicy::new(strategy));
+        let error = with_cpu_linalg(&mut backend, |s| s.lu_factor(&a())).unwrap_err();
+        assert_eq!(
+            error.kind(),
+            tenferro_tensor::ErrorKind::Unsupported,
+            "{strategy:?}: {error}"
+        );
+    }
+}

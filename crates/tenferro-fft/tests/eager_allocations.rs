@@ -5,7 +5,7 @@ use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use tenferro_ad::{EagerRuntime, EagerTensor};
 use tenferro_cpu::CpuBackend;
-use tenferro_fft::{EagerTensorFftExt, FftNorm};
+use tenferro_fft::{EagerSessionFftExt, EagerTensorFftExt, FftNorm};
 use tenferro_tensor::{BackendSessionHost, Tensor};
 
 const LEN: usize = 4096;
@@ -83,15 +83,17 @@ fn ordinary_eager_drop_and_consuming_fft_reuse_without_input_sized_allocations()
     let runtime = EagerRuntime::with_cpu_backend(backend.clone()).unwrap();
     let input = EagerTensor::from_tensor_in(
         Tensor::from_vec_col_major([64, 64], vec![Complex64::new(1., 0.); LEN]).unwrap(),
-        runtime,
+        runtime.clone(),
     )
     .unwrap();
-    let first = measured((1, INPUT_BYTES), || {
-        input.fft(None, 1, FftNorm::Backward).unwrap()
-    });
-    let second = measured((1, INPUT_BYTES), || {
-        input.fft(None, 1, FftNorm::Backward).unwrap()
-    });
+    let transform = || {
+        runtime
+            .with_eager_session(|s| s.fft(&input, None, 1, FftNorm::Backward))
+            .unwrap()
+            .unwrap()
+    };
+    let first = measured((1, INPUT_BYTES), transform);
+    let second = measured((1, INPUT_BYTES), transform);
     assert_ne!(
         first
             .value()
@@ -108,7 +110,7 @@ fn ordinary_eager_drop_and_consuming_fft_reuse_without_input_sized_allocations()
     );
     drop(first);
     drop(second);
-    let output = measured((0, 0), || input.fft(None, 1, FftNorm::Backward).unwrap());
+    let output = measured((0, 0), transform);
     let pointer = output
         .value()
         .unwrap()
@@ -116,7 +118,7 @@ fn ordinary_eager_drop_and_consuming_fft_reuse_without_input_sized_allocations()
         .unwrap()
         .as_ptr();
     drop(output);
-    let output = measured((0, 0), || input.fft(None, 1, FftNorm::Backward).unwrap());
+    let output = measured((0, 0), transform);
     assert_eq!(
         output
             .value()
@@ -132,9 +134,11 @@ fn ordinary_eager_drop_and_consuming_fft_reuse_without_input_sized_allocations()
     );
     measured((0, 0), || {
         let owned = output.into_value().unwrap();
-        backend.with_backend_session(|s| s.reclaim_buffer(owned));
+        backend
+            .with_backend_session(|s| s.reclaim_buffer(owned))
+            .unwrap();
     });
-    let output = measured((0, 0), || input.fft(None, 1, FftNorm::Backward).unwrap());
+    let output = measured((0, 0), transform);
     assert_eq!(
         output
             .value()

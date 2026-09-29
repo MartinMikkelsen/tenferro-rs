@@ -8,7 +8,7 @@ use crate::cubecl::{
 };
 use crate::{Error, Tensor};
 use tenferro_tensor::backend::BackendSessionHost;
-use tenferro_tensor::TensorElementwise;
+use tenferro_tensor::TensorRead;
 
 #[cube(launch_unchecked)]
 fn kernel_add_f64(output: &mut Array<f64>, a: &Array<f64>, b: &Array<f64>) {
@@ -174,6 +174,7 @@ gpu_test!(test_pointer_bridge, {
             })
             .expect("CUDA backend session should be available")
         })
+        .unwrap()
         .expect("raw session should run");
 });
 
@@ -184,8 +185,21 @@ gpu_test!(test_backend_add_matches_cpu_reference, {
     let b = Tensor::from_vec_col_major(vec![3], vec![4.0_f64, 5.0, 6.0]).unwrap();
     let gpu_a = upload_tensor(backend.runtime(), &a).unwrap();
     let gpu_b = upload_tensor(backend.runtime(), &b).unwrap();
-    let expected = cpu.add(&a, &b).unwrap();
-    let actual_gpu = backend.add(&gpu_a, &gpu_b).unwrap();
+    let expected = cpu
+        .with_backend_session(|__s| {
+            __s.add_read(TensorRead::from_tensor(&a), TensorRead::from_tensor(&b))
+        })
+        .unwrap()
+        .unwrap();
+    let actual_gpu = backend
+        .with_backend_session(|__s| {
+            __s.add_read(
+                TensorRead::from_tensor(&gpu_a),
+                TensorRead::from_tensor(&gpu_b),
+            )
+        })
+        .unwrap()
+        .unwrap();
     let actual = download_tensor(backend.runtime(), &actual_gpu).unwrap();
     assert_eq!(actual.shape(), expected.shape());
     assert_eq!(
@@ -226,14 +240,17 @@ gpu_test!(test_trivial_cube_kernel, {
 gpu_test!(
     test_zero_stride_view_materializes_without_cutensor_descriptor,
     {
-        use tenferro_tensor::{TensorStructural, TensorValue};
+        use tenferro_tensor::TensorValue;
         let mut backend = CudaBackend::new(CudaDeviceId::from_ordinal(0)).unwrap();
         let host = Tensor::from_vec_col_major([2], vec![2.0_f64, 5.0]).unwrap();
         let input = upload_tensor(backend.runtime(), &host).unwrap();
         let view = TensorValue::from_tensor(input)
             .broadcast_in_dim_view([3, 2], [1])
             .unwrap();
-        let output = backend.to_contiguous_read(view.tensor_read()).unwrap();
+        let output = backend
+            .with_backend_session(|__s| __s.to_contiguous_read(view.tensor_read()))
+            .unwrap()
+            .unwrap();
         assert_eq!(
             backend
                 .cutensor_permutation_plan_cache_stats()
@@ -310,7 +327,10 @@ gpu_test!(test_complex_sign_is_scale_safe, {
     )
     .unwrap();
     let input = upload_tensor(backend.runtime(), &host).unwrap();
-    let output = backend.sign(&input).unwrap();
+    let output = backend
+        .with_backend_session(|__s| __s.sign_read(TensorRead::from_tensor(&input)))
+        .unwrap()
+        .unwrap();
     let actual = download_tensor(backend.runtime(), &output).unwrap();
     for (&value, expected) in actual.as_slice::<Complex64>().unwrap().iter().zip([
         Complex64::new(0.0, 0.0),
@@ -333,7 +353,10 @@ gpu_test!(test_complex_sign_is_scale_safe, {
     )
     .unwrap();
     let input = upload_tensor(backend.runtime(), &host).unwrap();
-    let output = backend.sign(&input).unwrap();
+    let output = backend
+        .with_backend_session(|__s| __s.sign_read(TensorRead::from_tensor(&input)))
+        .unwrap()
+        .unwrap();
     let actual = download_tensor(backend.runtime(), &output).unwrap();
     for (&value, expected) in actual.as_slice::<Complex32>().unwrap().iter().zip([
         Complex32::new(0.0, 0.0),
@@ -459,6 +482,7 @@ gpu_test!(test_pointer_and_stream_bridge, {
             })
             .expect("CUDA backend session should be available")
         })
+        .unwrap()
         .expect("raw session should run");
 
     let back = download_tensor(backend.runtime(), &gpu).unwrap();

@@ -4,14 +4,16 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc};
 use std::time::Duration;
+use tenferro_tensor::DotGeneralConfig;
 
 use super::super::*;
 use crate::{
     CpuDomainExecutor, CpuDomainExecutorCapabilities, CpuDomainExecutorError, CpuDomainId,
     CpuDomainOwnership, CpuExecutorAffinity, CpuExecutorReentrancy, CpuExecutorShutdown, CpuId,
-    CpuInnerParallelism, CpuPlacementGuarantee, CpuSet, ExternalCpuDomain, ScopedCpuJob,
-    ScopedCpuJobs,
+    CpuInnerParallelism, CpuSet, ExternalCpuDomain, ScopedCpuJob, ScopedCpuJobs,
 };
+use tenferro_tensor::TensorRead;
+use tenferro_tensor::{BackendSessionHost, SessionEntryError};
 
 #[derive(Debug)]
 struct CapabilityOnlyGemmProvider {
@@ -126,7 +128,6 @@ fn shared_scope_rejects_external_domain_without_executor_admission() {
             node_placement(0, cpu_set([0, 1])),
             2,
             2,
-            CpuPlacementGuarantee::ExactDeclared,
             Arc::clone(&installs),
         )],
         topology([0, 1, 2, 3]),
@@ -138,12 +139,12 @@ fn shared_scope_rejects_external_domain_without_executor_admission() {
     assert!(matches!(error, crate::Error::Unsupported { .. }));
     assert!(error.to_string().contains("Tenferro-managed"));
     assert_eq!(installs.load(Ordering::SeqCst), 0);
-    assert_eq!(backend.install(|| 13), 13);
+    assert_eq!(backend.install(|| 13).unwrap(), 13);
     assert_eq!(installs.load(Ordering::SeqCst), 1);
 }
 
 #[test]
-fn bundle_install_rejects_external_workers_for_a_strict_multithread_subdomain() {
+fn bundle_install_accepts_external_workers_on_a_multithread_subdomain() {
     let backend = external_backend(
         CpuDomainId::new(7),
         [external_domain(
@@ -151,26 +152,20 @@ fn bundle_install_rejects_external_workers_for_a_strict_multithread_subdomain() 
             node_placement(0, cpu_set([0, 1])),
             2,
             2,
-            CpuPlacementGuarantee::ExactDeclared,
             Arc::new(AtomicUsize::new(0)),
         )],
         topology([0, 1, 2, 3]),
     )
     .unwrap();
 
-    let error = backend
+    // Placement of provider-created threads is unmanaged, so a count-controlled
+    // external provider is accepted even though its workers may leave the
+    // domain's CPU set; the set still decides resource exclusion.
+    backend
         .with_provider_bundle(bundle_with_gemm_capabilities(
             controlled_external_capabilities(),
         ))
-        .unwrap_err();
-    assert!(matches!(
-        error,
-        CpuProviderBundleInstallError::IncompatibleDomain {
-            domain_id,
-            source: crate::CpuProviderDomainError::PlacementNotEnforceable { .. },
-            ..
-        } if domain_id == CpuDomainId::new(7)
-    ));
+        .unwrap();
 }
 
 #[test]
@@ -182,7 +177,6 @@ fn bundle_install_allows_external_workers_for_advisory_or_process_wide_domains()
             node_placement(0, cpu_set([0, 1])),
             2,
             2,
-            CpuPlacementGuarantee::AdvisoryDeclared,
             Arc::new(AtomicUsize::new(0)),
         )],
         topology([0, 1, 2, 3]),
@@ -201,7 +195,6 @@ fn bundle_install_allows_external_workers_for_advisory_or_process_wide_domains()
             all_allowed_placement(cpu_set([0, 1, 2, 3])),
             2,
             2,
-            CpuPlacementGuarantee::ExactDeclared,
             Arc::new(AtomicUsize::new(0)),
         )],
         topology([0, 1, 2, 3]),
@@ -223,7 +216,6 @@ fn bundle_install_allows_controlled_external_budget_one_inline() {
             node_placement(0, cpu_set([0])),
             1,
             1,
-            CpuPlacementGuarantee::ExactDeclared,
             Arc::new(AtomicUsize::new(0)),
         )],
         topology([0, 1]),
@@ -238,7 +230,7 @@ fn bundle_install_allows_controlled_external_budget_one_inline() {
 
 #[cfg(any(target_os = "linux", target_os = "android"))]
 #[test]
-fn bundle_install_checks_lazily_constructible_exact_numa_domains() {
+fn bundle_install_accepts_external_workers_on_lazily_constructible_numa_domains() {
     let allowed = cpu_set([0, 1, 2, 3]);
     let topology =
         CpuTopology::from_discovered(allowed.clone(), [(NumaNodeId::new(0), cpu_set([0, 1]))])
@@ -251,19 +243,11 @@ fn bundle_install_checks_lazily_constructible_exact_numa_domains() {
         ResolvedCpuExecution::Managed(ResolvedCpuPlacement::AllAllowed { cpus: allowed }),
     );
 
-    let error = backend
+    backend
         .with_provider_bundle(bundle_with_gemm_capabilities(
             controlled_external_capabilities(),
         ))
-        .unwrap_err();
-    assert!(matches!(
-        error,
-        CpuProviderBundleInstallError::IncompatibleDomain {
-            domain_id,
-            source: crate::CpuProviderDomainError::PlacementNotEnforceable { .. },
-            ..
-        } if domain_id == CpuDomainId::new(1)
-    ));
+        .unwrap();
 }
 
 #[test]
@@ -275,7 +259,6 @@ fn bundle_install_rejects_uncontrolled_count_with_typed_source() {
             all_allowed_placement(cpu_set([0, 1])),
             2,
             2,
-            CpuPlacementGuarantee::ExactDeclared,
             Arc::new(AtomicUsize::new(0)),
         )],
         topology([0, 1]),
@@ -308,7 +291,6 @@ fn external_constructor_rejects_an_initial_incompatible_bundle_atomically() {
             drops: Some(Arc::clone(&drops)),
         }),
         NonZeroUsize::new(2).unwrap(),
-        CpuPlacementGuarantee::ExactDeclared,
     )
     .unwrap();
 
@@ -319,7 +301,8 @@ fn external_constructor_rejects_an_initial_incompatible_bundle_atomically() {
             topology([0, 1, 2, 3]),
             ResourceArbiter::new(),
             CpuBackendKind::Faer,
-            bundle_with_gemm_capabilities(controlled_external_capabilities()),
+            // An uncontrolled thread count cannot honor the two-thread budget.
+            bundle_with_gemm_capabilities(crate::CpuProviderExecutionCapabilities::default()),
         )
         .unwrap_err();
 
@@ -337,7 +320,7 @@ fn external_constructor_rejects_an_initial_incompatible_bundle_atomically() {
         CpuProviderBundleInstallError::IncompatibleDomain {
             domain_id,
             provider: crate::CpuProviderSlot::Gemm,
-            source: crate::CpuProviderDomainError::PlacementNotEnforceable { .. },
+            source: crate::CpuProviderDomainError::ThreadCountNotEnforceable { .. },
         } if *domain_id == CpuDomainId::new(12)
     ));
     assert!(std::error::Error::source(install_source)
@@ -360,7 +343,6 @@ fn external_constructor_accepts_the_initial_standard_faer_bundle() {
                 node_placement(0, cpu_set([0, 1])),
                 2,
                 2,
-                CpuPlacementGuarantee::ExactDeclared,
                 Arc::new(AtomicUsize::new(0)),
             )],
             topology([0, 1, 2, 3]),
@@ -384,7 +366,6 @@ fn external_constructor_rejects_the_initial_uncontrolled_standard_blas_bundle() 
                 all_allowed_placement(cpu_set([0, 1])),
                 1,
                 1,
-                CpuPlacementGuarantee::ExactDeclared,
                 Arc::new(AtomicUsize::new(0)),
             )],
             topology([0, 1]),
@@ -420,7 +401,6 @@ fn external_registry_routes_without_reconstructing_executors() {
         node_placement(0, allowed.clone()),
         2,
         1,
-        CpuPlacementGuarantee::ExactDeclared,
         Arc::clone(&node_runs),
     );
     let all = external_domain(
@@ -428,7 +408,6 @@ fn external_registry_routes_without_reconstructing_executors() {
         all_allowed_placement(allowed),
         3,
         2,
-        CpuPlacementGuarantee::ExactDeclared,
         Arc::clone(&all_runs),
     );
 
@@ -445,16 +424,16 @@ fn external_registry_routes_without_reconstructing_executors() {
         backend.execution_info().execution_mode(),
         CpuExecutionMode::ExternalManaged
     );
-    backend.install(|| {});
+    backend.install(|| {}).unwrap();
     assert_eq!(node_runs.load(Ordering::Relaxed), 1);
     assert_eq!(all_runs.load(Ordering::Relaxed), 0);
 
     let node = backend
         .for_placement(CpuPlacement::NumaNode(NumaNodeId::new(0)))
         .unwrap();
-    node.install(|| {});
+    node.install(|| {}).unwrap();
     let all = backend.for_placement(CpuPlacement::AllAllowed).unwrap();
-    all.install(|| {});
+    all.install(|| {}).unwrap();
     assert_eq!(node_runs.load(Ordering::Relaxed), 2);
     assert_eq!(all_runs.load(Ordering::Relaxed), 1);
     assert!(backend.supports_placement(CpuPlacement::Auto));
@@ -473,7 +452,6 @@ fn external_diagnostics_distinguish_worker_count_and_thread_budget() {
             placement.clone(),
             3,
             2,
-            CpuPlacementGuarantee::AdvisoryDeclared,
             Arc::new(AtomicUsize::new(0)),
         )],
         topology,
@@ -488,10 +466,6 @@ fn external_diagnostics_distinguish_worker_count_and_thread_budget() {
     assert_eq!(info.worker_count(), 3);
     assert_eq!(info.thread_budget(), 2);
     assert_eq!(backend.num_threads(), 2);
-    assert_eq!(
-        info.placement_guarantee(),
-        Some(CpuPlacementGuarantee::AdvisoryDeclared)
-    );
     assert_eq!(info.domain_ownership(), CpuDomainOwnership::ExternalManaged);
     assert_eq!(
         info.executor_affinity(),
@@ -507,7 +481,6 @@ fn external_diagnostics_never_upgrade_caller_affinity_or_shutdown_ownership() {
         node_placement(0, cpu_set([0])),
         Arc::new(CpuContext::with_threads(1).unwrap()),
         NonZeroUsize::new(1).unwrap(),
-        CpuPlacementGuarantee::ExactDeclared,
     )
     .unwrap();
     let backend = external_backend(CpuDomainId::new(5), [domain], topology([0])).unwrap();
@@ -530,7 +503,6 @@ fn explicit_unregistered_external_placement_is_typed_and_never_falls_back() {
             node_placement(0, cpu_set([0])),
             1,
             1,
-            CpuPlacementGuarantee::ExactDeclared,
             Arc::clone(&installs),
         )],
         topology([0, 1]),
@@ -767,14 +739,16 @@ fn observe_external_overlap(
     let spawn_worker = |index, backend: CpuBackend, release_rx: mpsc::Receiver<()>| {
         let entered_tx = entered_tx.clone();
         std::thread::spawn(move || {
-            backend.install(move || {
-                entered_tx
-                    .send(index)
-                    .expect("overlap observer must remain alive");
-                release_rx
-                    .recv_timeout(release_timeout)
-                    .expect("overlap observer must release every entered worker");
-            });
+            backend
+                .install(move || {
+                    entered_tx
+                        .send(index)
+                        .expect("overlap observer must remain alive");
+                    release_rx
+                        .recv_timeout(release_timeout)
+                        .expect("overlap observer must release every entered worker");
+                })
+                .unwrap();
         })
     };
     let first_worker = spawn_worker(0, first, release_first_rx);
@@ -822,7 +796,6 @@ fn overlapping_exact_and_advisory_external_domains_serialize() {
                 node_placement(0, cpu_set([0, 1])),
                 1,
                 1,
-                CpuPlacementGuarantee::ExactDeclared,
                 Arc::new(AtomicUsize::new(0)),
             ),
             external_domain(
@@ -830,7 +803,6 @@ fn overlapping_exact_and_advisory_external_domains_serialize() {
                 node_placement(1, cpu_set([1, 2])),
                 1,
                 1,
-                CpuPlacementGuarantee::AdvisoryDeclared,
                 Arc::new(AtomicUsize::new(0)),
             ),
         ],
@@ -883,8 +855,11 @@ fn external_domain_permit_releases_when_the_operation_panics() {
         .for_placement(CpuPlacement::NumaNode(NumaNodeId::new(1)))
         .unwrap();
 
-    assert!(catch_unwind(AssertUnwindSafe(|| first.install(|| panic!("forced")))).is_err());
-    assert_eq!(second.install(|| 7), 7);
+    assert!(catch_unwind(AssertUnwindSafe(|| first
+        .install(|| panic!("forced"))
+        .unwrap()))
+    .is_err());
+    assert_eq!(second.install(|| 7).unwrap(), 7);
 }
 
 #[test]
@@ -894,7 +869,6 @@ fn external_executor_error_keeps_its_diagnostic_and_releases_the_permit() {
         node_placement(0, cpu_set([0, 1])),
         Arc::new(RejectingExecutor),
         NonZeroUsize::new(1).unwrap(),
-        CpuPlacementGuarantee::ExactDeclared,
     )
     .unwrap();
     let backend = external_backend(
@@ -907,17 +881,20 @@ fn external_executor_error_keeps_its_diagnostic_and_releases_the_permit() {
     )
     .unwrap();
 
-    let message = catch_unwind(AssertUnwindSafe(|| backend.install(|| ())))
-        .err()
-        .map(super::panic_message)
-        .expect("executor admission failure should panic at the infallible API");
-    assert!(message.contains("executor failed"), "{message}");
+    let mut ran = false;
+    let error = backend.install(|| ran = true).unwrap_err();
+    assert!(!ran);
+    assert!(
+        matches!(error, crate::Error::BackendSource { .. }),
+        "{error}"
+    );
+    let message = format!("{error}: {}", std::error::Error::source(&error).unwrap());
     assert!(message.contains("fixture rejection"), "{message}");
 
     let overlapping = backend
         .for_placement(CpuPlacement::NumaNode(NumaNodeId::new(1)))
         .unwrap();
-    assert_eq!(overlapping.install(|| 7), 7);
+    assert_eq!(overlapping.install(|| 7).unwrap(), 7);
 }
 
 #[test]
@@ -933,17 +910,9 @@ fn external_domain_rejects_nested_backend_entry() {
     .unwrap();
     let nested = backend.clone();
 
-    let message = catch_unwind(AssertUnwindSafe(|| {
-        backend.install(|| nested.install(|| ()))
-    }))
-    .err()
-    .map(super::panic_message)
-    .expect("nested external execution should panic");
+    let nested_result = backend.install(|| nested.install(|| ())).unwrap();
 
-    assert!(
-        message.contains("another CPU backend execution"),
-        "{message}"
-    );
+    super::assert_reentered(&nested_result.unwrap_err());
 }
 
 #[test]
@@ -956,7 +925,6 @@ fn external_linalg_execution_uses_the_supplied_no_inner_executor() {
             node_placement(0, cpu_set([0])),
             1,
             1,
-            CpuPlacementGuarantee::ExactDeclared,
             Arc::clone(&installs),
         )],
         topology([0]),
@@ -983,7 +951,6 @@ fn external_elementwise_and_session_operations_use_the_supplied_no_inner_executo
             node_placement(0, cpu_set([0])),
             1,
             1,
-            CpuPlacementGuarantee::ExactDeclared,
             Arc::clone(&installs),
         )],
         topology([0]),
@@ -992,14 +959,23 @@ fn external_elementwise_and_session_operations_use_the_supplied_no_inner_executo
     let lhs = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
     let rhs = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]).unwrap();
 
-    let output = backend.add(&lhs, &rhs).unwrap();
+    let output = backend
+        .with_backend_session(|__s| {
+            __s.add_read(TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs))
+        })
+        .unwrap()
+        .unwrap();
     assert_eq!(output.as_slice::<f64>().unwrap(), &[4.0, 6.0]);
     assert_eq!(installs.load(Ordering::Relaxed), 1);
 
-    backend.with_backend_session(|session| {
-        let output = session.add(&lhs, &rhs).unwrap();
-        assert_eq!(output.as_slice::<f64>().unwrap(), &[4.0, 6.0]);
-    });
+    backend
+        .with_backend_session(|session| {
+            let output = session
+                .add_read(TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs))
+                .unwrap();
+            assert_eq!(output.as_slice::<f64>().unwrap(), &[4.0, 6.0]);
+        })
+        .unwrap();
     assert_eq!(installs.load(Ordering::Relaxed), 2);
 }
 
@@ -1014,7 +990,6 @@ fn external_provider_dot_uses_the_supplied_no_inner_executor() {
             node_placement(0, cpu_set([0])),
             1,
             1,
-            CpuPlacementGuarantee::ExactDeclared,
             Arc::clone(&installs),
         )],
         topology([0]),
@@ -1038,7 +1013,16 @@ fn external_provider_dot_uses_the_supplied_no_inner_executor() {
         rhs_batch_dims: [].as_slice().into(),
     };
 
-    backend.dot_general(&lhs, &rhs, &config).unwrap();
+    backend
+        .with_backend_session(|__s| {
+            __s.dot_general_read(
+                TensorRead::from_tensor(&lhs),
+                TensorRead::from_tensor(&rhs),
+                &config,
+            )
+        })
+        .unwrap()
+        .unwrap();
     assert_eq!(calls.load(Ordering::Relaxed), 1);
     assert_eq!(installs.load(Ordering::Relaxed), 1);
 }
@@ -1057,7 +1041,6 @@ fn sequential_direct_session_native_dot_and_linalg_each_enter_exactly_once() {
         node_placement(0, cpu_set([0])),
         executor,
         NonZeroUsize::new(1).unwrap(),
-        CpuPlacementGuarantee::ExactDeclared,
     )
     .unwrap();
     let backend = external_backend(CpuDomainId::new(1), [domain], topology([0])).unwrap();
@@ -1073,20 +1056,31 @@ fn sequential_direct_session_native_dot_and_linalg_each_enter_exactly_once() {
     let rhs = Tensor::from_vec_col_major(vec![1, 1], vec![3.0_f64]).unwrap();
 
     let direct_calls = AtomicUsize::new(0);
-    backend.install(|| {
-        direct_calls.fetch_add(1, Ordering::Relaxed);
-    });
+    backend
+        .install(|| {
+            direct_calls.fetch_add(1, Ordering::Relaxed);
+        })
+        .unwrap();
     assert_eq!(direct_calls.load(Ordering::Relaxed), 1);
     assert_eq!(installs.load(Ordering::Relaxed), 1);
     assert_eq!(submits.load(Ordering::Relaxed), 0);
 
-    backend.add(&lhs, &rhs).unwrap();
+    backend
+        .with_backend_session(|__s| {
+            __s.add_read(TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs))
+        })
+        .unwrap()
+        .unwrap();
     assert_eq!(installs.load(Ordering::Relaxed), 2);
     assert_eq!(submits.load(Ordering::Relaxed), 0);
 
-    backend.with_backend_session(|session| {
-        session.add(&lhs, &rhs).unwrap();
-    });
+    backend
+        .with_backend_session(|session| {
+            session
+                .add_read(TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs))
+                .unwrap();
+        })
+        .unwrap();
     assert_eq!(installs.load(Ordering::Relaxed), 3);
     assert_eq!(submits.load(Ordering::Relaxed), 0);
 
@@ -1103,16 +1097,19 @@ fn sequential_direct_session_native_dot_and_linalg_each_enter_exactly_once() {
     assert_eq!(submits.load(Ordering::Relaxed), 0);
 
     backend
-        .dot_general(
-            &lhs,
-            &rhs,
-            &DotGeneralConfig {
-                lhs_contracting_dims: [1].as_slice().into(),
-                rhs_contracting_dims: [0].as_slice().into(),
-                lhs_batch_dims: [].as_slice().into(),
-                rhs_batch_dims: [].as_slice().into(),
-            },
-        )
+        .with_backend_session(|__s| {
+            __s.dot_general_read(
+                TensorRead::from_tensor(&lhs),
+                TensorRead::from_tensor(&rhs),
+                &DotGeneralConfig {
+                    lhs_contracting_dims: [1].as_slice().into(),
+                    rhs_contracting_dims: [0].as_slice().into(),
+                    lhs_batch_dims: [].as_slice().into(),
+                    rhs_batch_dims: [].as_slice().into(),
+                },
+            )
+        })
+        .unwrap()
         .unwrap();
     assert_eq!(provider_calls.load(Ordering::Relaxed), 1);
     assert_eq!(installs.load(Ordering::Relaxed), 5);
@@ -1126,14 +1123,18 @@ fn external_executor_error_is_preserved_as_a_typed_tensor_source() {
         node_placement(0, cpu_set([0])),
         Arc::new(RejectingExecutor),
         NonZeroUsize::new(1).unwrap(),
-        CpuPlacementGuarantee::ExactDeclared,
     )
     .unwrap();
     let mut backend = external_backend(CpuDomainId::new(1), [domain], topology([0])).unwrap();
     let lhs = Tensor::from_vec_col_major(vec![1], vec![1.0_f64]).unwrap();
     let rhs = Tensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
 
-    let error = backend.add(&lhs, &rhs).unwrap_err();
+    let error = backend
+        .with_backend_session(|__s| {
+            __s.add_read(TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs))
+        })
+        .unwrap()
+        .unwrap_err();
     let crate::Error::BackendSource { source, .. } = error else {
         panic!("executor failure must retain a typed source");
     };
@@ -1168,10 +1169,12 @@ fn external_registry_and_handle_clones_retain_executor_owners() {
     let second = backend
         .for_placement(CpuPlacement::NumaNode(NumaNodeId::new(1)))
         .unwrap();
-    second.install(|| {
-        assert_eq!(first_drops.load(Ordering::Relaxed), 0);
-        assert_eq!(second_drops.load(Ordering::Relaxed), 0);
-    });
+    second
+        .install(|| {
+            assert_eq!(first_drops.load(Ordering::Relaxed), 0);
+            assert_eq!(second_drops.load(Ordering::Relaxed), 0);
+        })
+        .unwrap();
 
     drop(backend);
     drop(first);
@@ -1367,14 +1370,35 @@ fn caller_managed_public_reentry_is_rejected_and_unwind_releases_admission() {
             let (result_tx, result_rx) = mpsc::channel();
             rayon::scope(|scope| {
                 scope.spawn(move |_| {
-                    let rejected = catch_unwind(AssertUnwindSafe(|| {
-                        nested.with_linalg_pool(|_, _| Ok(())).unwrap();
-                    }))
-                    .is_err();
-                    result_tx.send(rejected).unwrap();
+                    let mut ran = false;
+                    let outcome = nested.with_linalg_pool(|_, _| {
+                        ran = true;
+                        Ok(())
+                    });
+                    result_tx.send((outcome, ran)).unwrap();
                 });
             });
-            assert!(result_rx.recv().unwrap());
+            // The spawned job runs either on this worker while the scope waits
+            // (a nested entry) or on another worker of the caller-managed pool,
+            // which has no queue to wait in (busy). Both are rejected before the
+            // callback runs.
+            let (outcome, ran) = result_rx.recv().unwrap();
+            assert!(!ran);
+            let error = outcome.unwrap_err();
+            assert!(
+                matches!(
+                    error,
+                    crate::Error::SessionEntry {
+                        source: SessionEntryError::Contended {
+                            backend: CPU_BACKEND,
+                            ..
+                        } | SessionEntryError::Reentered {
+                            backend: CPU_BACKEND
+                        }
+                    }
+                ),
+                "{error}"
+            );
             Ok(())
         })
         .unwrap();
@@ -1462,14 +1486,7 @@ fn registry_error(result: Result<CpuBackend, CpuBackendError>) -> ExternalCpuDom
 }
 
 fn external_domain_for_validation(id: u64, placement: ResolvedCpuPlacement) -> ExternalCpuDomain {
-    external_domain(
-        id,
-        placement,
-        1,
-        1,
-        CpuPlacementGuarantee::ExactDeclared,
-        Arc::new(AtomicUsize::new(0)),
-    )
+    external_domain(id, placement, 1, 1, Arc::new(AtomicUsize::new(0)))
 }
 
 fn external_domain(
@@ -1477,7 +1494,6 @@ fn external_domain(
     placement: ResolvedCpuPlacement,
     workers: usize,
     thread_budget: usize,
-    guarantee: CpuPlacementGuarantee,
     installs: Arc<AtomicUsize>,
 ) -> ExternalCpuDomain {
     ExternalCpuDomain::new(
@@ -1489,7 +1505,6 @@ fn external_domain(
             drops: None,
         }),
         NonZeroUsize::new(thread_budget).unwrap(),
-        guarantee,
     )
     .unwrap()
 }
@@ -1508,7 +1523,6 @@ fn external_domain_with_drop_counter(
             drops: Some(drops),
         }),
         NonZeroUsize::new(1).unwrap(),
-        CpuPlacementGuarantee::ExactDeclared,
     )
     .unwrap()
 }
@@ -1652,4 +1666,133 @@ impl CpuDomainExecutor for RejectingExecutor {
             message: "fixture rejection".to_owned(),
         })
     }
+}
+
+#[test]
+fn overlapping_session_entry_waits_for_the_other_thread_instead_of_failing() {
+    let backend = external_backend(
+        CpuDomainId::new(1),
+        [
+            external_domain_for_validation(1, node_placement(0, cpu_set([0, 1]))),
+            external_domain_for_validation(2, node_placement(1, cpu_set([1, 2]))),
+        ],
+        topology([0, 1, 2]),
+    )
+    .unwrap();
+    let mut first = backend
+        .for_placement(CpuPlacement::NumaNode(NumaNodeId::new(0)))
+        .unwrap();
+    let mut second = backend
+        .for_placement(CpuPlacement::NumaNode(NumaNodeId::new(1)))
+        .unwrap();
+
+    let (first_entered_tx, first_entered_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel::<()>();
+    let holder = std::thread::spawn(move || {
+        first
+            .with_backend_session(move |_| {
+                first_entered_tx.send(()).unwrap();
+                release_rx.recv().unwrap();
+            })
+            .unwrap();
+    });
+    first_entered_rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("the first session must be admitted");
+
+    let (second_entered_tx, second_entered_rx) = mpsc::channel();
+    let waiter = std::thread::spawn(move || {
+        second.with_backend_session(move |_| second_entered_tx.send(()).unwrap())
+    });
+    // CPU 1 is held by the first session: the second entry waits in FIFO order
+    // rather than returning a busy error or running early.
+    assert!(second_entered_rx
+        .recv_timeout(Duration::from_millis(100))
+        .is_err());
+    release_tx.send(()).unwrap();
+    holder.join().unwrap();
+    second_entered_rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("the waiting session must run once the permit is released");
+    waiter.join().unwrap().unwrap();
+}
+
+#[test]
+fn poisoned_arbiter_rejects_session_entry_before_the_callback() {
+    let mut backend = external_backend(
+        CpuDomainId::new(1),
+        [external_domain_for_validation(
+            1,
+            node_placement(0, cpu_set([0])),
+        )],
+        topology([0]),
+    )
+    .unwrap();
+    backend.shared.arbiter.poison_for_test();
+
+    let mut ran = false;
+    let entry = backend.with_backend_session(|_| ran = true);
+    assert!(!ran);
+    let error = entry.unwrap_err();
+    assert!(
+        matches!(
+            error,
+            SessionEntryError::ResourcePoisoned {
+                backend: CPU_BACKEND,
+                ..
+            }
+        ),
+        "{error}"
+    );
+    assert_eq!(error.kind(), tenferro_tensor::ErrorKind::RuntimeState);
+    // Direct operations report the same failure through the tensor error.
+    assert!(matches!(
+        backend.install(|| ()),
+        Err(crate::Error::SessionEntry {
+            source: SessionEntryError::ResourcePoisoned { .. }
+        })
+    ));
+}
+
+#[test]
+fn busy_caller_managed_domain_is_reported_from_another_thread() {
+    let pool = Arc::new(
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(1)
+            .build()
+            .unwrap(),
+    );
+    let domain = caller_managed_domain(42, Arc::clone(&pool), 1);
+    let mut backend = external_backend(CpuDomainId::new(42), [domain], topology([0])).unwrap();
+    let mut other = backend.clone();
+
+    let (entered_tx, entered_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel::<()>();
+    let holder = std::thread::spawn(move || {
+        backend
+            .with_backend_session(move |_| {
+                entered_tx.send(()).unwrap();
+                release_rx.recv().unwrap();
+            })
+            .unwrap();
+    });
+    entered_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+
+    let mut ran = false;
+    let entry = other.with_backend_session(|_| ran = true);
+    assert!(!ran);
+    assert!(
+        matches!(
+            entry,
+            Err(SessionEntryError::Contended {
+                backend: CPU_BACKEND,
+                ..
+            })
+        ),
+        "{entry:?}"
+    );
+    release_tx.send(()).unwrap();
+    holder.join().unwrap();
+    // Once the holder returns, the flag is released and entry succeeds.
+    assert_eq!(other.with_backend_session(|_| 5_u8).unwrap(), 5);
 }

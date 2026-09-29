@@ -155,6 +155,42 @@ diff-scoped review bot must be listed in that script's `ALWAYS_SECTIONS` or
   indexing before config validation, and allocation helpers bypassing shared
   checked shape-product functions.
 
+## Backend Session Entry
+
+Session entry — creating backend execution state — is owned by backend entry
+mechanisms, not by exported names. The audited set lives in
+[`scripts/audit-session-entry.py`](scripts/audit-session-entry.py):
+`default_backend_session`, `with_session_entry_guard`,
+`install_with_pool_context[_fresh]`, `install_with_indexed_pool_context[_unmarked]`,
+`run_backend_session_cached`, `with_execution_scope`, `with_evaluation_scope`, and
+`CpuExecSession` / `CudaExecSession` / `WebGpuExecSession` construction.
+
+- Every occurrence in library code must sit inside a function listed in
+  [`scripts/session-entry-allowlist.json`](scripts/session-entry-allowlist.json),
+  which is keyed by mechanism and holds function-level source locations. The
+  allowlist may only shrink; `--bless` is for recording a removal.
+- An execution scope creates execution state too: it holds an execution permit and
+the resource set that permit keys, and sessions opened inside it reuse them. Scope
+entry points therefore belong to the audited set. `with_execution_scope` has exactly
+one allowlisted entry — the API definition in `tenferro-cpu` — and
+`with_evaluation_scope`, the hook that lets an evaluation open one scope of its own,
+is tracked with **zero** entries: the day library code calls it, the gate fails until
+a reviewer allowlists that call site.
+- Operation implementations reach a session through `with_backend_session` and
+  must not create execution state themselves. Entry is fallible: admission
+  failures (reentry, a busy caller-managed domain, a scope mismatch, poisoned
+  admission state, executor failure) are typed `SessionEntryError`s reported
+  before the callback runs, never panics.
+- Backend-leaf native services are reached only through the leaf's visitor on
+  `BackendSession::native_session()`; `NativeSessionRef` has one `unsafe`
+  constructor, used only by the leaf that owns the marker.
+- A renamed import is not an exemption: the audit resolves `use ... as alias`
+  and fails on an aliased entry, and its own negative tests run on every check.
+- Test, benchmark and example code is out of scope; moving that code into the
+  library brings it back into scope.
+- `python3 scripts/audit-session-entry.py --check` runs as part of
+  `scripts/check-pr-fast.sh`.
+
 ## Invariant Markers
 
 The false-positive marker/test requirements below intentionally retain a
@@ -627,14 +663,14 @@ Tests follow implementation ownership.
 
 ## Tensor Core Data Model
 
-- `tenferro-tensor-core` owns backend-independent host tensor metadata and
-  contiguous host storage: `DType`, `TensorScalar`, `HostTensor<T>`, dynamic
-  `Tensor`, host/dynamic views, `TensorRef`, `ShapeVec`, `StrideVec`,
-  `SliceSpec`, and metadata-only `reshape_view`, `transpose_view`, and
-  `slice_view`.
+- `tenferro-tensor-core` owns backend-independent metadata only: rank and
+  layout (`TensorLayout`, `ShapeVec`, `StrideVec`, `SliceSpec` and the
+  metadata-only `reshape_view`, `transpose_view`, `slice_view`), `DType`,
+  `TensorScalar`, scalar tags and promotion facts. The host container
+  (`HostTensor`, `DefaultScalars`, `ScalarSet`, `ErasedHostTensor`) lives in
+  `tenferro-tensor` (#1938), and core must not refer back to tensor-owned types.
 - It must not depend on CUDA, GPU backends, backend buffers, provider
-  selection, or execution backend traits. Its owned `Tensor` must not grow
-  inherent `TensorBackend` execution helpers.
+  selection, or execution backend traits.
 - Core views and layouts validate bounds eagerly with checked arithmetic.
   `TensorLayout` metadata views may use signed strides and negative slice
   steps when reachable-range validation succeeds; zero step remains invalid.
@@ -807,25 +843,34 @@ Tests follow implementation ownership.
 
 ## Public API Convention
 
-- **AD core ops**: `EagerTensor` and `TracedTensor` use methods as the
-  canonical surface for single-output operations (`x.exp()`,
-  `x.reshape(shape)`, `a.dot_general(&b, config)`), operator overloads where
-  they read naturally (`&a + &b`, `&a * &b`), and associated functions for
-  core operations with no natural receiver (`EagerTensor::where_select(...)`,
-  `TracedTensor::concatenate(...)`).
+- **AD core ops**: `TracedTensor` uses methods for single-output operations
+  (`x.exp()`, `x.reshape(shape)`, `a.dot_general(&b, config)`), operator
+  overloads where they read naturally (`&a + &b`), and associated functions
+  without a natural receiver (`TracedTensor::concatenate(...)`). Eager
+  operations instead use a runtime-bound, explicitly borrowed `EagerSession`
+  (`ctx.with_eager_session(|s| s.exp(&x))`, `s.where_select(&cond, &x, &y)`);
+  `EagerTensor` remains the value/trace handle, not an implicit per-operation
+  backend entry point. Do not add operator overloads that hide eager entry.
+  The existing tensor-owned linalg `solve` preserves calling-thread `no_grad`
+  behavior, and consuming in-place FFT preserves exclusive ownership; neither
+  is a precedent for new implicit eager operation methods.
 - **Non-AD concrete ops**: `Tensor` and dynamic-rank `TypedTensor<T>` use
   crate-root session extension traits (`TensorSessionOpsExt`,
   `TypedTensorSessionOpsExt`, and `TypedTensorMaskSessionOpsExt`) whose
   methods run inside a caller-provided `BackendSession` (entered via
-  `TensorBackend::with_backend_session`). Private helper modules are fine, but
+  `BackendSessionHost::with_backend_session`, which returns
+  `Result<R, SessionEntryError>`, so a fallible operation is written `??`).
+  The facade targets the `Dynamic` representation; a `Host` owner reaches it
+  through the zero-copy `into_dynamic()`. Private helper modules are fine, but
   public `tensor` / `typed_tensor` module free functions are not part of the
   release API.
 - **Extension families**: extension crates cannot add inherent methods to
   external tensor types, so their canonical tensor-facing surface is extension
-  traits (`TracedTensorLinalgExt`, `EagerEinsumExt`, `TraceContextEinsumExt`,
-  `TracedTensorEinsumExt`, `TracedTensorFftExt`) re-exported at the crate
-  root. Do not expose public `traced_tensor` / `eager_tensor` module free
-  functions for standard operation families.
+  traits (`TracedTensorLinalgExt`, `EagerEinsumExt`, `EagerSessionLinalgExt`,
+  `EagerSessionFftExt`, `TraceContextEinsumExt`, `TracedTensorEinsumExt`,
+  `TracedTensorFftExt`) re-exported at the crate root. Do not expose public
+  `traced_tensor` / `eager_tensor` module free functions for standard
+  operation families.
 - **No compatibility shims for operation-surface style changes**: when API
   compatibility is not explicitly required, remove old module functions
   instead of keeping wrappers beside the canonical surface.

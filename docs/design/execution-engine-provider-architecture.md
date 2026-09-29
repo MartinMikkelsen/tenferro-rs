@@ -1606,10 +1606,11 @@ External BLAS worker pools are not modeled as a `CpuDomainExecutor`:
 
 A budget of one is sound for both axes only when the provider can force
 worker-local sequential execution, because that call then runs inline on the
-already pinned calling thread. Under strict `Managed` or `ExternalManaged`
-placement, an exact domain `CpuSet` combined with a count-controlled external
-BLAS budget greater than one is a typed placement error unless the domain is
-the process's complete allowed CPU set or placement is explicitly advisory.
+already pinned calling thread. (Superseded by #1938 D8: the exact/advisory
+placement declaration and its placement error were removed; a count-controlled
+external BLAS is accepted on any cooperative domain, and provider-created
+threads are documented as unmanaged. The paragraph below still describes the
+count contract.)
 An uncontrolled provider such as parallel OpenBLAS fails the independent
 thread-count contract for every finite strict bundle budget; it remains
 available only through the process-global `ProviderDefaultExclusive`
@@ -2163,12 +2164,10 @@ Required focused tests include:
 - transfers bridge source and destination event domains as first-class
   scheduled nodes, and collectives cannot be registered as arbitrary extension
   operations;
-- count and placement capability are tested independently: a count-controlled
-  budget-one external BLAS runs inline on a pinned domain thread, while strict
-  exact-`CpuSet` placement plus a controlled external BLAS budget greater than
-  one is rejected unless the domain is the complete process-allowed set;
-  explicitly advisory placement is accepted only after count validation and
-  remains visible in diagnostics; parallel OpenBLAS remains uncontrolled;
+- count capability is tested: a count-controlled budget-one external BLAS runs
+  inline on a pinned domain thread; since #1938 D8 provider placement is not
+  validated (provider-created threads are unmanaged); parallel OpenBLAS remains
+  uncontrolled;
 - OpenBLAS, MKL, Accelerate, ArmPL `_mp`, ArmPL serial, and NVPL construction
   probes classify thread-count and placement capability without making an
   unsupported thread-local or per-domain claim;

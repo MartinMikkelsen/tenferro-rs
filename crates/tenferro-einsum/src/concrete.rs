@@ -11,7 +11,7 @@ use crate::eager::{
     binary_dot_config_for_into, binary_dot_plan_for_shapes, eager_einsum_exec,
     eager_einsum_exec_read, eager_einsum_exec_read_into, eager_einsum_exec_read_into_accum,
     eager_einsum_read_subscripts_on_session, eager_einsum_subscripts_on_session,
-    execute_binary_dot_read_into, plan_subscripts,
+    execute_binary_dot_read_into, execute_binary_dot_read_into_accum, plan_subscripts,
 };
 use crate::ellipsis::resolve_einsum_notation;
 use crate::TensorDotAxes;
@@ -57,7 +57,13 @@ impl TensorTensordotExt for Tensor {
         let config =
             crate::tensordot::dot_general_config(axes, self.shape().len(), rhs.shape().len())?;
         crate::tensordot::validate_concrete_contract_dims(self.shape(), rhs.shape(), &config)?;
-        session.dot_general(self, rhs, &config).map_err(Error::from)
+        session
+            .dot_general_read(
+                TensorRead::from_tensor(self),
+                TensorRead::from_tensor(rhs),
+                &config,
+            )
+            .map_err(Error::from)
     }
 }
 
@@ -115,7 +121,7 @@ impl<T: TensorScalar> TypedTensorTensordotExt<T> for TypedTensor<T> {
 ///
 /// let out = backend.with_backend_session(|session| {
 ///     [&lhs, &rhs].einsum("ij,jk->ik", session)
-/// })?;
+/// })??;
 /// assert_eq!(out.shape(), &[2, 4]);
 /// # Ok::<(), tenferro_einsum::Error>(())
 /// ```
@@ -346,7 +352,7 @@ impl<const N: usize> TensorEinsumIntoExt for [&Tensor; N] {
 ///
 /// let out = backend.with_backend_session(|session| {
 ///     [&lhs, &rhs].einsum("ij,jk->ik", session)
-/// })?;
+/// })??;
 /// assert_eq!(out.shape(), &[2, 4]);
 /// # Ok::<(), tenferro_einsum::Error>(())
 /// ```
@@ -457,7 +463,7 @@ impl<T: TensorScalar, const N: usize> TypedTensorEinsumExt<T> for [&TypedTensor<
 /// let mut backend = CpuBackend::new();
 /// let result = backend.with_backend_session(|session| {
 ///     [lhs.as_view(), rhs.as_view()].einsum_read("i,i->", session)
-/// })?;
+/// })??;
 /// assert_eq!(result.as_slice()?, &[11.0]);
 /// # Ok::<(), tenferro_einsum::Error>(())
 /// ```
@@ -475,7 +481,7 @@ pub trait TypedTensorReadEinsumExt<T: TensorScalar> {
     /// let mut backend = CpuBackend::new();
     /// let result = backend.with_backend_session(|session| {
     ///     [input.as_view()].einsum_read("i->i", session)
-    /// })?;
+    /// })??;
     /// assert_eq!(result.as_slice()?, &[2.0, 3.0]);
     /// # Ok::<(), tenferro_einsum::Error>(())
     /// ```
@@ -525,7 +531,7 @@ pub trait TypedTensorReadEinsumExt<T: TensorScalar> {
     /// let mut backend = CpuBackend::new();
     /// let result = backend.with_backend_session(|session| {
     ///     [input.as_view()].einsum_read_subscripts(&subscripts, session)
-    /// })?;
+    /// })??;
     /// assert_eq!(result.as_slice()?, &[2.0, 3.0]);
     /// # Ok::<(), tenferro_einsum::Error>(())
     /// ```
@@ -771,7 +777,7 @@ impl<T: TensorScalar, const N: usize> TypedTensorEinsumIntoExt<T> for [&TypedTen
 /// let mut backend = CpuBackend::new();
 /// backend.with_backend_session(|session| {
 ///     [lhs.as_view(), rhs.as_view()].einsum_read_into("i,i->", session, &mut output)
-/// })?;
+/// })??;
 /// assert_eq!(output.as_slice()?, &[11.0]);
 /// # Ok::<(), tenferro_einsum::Error>(())
 /// ```
@@ -791,7 +797,7 @@ pub trait TypedTensorReadEinsumIntoExt<T: TensorScalar> {
     /// let mut backend = CpuBackend::new();
     /// backend.with_backend_session(|session| {
     ///     [input.as_view()].einsum_read_into("i->i", session, &mut output)
-    /// })?;
+    /// })??;
     /// assert_eq!(output.as_slice()?, &[2.0, 3.0]);
     /// # Ok::<(), tenferro_einsum::Error>(())
     /// ```
@@ -848,7 +854,7 @@ pub trait TypedTensorReadEinsumIntoExt<T: TensorScalar> {
     /// let mut backend = CpuBackend::new();
     /// backend.with_backend_session(|session| {
     ///     [input.as_view()].einsum_read_into_subscripts(&subscripts, session, &mut output)
-    /// })?;
+    /// })??;
     /// assert_eq!(output.as_slice()?, &[2.0, 3.0]);
     /// # Ok::<(), tenferro_einsum::Error>(())
     /// ```
@@ -1016,7 +1022,7 @@ impl<'a, T: TensorScalar, const N: usize> TypedTensorReadEinsumIntoExt<T>
 /// ];
 /// let mut backend = CpuBackend::new();
 ///
-/// let out = backend.with_backend_session(|session| inputs.einsum_read("ij,j->i", session))?;
+/// let out = backend.with_backend_session(|session| inputs.einsum_read("ij,j->i", session))??;
 /// assert_eq!(out.shape(), &[2]);
 /// # Ok::<(), tenferro_einsum::Error>(())
 /// ```
@@ -1277,7 +1283,7 @@ impl<'a, const N: usize> TensorReadEinsumIntoExt for [TensorRead<'a>; N] {
 ///
 /// let mut backend = CpuBackend::new();
 /// let out = backend
-///     .with_backend_session(|session| plan.execute([&lhs, &rhs], session))?;
+///     .with_backend_session(|session| plan.execute([&lhs, &rhs], session))??;
 /// assert_eq!(out.shape(), &[2, 4]);
 /// # Ok::<(), tenferro_einsum::Error>(())
 /// ```
@@ -1461,7 +1467,7 @@ impl ConcreteEinsumPlan {
     ///
     /// let mut backend = CpuBackend::new();
     /// let out = backend
-    ///     .with_backend_session(|session| plan.execute([&lhs, &rhs], session))?;
+    ///     .with_backend_session(|session| plan.execute([&lhs, &rhs], session))??;
     /// assert_eq!(out.shape(), &[2, 4]);
     /// # Ok::<(), tenferro_einsum::Error>(())
     /// ```
@@ -1501,7 +1507,7 @@ impl ConcreteEinsumPlan {
     ///
     /// let mut backend = CpuBackend::new();
     /// let out = backend
-    ///     .with_backend_session(|session| plan.execute_typed([&lhs, &rhs], session))?;
+    ///     .with_backend_session(|session| plan.execute_typed([&lhs, &rhs], session))??;
     /// assert_eq!(out.shape(), &[2, 4]);
     /// # Ok::<(), tenferro_einsum::Error>(())
     /// ```
@@ -1552,7 +1558,7 @@ impl ConcreteEinsumPlan {
     /// let mut backend = CpuBackend::new();
     /// let reads = [TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs)];
     /// let out = backend
-    ///     .with_backend_session(|session| plan.execute_read(reads, session))?;
+    ///     .with_backend_session(|session| plan.execute_read(reads, session))??;
     /// assert_eq!(out.shape(), &[2, 4]);
     /// # Ok::<(), tenferro_einsum::Error>(())
     /// ```
@@ -1598,7 +1604,7 @@ impl ConcreteEinsumPlan {
     ///         session,
     ///         TensorWrite::from_tensor(&mut out),
     ///     )
-    /// })?;
+    /// })??;
     /// assert_eq!(out.as_slice::<f64>()?, vec![3.0_f64; 8].as_slice());
     /// # Ok::<(), tenferro_einsum::Error>(())
     /// ```
@@ -1656,7 +1662,7 @@ impl ConcreteEinsumPlan {
     /// let mut out = TypedTensor::<f64>::from_vec_col_major(vec![2, 4], vec![0.0; 8]).unwrap();
     /// backend.with_backend_session(|session| {
     ///     plan.execute_typed_into([&lhs, &rhs], session, &mut out)
-    /// })?;
+    /// })??;
     /// assert_eq!(out.as_slice()?, vec![3.0_f64; 8].as_slice());
     /// # Ok::<(), tenferro_einsum::Error>(())
     /// ```
@@ -1719,7 +1725,7 @@ impl ConcreteEinsumPlan {
     /// let reads = [TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs)];
     /// backend.with_backend_session(|session| {
     ///     plan.execute_read_into(reads, session, TensorWrite::from_tensor(&mut out))
-    /// })?;
+    /// })??;
     /// assert_eq!(out.as_slice::<f64>()?, vec![3.0_f64; 8].as_slice());
     /// # Ok::<(), tenferro_einsum::Error>(())
     /// ```
@@ -1776,7 +1782,7 @@ impl ConcreteEinsumPlan {
     ///         DotGeneralAccumulation::add_to(DType::F64)?,
     ///         TensorWrite::from_tensor(&mut out),
     ///     )
-    /// })?;
+    /// })??;
     /// assert_eq!(out.as_slice::<f64>()?, &[7.0]);
     /// # Ok::<(), tenferro_einsum::Error>(())
     /// ```
@@ -1801,6 +1807,16 @@ impl ConcreteEinsumPlan {
         let inputs = inputs.as_ref();
         self.validate_read_inputs(inputs, PLAN_EXECUTE_OP)?;
         self.validate_cached_output(&out, PLAN_EXECUTE_OP)?;
+        if let Some(binary_dot) = &self.binary_dot {
+            return execute_binary_dot_read_into_accum(
+                session,
+                inputs,
+                binary_dot,
+                accumulation,
+                out,
+            )
+            .map_err(Error::from);
+        }
         eager_einsum_exec_read_into_accum(session, inputs, &self.tree, accumulation, out)
             .map_err(Error::from)
     }

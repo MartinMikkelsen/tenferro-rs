@@ -15,7 +15,7 @@ use tenferro_ad::extension::{
     adopt_untracked_eager_value, apply_eager_with_targeted_extension_session,
     EagerExtensionBackendKind, EagerExtensionTarget,
 };
-use tenferro_ad::{EagerRuntime, EagerTensor};
+use tenferro_ad::{EagerRuntime, EagerSession, EagerTensor};
 use tenferro_cpu::CpuBackend;
 #[cfg(feature = "cuda")]
 use tenferro_gpu::cuda::CudaBackend;
@@ -320,7 +320,12 @@ fn try_direct_binary_dot_general(
         if !exact_dot_shapes(lhs.shape(), rhs.shape(), &plan.config) {
             return None;
         }
-        return Some(lhs.dot_general(rhs, plan.config).map_err(Error::Runtime));
+        return Some(
+            lhs.runtime()
+                .with_eager_session(|s| s.dot_general(lhs, rhs, plan.config))
+                .and_then(|result| result)
+                .map_err(Error::Runtime),
+        );
     }
     None
 }
@@ -679,6 +684,25 @@ fn execute_eager_einsum_program(
     inputs: &[&EagerTensor],
     program: &ExpandedEagerProgram,
 ) -> Result<Option<EagerTensor>> {
+    let Some(first) = inputs.first() else {
+        return Ok(None);
+    };
+    // The whole expanded program runs in one borrowed session instead of one
+    // backend-session entry per instruction; the calling thread's no_grad and
+    // capture_trace modes still govern it.
+    first
+        .runtime()
+        .with_eager_session(|session| {
+            execute_eager_einsum_program_in_session(session, inputs, program)
+        })
+        .map_err(Error::Runtime)?
+}
+
+fn execute_eager_einsum_program_in_session(
+    session: &mut EagerSession<'_>,
+    inputs: &[&EagerTensor],
+    program: &ExpandedEagerProgram,
+) -> Result<Option<EagerTensor>> {
     let mut slots: Vec<Option<EagerTensor>> = vec![None; program.compiled.n_slots];
     for &(slot, input_idx) in &program.input_slots {
         let tensor = inputs.get(input_idx).ok_or_else(|| {
@@ -692,6 +716,7 @@ fn execute_eager_einsum_program(
     let mut instruction_idx = 0;
     while instruction_idx < program.compiled.instructions.len() {
         if let Some((output_slot, output)) = try_execute_eager_broadcast_multiply_pattern(
+            session,
             &program.compiled.instructions,
             instruction_idx,
             &slots,
@@ -714,8 +739,9 @@ fn execute_eager_einsum_program(
             .iter()
             .map(|&slot| slot_tensor(&slots, slot))
             .collect::<Result<_>>()?;
-        let output =
-            tenferro_ad::extension::apply_standard_op(instr.operation.clone(), &input_refs)?;
+        let output = session
+            .apply_standard_op(instr.operation.clone(), &input_refs)
+            .map_err(Error::Runtime)?;
         slots[instr.outputs[0]] = Some(output);
         instruction_idx += 1;
     }
@@ -803,6 +829,7 @@ fn std_tensor_op_retained_bytes(op: &StdTensorOp) -> usize {
 }
 
 fn try_execute_eager_broadcast_multiply_pattern(
+    session: &mut EagerSession<'_>,
     instructions: &[Instruction<StdTensorOp>],
     instruction_idx: usize,
     slots: &[Option<EagerTensor>],
@@ -857,8 +884,9 @@ fn try_execute_eager_broadcast_multiply_pattern(
     let rhs = slot_tensor(slots, rhs_bc.inputs[0])?;
     let lhs_shape = eval_shape_exprs(slots, &lhs_bc.inputs, lhs_shape_exprs)?;
     let rhs_shape = eval_shape_exprs(slots, &rhs_bc.inputs, rhs_shape_exprs)?;
-    let Some(output) =
-        backend_broadcast_multiply_untracked(lhs, &lhs_shape, lhs_dims, rhs, &rhs_shape, rhs_dims)?
+    let Some(output) = backend_broadcast_multiply_untracked(
+        session, lhs, &lhs_shape, lhs_dims, rhs, &rhs_shape, rhs_dims,
+    )?
     else {
         return Ok(None);
     };
@@ -868,6 +896,7 @@ fn try_execute_eager_broadcast_multiply_pattern(
 
 #[allow(clippy::too_many_arguments)]
 fn backend_broadcast_multiply_untracked(
+    session: &mut EagerSession<'_>,
     lhs: &EagerTensor,
     lhs_shape: &[usize],
     lhs_dims: &[usize],
@@ -887,16 +916,14 @@ fn backend_broadcast_multiply_untracked(
     }
 
     let runtime = lhs.runtime();
-    let value = runtime.with_execution_session(|backend| {
-        backend.execute_broadcast_multiply_value(
-            lhs.tensor_read(),
-            lhs_shape,
-            lhs_dims,
-            rhs.tensor_read(),
-            rhs_shape,
-            rhs_dims,
-        )
-    })??;
+    let value = session.backend_session().execute_broadcast_multiply_value(
+        lhs.tensor_read(),
+        lhs_shape,
+        lhs_dims,
+        rhs.tensor_read(),
+        rhs_shape,
+        rhs_dims,
+    )?;
 
     Ok(value
         .map(|value| adopt_untracked_eager_value(runtime.clone(), value))
@@ -1069,7 +1096,10 @@ pub fn tensordot(
 ) -> Result<EagerTensor> {
     let config = crate::tensordot::dot_general_config(axes, lhs.shape().len(), rhs.shape().len())?;
     crate::tensordot::validate_concrete_contract_dims(lhs.shape(), rhs.shape(), &config)?;
-    lhs.dot_general(rhs, config).map_err(Error::Runtime)
+    lhs.runtime()
+        .with_eager_session(|s| s.dot_general(lhs, rhs, config))
+        .and_then(|result| result)
+        .map_err(Error::Runtime)
 }
 
 #[cfg(test)]

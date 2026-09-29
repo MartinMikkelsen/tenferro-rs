@@ -5,7 +5,7 @@
 //! multi-hop rule: every pair must exist on its own.
 
 use tenferro_tensor::Tensor;
-use tenferro_tensor_core::{ErasedHostTensor, HostTensor};
+use tenferro_tensor::{ErasedHostTensor, HostTensor};
 
 use crate::Df64;
 
@@ -77,7 +77,7 @@ fn f64_values<'a>(tensor: &'a Tensor, op: &'static str) -> tenferro_tensor::Resu
 /// ```rust
 /// use tenferro_df64_proof::{conversion, Df64};
 /// use tenferro_tensor::Tensor;
-/// use tenferro_tensor_core::{ErasedHostTensor, HostTensor};
+/// use tenferro_tensor::{ErasedHostTensor, HostTensor};
 ///
 /// let low = Df64 { hi: 1.0, lo: 2f64.powi(-52) };
 /// let tensor = Tensor::external(ErasedHostTensor::new(

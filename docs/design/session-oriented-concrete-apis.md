@@ -69,26 +69,28 @@ semantics change to the hottest segmented-execution path. That redesign is
 out of scope and tracked separately if ever desired; it must NOT be assumed
 as a prerequisite.
 
+## Evaluation-wide scope
+
+A2 (one execution scope around a whole evaluation) remains deferred; see
+[`exec-session.md`](./exec-session.md#evaluation-wide-scope-a2-is-deferred).
+
 ## Nested-entry prohibition: mechanism, not convention
 
 Operations receiving a `BackendSession` must never call `with_backend_session`
 internally. Enforcement by backend family:
 
-- **CPU (release)**: `inherited_or_new_execution_owner()`
-  (`crates/tenferro-cpu/src/arbiter.rs`) already panics with
-  `BACKEND_REENTRY_PANIC` when a CPU session is entered while
-  `EXECUTION_OWNER` is set on the thread (or an owned Rayon scope has an
-  active owner). Covers the one-shot-inside-session case, including the
-  pinned one-worker managed pool handoff.
-- **Default adapter (debug)**: `default_backend_session` sets a thread-local
+Every rejection below is a typed `SessionEntryError` returned before the
+closure runs (#1938 D6); none of them panics.
+
+- **CPU**: `fresh_execution_owner()` (`crates/tenferro-cpu/src/arbiter.rs`)
+  returns `None` when `EXECUTION_OWNER` is set on the thread (or an owned Rayon
+  scope has an active owner), and admission reports
+  `SessionEntryError::Reentered`. Covers the one-shot-inside-session case,
+  including the pinned one-worker managed pool handoff.
+- **Portable guard**: `with_session_entry_guard` sets a thread-local
   in-session flag (Drop-guard restored, so panics in `f` still restore) and
-  `debug_assert!`s it was unset at entry (implemented in PR A). Covers
-  non-overriding backends.
-- **CUDA / WebGPU (not yet wired)**: both override `with_backend_session` and
-  call `f` directly, so neither the portable guard nor the CPU panic applies.
-  Dedicated enforcement for those overrides is tracked as follow-up; the
-  acceptance criterion below is scoped to CPU + default-adapter backends
-  until then.
+  returns `Reentered` if it was already set, in every build profile.
+- **CUDA / WebGPU**: both overrides wrap their closure in the portable guard.
 
 ## Generic spelling
 
@@ -152,9 +154,10 @@ session API:  &mut dyn BackendSession ──────────────
 - One-shot methods delegate to the same implementation where practical.
 - `Tensor`/`TypedTensor` remain context-free.
 - Concrete-only extension authors need no runtime/graph/AD machinery.
-- Nested-entry prohibition enforced per backend family (CPU release panic +
-  default-adapter debug assert; CUDA/WebGPU enforcement tracked as
-  follow-up).
+- Nested-entry prohibition enforced per backend family (originally a CPU
+  release panic plus a debug assert; since #1938 D6 a typed
+  `SessionEntryError::Reentered` before the closure runs on CPU, CUDA and
+  WebGPU).
 - `Send` bounds preserved and documented as a soundness requirement.
 - The 10-op trivial-chain gate passes (≥2x, predicted ~6x).
 - No material regression for large operations.
@@ -165,7 +168,7 @@ Scope decision for the first implementation PR. The design-review gate rules
 apply: this section is the pre-implementation design document; the
 implementation must not start until it has a reviewer-gpt verdict.
 
-### Measured current state of the one-shot path
+### Measured state of the one-shot path before #1926
 
 A binary op already pays more than one session entry today
 (`crates/tenferro-runtime/src/tensor.rs`):
@@ -173,11 +176,15 @@ A binary op already pays more than one session entry today
 - `add` → `broadcast_binary` → `broadcast_to` per operand (each
   `broadcast_to` can enter 0-2 sessions: `reshape` + `broadcast_in_dim`, or
   zero when shapes already match via `duplicate`) → then
-  `with_backend_session(|exec| exec.add(...))` for the op itself.
+  `with_backend_session(|exec| exec.add_read(...))` for the op itself.
   Worst case: **5 sessions per binary op** (both operands need
   reshape+broadcast = 2 each + 1 final add, e.g. `[1,2] + [2,1]` → `[2,2]`);
   the common one-sided reshape+broadcast case is 3; equal-shape case is 1.
 - `unary_fn` (exp etc.) and `reduce_sum`: 1 session each.
+
+This is the before-side of the measurement; the owner-level one-shot spelling it
+describes was deleted by #1926, so the numbers are now the reference that
+`docs/testing/session-route-baseline.json` compares against.
 
 So the session-explicit surface must own the broadcast step too, or a binary
 op still pays 2 entries inside one session.
@@ -547,8 +554,9 @@ in follow-up PRs toward the same end state.
 
 Mechanical rule, behavior-preserving:
 1. Single-op call `x.add(&y, &mut backend)` →
-   `backend.with_backend_session(|s| x.add(&y, s))?`; the closure's result
-   type is the op's `Result<Tensor>` (annotate when the closure contains
+   `backend.with_backend_session(|s| x.add(&y, s))?` (since #1938 D6 the
+   entry is itself fallible, so the current spelling is `??`); the closure's
+   result type is the op's `Result<Tensor>` (annotate when the closure contains
    `?`-chains so error types are unambiguous).
 2. Consecutive session-capable ops on the same backend in one function are
    grouped in ONE `with_backend_session`; grouping stops at helpers or
@@ -651,6 +659,10 @@ remove the closure. Migration gate: scoped grep for `.index_select(`/
 docs/plans are explicitly excluded.
 
 ### 5. GPU nested-entry guard (CUDA / WebGPU)
+
+(Historical specification; superseded by #1938 D6, where the guard returns a
+typed `SessionEntryError::Reentered` in every build profile and CPU reentry is
+typed instead of a panic.)
 
 Extract the portable guard (thread-local in-session flag + panic-safe
 restore + debug assert) into a **`#[doc(hidden)] pub` shared helper** in

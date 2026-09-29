@@ -3,8 +3,9 @@
 `tenferro-fft` is the FFT extension package for tenferro. It is an extension
 crate imported directly alongside `tenferro-runtime` or `tenferro-tensor`.
 Concrete non-AD execution uses `TensorFftExt` and `TensorReadFftExt`; eager
-execution uses `EagerTensorFftExt` behind `autodiff`; traced graphs use
-`TracedTensorFftExt`.
+execution uses `EagerSessionFftExt` inside `EagerRuntime::with_eager_session`
+behind `autodiff` (consuming in-place transforms use `EagerTensorFftExt`);
+traced graphs use `TracedTensorFftExt`.
 
 The current implementation provides one-dimensional CPU transforms backed by
 RustFFT, an explicitly selected CUDA path backed by cuFFT, and an explicitly
@@ -189,7 +190,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // FFT execution consumes the already uploaded tensor; it does not transfer it.
     let spectrum = backend
-        .with_backend_session(|session| gpu_input.rfft(None, 0, FftNorm::Backward, session))?;
+        .with_backend_session(|session| gpu_input.rfft(None, 0, FftNorm::Backward, session))??;
 
     // Check residency before crossing the explicit device-to-host boundary.
     let spectrum_read = TensorRead::from_tensor(&spectrum);
@@ -311,7 +312,7 @@ backend.with_backend_session(|session| -> Result<(), tenferro_tensor::Error> {
         Complex64::new(10.0, 0.0),
     );
     Ok(())
-})?;
+})??;
 ```
 <!-- end-snippet-source -->
 
@@ -321,24 +322,28 @@ contracts need a separate design.
 
 ### Eager Tensors
 
-Use `EagerTensorFftExt` for immediate execution in an `EagerRuntime`. The
-borrowed `fft`, `ifft`, `rfft`, and `irfft` methods have the same names and
-arguments as `TracedTensorFftExt`, register the FFT execution runtime on demand,
-and record the existing extension operation when gradients are enabled.
+Use `EagerSessionFftExt` inside `EagerRuntime::with_eager_session` for
+immediate execution. The borrowed `fft`, `ifft`, `rfft`, and `irfft` methods
+register the FFT execution runtime on demand and record the existing extension
+operation when gradients are enabled.
 These methods do not modify their input.
 
 <!-- snippet-source: docs/tutorial-code/src/bin/math_snippets.rs#tenferro_fft_23 -->
 ```rust
 use num_complex::Complex64;
 use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
-use tenferro_fft::{EagerTensorFftExt, FftNorm};
+use tenferro_fft::{EagerSessionFftExt, FftNorm};
 
+let runtime = EagerRuntime::new()?;
 let x = EagerTensor::from_tensor_in(
     Tensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0])?,
-    EagerRuntime::new()?,
+    runtime.clone(),
 )?;
-let spectrum = x.rfft(None, -1, FftNorm::Backward)?;
-let restored = spectrum.irfft(Some(4), -1, FftNorm::Backward)?;
+let (spectrum, restored) = runtime.with_eager_session(|session| {
+    let spectrum = session.rfft(&x, None, -1, FftNorm::Backward)?;
+    let restored = session.irfft(&spectrum, Some(4), -1, FftNorm::Backward)?;
+    Ok::<_, tenferro_ad::Error>((spectrum, restored))
+})??;
 
 assert_eq!(spectrum.shape(), &[3]);
 assert_eq!(restored.to_tensor()?.as_slice::<f64>()?, &[1.0, 2.0, 3.0, 4.0]);
@@ -392,11 +397,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut cpu = context.cpu_backend().clone();
     let cpu_spectrum = cpu
-        .with_backend_session(|session| managed.rfft(None, 0, FftNorm::Backward, session))?;
+        .with_backend_session(|session| managed.rfft(None, 0, FftNorm::Backward, session))??;
 
     let mut metal = context.metal_backend().clone();
     let metal_spectrum = metal
-        .with_backend_session(|session| managed.rfft(None, 0, FftNorm::Backward, session))?;
+        .with_backend_session(|session| managed.rfft(None, 0, FftNorm::Backward, session))??;
     metal.synchronize()?;
 
     assert_eq!(cpu_spectrum.shape(), metal_spectrum.shape());

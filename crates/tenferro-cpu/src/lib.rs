@@ -4,14 +4,95 @@
 //!
 //! ```rust
 //! use tenferro_cpu::CpuBackend;
-//! use tenferro_tensor::{Tensor, TensorBackend, TensorElementwise};
+//! use tenferro_tensor::{BackendSessionHost, Tensor, TensorRead};
 //!
 //! let mut backend = CpuBackend::new();
 //! let a = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?;
 //! let b = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0])?;
-//! let c = backend.add(&a, &b)?;
+//! let c = backend
+//!     .with_backend_session(|session| {
+//!         session.add_read(TensorRead::from_tensor(&a), TensorRead::from_tensor(&b))
+//!     })??;
 //! assert_eq!(c.as_slice::<f64>().unwrap(), &[4.0, 6.0]);
 //! # Ok::<(), tenferro_tensor::Error>(())
+//! ```
+//!
+//! The deleted one-shot spellings do not compile on the owner or on a session.
+//! Each fixture below fails for that reason and nothing else.
+//!
+//! ```compile_fail
+//! use tenferro_cpu::CpuBackend;
+//! use tenferro_tensor::Tensor;
+//!
+//! let mut backend = CpuBackend::new();
+//! let a = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
+//! let b = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]).unwrap();
+//! let _ = backend.add(&a, &b);
+//! ```
+//!
+//! ```compile_fail
+//! use tenferro_cpu::CpuBackend;
+//! use tenferro_tensor::Tensor;
+//!
+//! let mut backend = CpuBackend::new();
+//! let a = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
+//! let b = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]).unwrap();
+//! let _ = backend.mul(&a, &b);
+//! ```
+//!
+//! ```compile_fail
+//! use tenferro_cpu::CpuBackend;
+//! use tenferro_tensor::Tensor;
+//!
+//! let mut backend = CpuBackend::new();
+//! let a = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
+//! let _ = backend.exp(&a);
+//! ```
+//!
+//! ```compile_fail
+//! use tenferro_cpu::CpuBackend;
+//! use tenferro_tensor::Tensor;
+//!
+//! let mut backend = CpuBackend::new();
+//! let a = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
+//! let _ = backend.reduce_sum(&a, &[0]);
+//! ```
+//!
+//! ```compile_fail
+//! use tenferro_cpu::CpuBackend;
+//! use tenferro_tensor::Tensor;
+//!
+//! let mut backend = CpuBackend::new();
+//! let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap();
+//! let _ = backend.transpose(&a, &[1, 0]);
+//! ```
+//!
+//! ```compile_fail
+//! use tenferro_cpu::CpuBackend;
+//! use tenferro_tensor::{DotGeneralConfig, Tensor};
+//!
+//! let mut backend = CpuBackend::new();
+//! let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap();
+//! let config = DotGeneralConfig {
+//!     lhs_contracting_dims: [1].as_slice().into(),
+//!     rhs_contracting_dims: [0].as_slice().into(),
+//!     lhs_batch_dims: [].as_slice().into(),
+//!     rhs_batch_dims: [].as_slice().into(),
+//! };
+//! let _ = backend.dot_general(&a, &a, &config);
+//! ```
+//!
+//! The owner no longer implements the cache-aware contraction entry, so an
+//! owner-level `BackendCachedDot` bound does not hold either:
+//!
+//! ```compile_fail
+//! use tenferro_cpu::CpuBackend;
+//! use tenferro_tensor::BackendCachedDot;
+//!
+//! fn requires_cached_dot<B: BackendCachedDot>(_backend: &mut B) {}
+//!
+//! let mut backend = CpuBackend::new();
+//! requires_cached_dot(&mut backend);
 //! ```
 
 // `provider-inject` unit tests deliberately omit the broad default-backend
@@ -92,6 +173,7 @@ mod dot_runtime;
 pub(crate) use tenferro_cpu_basic::PooledUninitOutput;
 pub(crate) use tenferro_cpu_basic::{erased_raw_strided_ref, erased_raw_strided_uninit_mut};
 pub(crate) use tenferro_internal_cpu_kernels::elementwise;
+mod batch_policy;
 mod engine;
 mod exec_session;
 mod gemm;
@@ -109,7 +191,6 @@ mod structural;
 mod topology;
 
 use num_complex::{Complex32, Complex64};
-use std::ptr::NonNull;
 #[cfg(test)]
 use strided_kernel::col_major_strides as kernel_col_major_strides;
 #[cfg(test)]
@@ -125,28 +206,6 @@ pub(crate) fn cpu_contraction_unsupported_dtype_message(dtype: DType) -> String 
         "CPU contraction providers support F32/F64/C32/C64{}",
         remedy.unwrap_or_default()
     )
-}
-
-pub(crate) fn erased_raw_strided_mut<'a>(
-    dtype: strided_kernel::KernelDType,
-    data: &'a mut [u8],
-    dims: &'a [usize],
-    strides: &'a [isize],
-    offset: isize,
-) -> strided_kernel::Result<strided_kernel::ErasedRawStridedMut<'a>> {
-    let data_ptr = NonNull::new(data.as_mut_ptr()).unwrap_or_else(NonNull::dangling);
-    // SAFETY: callers derive `data` from a uniquely borrowed initialized host
-    // destination and retain that borrow for the returned descriptor lifetime.
-    unsafe {
-        strided_kernel::ErasedRawStridedMut::from_raw_parts(
-            dtype,
-            data_ptr,
-            data.len(),
-            dims,
-            strides,
-            offset,
-        )
-    }
 }
 
 #[cfg(feature = "provider-src")]
@@ -170,6 +229,7 @@ pub use backend::{
     CpuBackend, CpuBackendError, CpuBackendKind, CpuExecutionInfo, CpuExecutionMode,
     CpuRuntimeIdentity, ExternalCpuDomainRegistryError,
 };
+pub use batch_policy::{with_batch_policy, CpuBatchPolicy, CpuBatchStrategy, CpuBatchThresholds};
 pub use buffer_pool::BufferPoolStats;
 pub use capability::cpu_capabilities;
 pub use context::{CpuContext, CpuContextError, DEFAULT_WORKER_STACK_BYTES};
@@ -186,8 +246,7 @@ pub use dot_runtime::{
 pub use exec_session::CpuExecSession;
 pub use indexed_plan_cache::IndexedPlanCacheLimits;
 pub use placement::{
-    CpuEngineConstructionError, CpuPlacement, CpuPlacementError, CpuPlacementGuarantee,
-    ResolvedCpuPlacement,
+    CpuEngineConstructionError, CpuPlacement, CpuPlacementError, ResolvedCpuPlacement,
 };
 pub use provider::{CpuExecutionContext, ParallelMode};
 pub use provider_capability::{
@@ -226,16 +285,16 @@ pub fn with_cpu_exec_session<B, R>(
 where
     B: tenferro_tensor::BackendSession + ?Sized,
 {
-    if session.session_type_id() != std::any::TypeId::of::<exec_session::CpuExecSessionMarker>() {
-        return None;
-    }
-    let data = unsafe { session.session_data_mut() };
-    // SAFETY: the exact marker is supplied by CpuExecSession's explicit
-    // `BackendSession` implementation that produced `session_data_mut`, and
-    // the equality above proves that the erased value is `CpuExecSession`.
-    // The callback is higher-ranked and returns no session borrow, so the
+    let data = session
+        .native_session()?
+        .into_marked_ptr::<exec_session::CpuExecSessionMarker>()?;
+    // SAFETY: only `CpuExecSession::native_session` creates a token with the
+    // crate-private `CpuExecSessionMarker`, and it points that token at a live
+    // `CpuExecSession`. The token borrowed `*session` exclusively, and this
+    // function keeps holding `session: &mut B` for the whole visit. The
+    // callback is higher-ranked and returns no session borrow, so the
     // reconstructed reference cannot escape the original session borrow.
-    Some(unsafe { f(&mut *(data.cast::<CpuExecSession<'static>>())) })
+    Some(unsafe { f(data.cast::<CpuExecSession<'static>>().as_mut()) })
 }
 
 /// Invoke a direct faer operation with the parallelism selected by a CPU session.
@@ -259,7 +318,7 @@ where
 ///         let _ = parallel;
 ///         Ok(())
 ///     })
-/// })?;
+/// })??;
 /// # Ok(())
 /// # }
 /// # fn main() {}

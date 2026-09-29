@@ -29,7 +29,8 @@ fn dynamic_and_read_surfaces_return_fixed_tuples() {
         assert_eq!(r.shape(), &[2, 2]);
         assert_eq!(sign.as_slice::<f64>().unwrap(), &[1.0]);
         assert!((logabsdet.as_slice::<f64>().unwrap()[0] - 8.0_f64.ln()).abs() < 1.0e-12);
-    });
+    })
+    .unwrap();
 }
 
 #[test]
@@ -83,7 +84,8 @@ fn rank_revealing_qr_handles_interspersed_dependence() {
                 assert!((reconstructed - source[row + source_col * 4]).abs() < 1.0e-11);
             }
         }
-    });
+    })
+    .unwrap();
 }
 
 #[test]
@@ -124,7 +126,8 @@ fn rank_revealing_qr_supports_all_float_and_complex_dtypes() {
             assert_eq!(result.r.dtype(), input.dtype());
             assert_eq!(result.rank.as_slice::<i64>().unwrap(), &[1]);
         }
-    });
+    })
+    .unwrap();
 }
 
 #[test]
@@ -148,7 +151,8 @@ fn rank_revealing_qr_handles_empty_dimensions_and_empty_batches() {
                 assert!(ranks.is_empty());
             }
         }
-    });
+    })
+    .unwrap();
 }
 
 #[test]
@@ -159,7 +163,8 @@ fn rank_revealing_qr_rejects_non_finite_input() {
         assert!(input
             .rank_revealing_qr(RankRevealingQrOptions::default(), session)
             .is_err());
-    });
+    })
+    .unwrap();
 }
 
 #[test]
@@ -174,7 +179,8 @@ fn rank_revealing_qr_rejects_invalid_tolerances() {
         ] {
             assert!(input.rank_revealing_qr(options, session).is_err());
         }
-    });
+    })
+    .unwrap();
 }
 
 #[test]
@@ -190,7 +196,8 @@ fn rank_revealing_qr_zero_and_batched_metadata() {
         assert_eq!(result.column_permutation.shape(), &[2, 2]);
         assert_eq!(result.rank.shape(), &[2]);
         assert_eq!(result.rank.as_slice::<i64>().unwrap(), &[0, 0]);
-    });
+    })
+    .unwrap();
 }
 
 #[test]
@@ -227,7 +234,8 @@ fn typed_surface_exposes_associated_real_and_complex_outputs() {
         assert_eq!(real_values.as_slice().unwrap(), &[4.0, 2.0]);
         assert_eq!(complex_values.as_slice().unwrap(), &[4.0, 2.0]);
         assert_eq!(eigenvalues.shape(), &[2]);
-    });
+    })
+    .unwrap();
 }
 
 #[test]
@@ -240,7 +248,8 @@ fn typed_input_is_erased_as_a_borrowed_read() {
     host.with_backend_session(|session| {
         let factor = read.cholesky_read(session).unwrap();
         assert_eq!(factor.shape(), &[2, 2]);
-    });
+    })
+    .unwrap();
 }
 
 #[test]
@@ -263,7 +272,8 @@ fn dynamic_composites_cover_inverse_pseudoinverse_eigenvalues_and_norm() {
         assert_eq!(eigvals.dtype(), tenferro_tensor::DType::C64);
         assert_eq!(norm.shape(), &[1, 1]);
         assert!((norm.as_slice::<f64>().unwrap()[0] - 20.0_f64.sqrt()).abs() < 1.0e-12);
-    });
+    })
+    .unwrap();
 }
 
 #[test]
@@ -283,7 +293,8 @@ fn read_surface_accepts_a_strided_view_without_an_input_clone() {
             .unwrap();
         assert_eq!(singular_values.as_slice::<f64>().unwrap(), &[2.0, 1.0]);
         assert_eq!(values.as_slice::<f64>().unwrap(), &[2.0, 1.0]);
-    });
+    })
+    .unwrap();
 }
 
 #[test]
@@ -307,7 +318,8 @@ fn typed_complex_composites_return_real_outputs_where_required() {
 
         assert!((logabsdet.as_slice().unwrap()[0] - 8.0_f64.ln()).abs() < 1.0e-12);
         assert!((norm.as_slice().unwrap()[0] - 20.0_f64.sqrt()).abs() < 1.0e-12);
-    });
+    })
+    .unwrap();
 }
 
 #[test]
@@ -328,7 +340,8 @@ fn typed_solve_surfaces_accept_vector_and_matrix_rhs() {
         assert_eq!(vector_x.as_slice().unwrap(), &[2.0, 2.0]);
         assert_eq!(matrix_x.as_slice().unwrap(), &[2.0, 2.0]);
         assert_eq!(triangular_x.as_slice().unwrap(), &[2.0, 2.0]);
-    });
+    })
+    .unwrap();
 }
 
 #[test]
@@ -362,7 +375,8 @@ fn concrete_norm_distinguishes_empty_axes_and_rejects_invalid_axes() {
                 }
             ));
         }
-    });
+    })
+    .unwrap();
 }
 
 #[test]
@@ -420,7 +434,8 @@ fn read_surface_covers_factorizations_and_composites() {
         let actual = x.as_slice::<f64>().unwrap();
         assert!((actual[0] - 20.0 / 11.0).abs() < 1.0e-12);
         assert!((actual[1] - 19.0 / 11.0).abs() < 1.0e-12);
-    });
+    })
+    .unwrap();
 }
 
 #[test]
@@ -440,6 +455,7 @@ fn read_surface_solve_read_into_writes_the_caller_buffer_directly() {
             session,
         )
     })
+    .unwrap()
     .unwrap();
     let solved = owned.as_slice::<f64>().unwrap();
     assert!((solved[0] - 7.0 / 3.0).abs() < 1.0e-12);
@@ -456,6 +472,7 @@ fn read_surface_solve_read_into_writes_the_caller_buffer_directly() {
             session,
         )
     })
+    .unwrap()
     .unwrap();
     assert_eq!(storage[0], -17.0);
     assert!((storage[1] - 7.0 / 3.0).abs() < 1.0e-12);
@@ -491,7 +508,8 @@ fn typed_surface_covers_all_receiver_adapters() {
             .unwrap();
 
         assert_eq!(norm.as_slice().unwrap(), &[5.0]);
-    });
+    })
+    .unwrap();
 }
 
 #[test]
@@ -524,41 +542,43 @@ fn concrete_spectral_norm_preserves_signed_and_complex_input_across_surfaces() {
     let mut backend = CpuBackend::with_threads(1).unwrap();
     assert_eq!(backend.num_threads(), 1);
 
-    backend.with_backend_session(|backend| {
-        for order in [Some(2.0), Some(-2.0)] {
-            for value in [
-                signed.norm(order, Some(&[0, 1]), false, backend).unwrap(),
-                TensorRead::from_tensor(&signed)
+    backend
+        .with_backend_session(|backend| {
+            for order in [Some(2.0), Some(-2.0)] {
+                for value in [
+                    signed.norm(order, Some(&[0, 1]), false, backend).unwrap(),
+                    TensorRead::from_tensor(&signed)
+                        .norm_read(order, Some(&[0, 1]), false, backend)
+                        .unwrap(),
+                    complex.norm(order, Some(&[0, 1]), false, backend).unwrap(),
+                    TensorRead::from_tensor(&complex)
+                        .norm_read(order, Some(&[0, 1]), false, backend)
+                        .unwrap(),
+                    TensorRead::from_view(tenferro_tensor::TensorView::F64(
+                        typed_signed.as_view().transpose_view([1, 0]).unwrap(),
+                    ))
+                    .norm_read(order, Some(&[1, 0]), true, backend)
+                    .unwrap(),
+                    TensorRead::from_view(tenferro_tensor::TensorView::C64(
+                        typed_complex.as_view().transpose_view([1, 0]).unwrap(),
+                    ))
                     .norm_read(order, Some(&[0, 1]), false, backend)
                     .unwrap(),
-                complex.norm(order, Some(&[0, 1]), false, backend).unwrap(),
-                TensorRead::from_tensor(&complex)
-                    .norm_read(order, Some(&[0, 1]), false, backend)
-                    .unwrap(),
-                TensorRead::from_view(tenferro_tensor::TensorView::F64(
-                    typed_signed.as_view().transpose_view([1, 0]).unwrap(),
-                ))
-                .norm_read(order, Some(&[1, 0]), true, backend)
-                .unwrap(),
-                TensorRead::from_view(tenferro_tensor::TensorView::C64(
-                    typed_complex.as_view().transpose_view([1, 0]).unwrap(),
-                ))
-                .norm_read(order, Some(&[0, 1]), false, backend)
-                .unwrap(),
-            ] {
-                assert!((value.as_slice::<f64>().unwrap()[0] - 2.0_f64.sqrt()).abs() < 1.0e-12);
-            }
+                ] {
+                    assert!((value.as_slice::<f64>().unwrap()[0] - 2.0_f64.sqrt()).abs() < 1.0e-12);
+                }
 
-            let signed_value = typed_signed
-                .norm(order, Some(&[0, 1]), false, backend)
-                .unwrap();
-            let complex_value = typed_complex
-                .norm(order, Some(&[0, 1]), false, backend)
-                .unwrap();
-            assert!((signed_value.as_slice().unwrap()[0] - 2.0_f64.sqrt()).abs() < 1.0e-12);
-            assert!((complex_value.as_slice().unwrap()[0] - 2.0_f64.sqrt()).abs() < 1.0e-12);
-        }
-    });
+                let signed_value = typed_signed
+                    .norm(order, Some(&[0, 1]), false, backend)
+                    .unwrap();
+                let complex_value = typed_complex
+                    .norm(order, Some(&[0, 1]), false, backend)
+                    .unwrap();
+                assert!((signed_value.as_slice().unwrap()[0] - 2.0_f64.sqrt()).abs() < 1.0e-12);
+                assert!((complex_value.as_slice().unwrap()[0] - 2.0_f64.sqrt()).abs() < 1.0e-12);
+            }
+        })
+        .unwrap();
 }
 
 #[test]
@@ -588,5 +608,6 @@ fn concrete_norm_covers_orders_axis_permutation_and_validation() {
 
         assert!(tensor.norm(None, Some(&[0, 0]), false, session).is_err());
         assert!(tensor.norm(Some(0.0), None, false, session).is_ok());
-    });
+    })
+    .unwrap();
 }

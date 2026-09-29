@@ -7,8 +7,9 @@ use tenferro_tensor::{validate::checked_shape_product, TensorRank, TensorScalar,
 use crate::buffer_pool::{BufferPool, PoolScalar, UninitCheckoutToken};
 use crate::{Error, Result};
 
-fn checked_compact_strides(shape: &[usize]) -> Result<Vec<isize>> {
-    let mut strides = Vec::with_capacity(shape.len());
+fn checked_compact_strides(shape: &[usize]) -> Result<tenferro_tensor::StrideVec> {
+    // Inline for common ranks: the output lease is taken on every allocated op.
+    let mut strides = tenferro_tensor::StrideVec::with_capacity(shape.len());
     let mut stride = 1isize;
     for &dim in shape {
         strides.push(stride);
@@ -28,17 +29,33 @@ fn checked_compact_strides(shape: &[usize]) -> Result<Vec<isize>> {
 /// This type is public because `tenferro-cpu` is a sibling crate and must use
 /// the same canonical owner; `pub(crate)` would prevent that cross-crate
 /// ownership. Before the unsafe completion handoff, callers receive only
-/// `MaybeUninit` storage.
-pub struct PooledUninitOutput<'pool, T: PoolScalar> {
-    pool: &'pool mut BufferPool,
+/// `MaybeUninit` storage. Each checkout owns a shared pool handle, so output
+/// and scratch leases can coexist without holding a mutable pool borrow.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_cpu_basic::{buffer_pool::BufferPool, PooledUninitOutput};
+/// let pool = BufferPool::new();
+/// let mut output = PooledUninitOutput::<i32>::new(&pool, vec![2])?;
+/// for slot in output.as_uninit_slice_mut() {
+///     slot.write(3);
+/// }
+/// // SAFETY: the loop initializes every logical destination element.
+/// let tensor = unsafe { output.assume_init() }?;
+/// assert_eq!(tensor.as_slice()?, &[3, 3]);
+/// # Ok::<(), tenferro_tensor::Error>(())
+/// ```
+pub struct PooledUninitOutput<T: PoolScalar> {
+    pool: BufferPool,
     shape: Vec<usize>,
-    strides: Vec<isize>,
+    strides: tenferro_tensor::StrideVec,
     data: Vec<std::mem::MaybeUninit<T>>,
     checkout: Option<UninitCheckoutToken>,
     byte_len: usize,
 }
 
-impl<'pool, T: PoolScalar> PooledUninitOutput<'pool, T> {
+impl<T: PoolScalar> PooledUninitOutput<T> {
     /// Creates a compact, pooled full-overwrite destination.
     ///
     /// # Examples
@@ -46,14 +63,14 @@ impl<'pool, T: PoolScalar> PooledUninitOutput<'pool, T> {
     /// ```rust
     /// use tenferro_cpu_basic::{buffer_pool::BufferPool, PooledUninitOutput};
     /// let mut pool = BufferPool::new();
-    /// let output = PooledUninitOutput::<f32>::new(&mut pool, vec![2, 3]).unwrap();
+    /// let output = PooledUninitOutput::<f32>::new(&pool, vec![2, 3]).unwrap();
     /// drop(output);
     /// ```
     /// # Errors
     /// Returns `Error::Validation` for shape-product, layout, or stride
     /// validation failures, or `Error::BackendSource` if allocation
     /// reservation fails. No pool accounting is changed before validation.
-    pub fn new(pool: &'pool mut BufferPool, shape: Vec<usize>) -> Result<Self> {
+    pub fn new(pool: &BufferPool, shape: Vec<usize>) -> Result<Self> {
         let len = checked_shape_product("pooled_uninit_output", "shape", &shape)?;
         let layout = Layout::array::<T>(len).map_err(|_| {
             Error::invalid_argument(
@@ -64,8 +81,11 @@ impl<'pool, T: PoolScalar> PooledUninitOutput<'pool, T> {
         })?;
         let byte_len = layout.size();
         let strides = checked_compact_strides(&shape)?;
+        let mut pool = pool.checkout_handle();
         let (data, checkout) =
-            <T as crate::buffer_pool::private::Sealed>::pool_acquire_uninit_tracked(pool, len)?;
+            <T as crate::buffer_pool::private::Sealed>::pool_acquire_uninit_tracked(
+                &mut pool, len,
+            )?;
         debug_assert!(match checkout {
             UninitCheckoutToken::Fresh { actual_capacity }
             | UninitCheckoutToken::Reused { actual_capacity } => {
@@ -89,7 +109,7 @@ impl<'pool, T: PoolScalar> PooledUninitOutput<'pool, T> {
     /// ```rust
     /// use tenferro_cpu_basic::{buffer_pool::BufferPool, PooledUninitOutput};
     /// let mut pool = BufferPool::new();
-    /// let mut output = PooledUninitOutput::<i32>::new(&mut pool, vec![1]).unwrap();
+    /// let mut output = PooledUninitOutput::<i32>::new(&pool, vec![1]).unwrap();
     /// output.as_uninit_slice_mut()[0].write(7);
     /// ```
     ///
@@ -104,7 +124,7 @@ impl<'pool, T: PoolScalar> PooledUninitOutput<'pool, T> {
     /// ```rust
     /// use tenferro_cpu_basic::{buffer_pool::BufferPool, PooledUninitOutput};
     /// let mut pool = BufferPool::new();
-    /// let mut output = PooledUninitOutput::<f32>::new(&mut pool, vec![2]).unwrap();
+    /// let mut output = PooledUninitOutput::<f32>::new(&pool, vec![2]).unwrap();
     /// let view = output.as_uninit_view_mut().unwrap();
     /// assert_eq!(view.dims(), &[2]);
     /// ```
@@ -140,7 +160,7 @@ impl<'pool, T: PoolScalar> PooledUninitOutput<'pool, T> {
     /// ```rust
     /// use tenferro_cpu_basic::{buffer_pool::BufferPool, PooledUninitOutput};
     /// let mut pool = BufferPool::new();
-    /// let mut output = PooledUninitOutput::<i32>::new(&mut pool, vec![1]).unwrap();
+    /// let mut output = PooledUninitOutput::<i32>::new(&pool, vec![1]).unwrap();
     /// assert_eq!(output.as_uninit_bytes_mut().len(), 4);
     /// ```
     pub fn as_uninit_bytes_mut(&mut self) -> &mut [std::mem::MaybeUninit<u8>] {
@@ -160,8 +180,8 @@ impl<'pool, T: PoolScalar> PooledUninitOutput<'pool, T> {
     /// Every logical element must have been initialized by the completed kernel.
     /// The kernel must have completed all validation before writing, and must
     /// not retain any destination view after returning.
-    /// Successful completion transfers success accounting to the owning
-    /// `BufferPoolLoan` context; direct internal callers must keep that context alive.
+    /// Successful completion transfers the checkout's return target to the
+    /// initialized tensor; the pool lock is held only for brief bookkeeping.
     /// Completes the handoff as a dynamic-rank typed tensor.
     ///
     /// # Examples
@@ -169,7 +189,7 @@ impl<'pool, T: PoolScalar> PooledUninitOutput<'pool, T> {
     /// ```rust
     /// use tenferro_cpu_basic::{buffer_pool::BufferPool, PooledUninitOutput};
     /// let mut pool = BufferPool::new();
-    /// let mut output = PooledUninitOutput::<i32>::new(&mut pool, vec![1]).unwrap();
+    /// let mut output = PooledUninitOutput::<i32>::new(&pool, vec![1]).unwrap();
     /// output.as_uninit_slice_mut()[0].write(7);
     /// // SAFETY: the preceding write initializes every logical destination element.
     /// // SAFETY: the example writes every logical destination element before completion.
@@ -206,7 +226,7 @@ impl<'pool, T: PoolScalar> PooledUninitOutput<'pool, T> {
     /// use tenferro_cpu_basic::{buffer_pool::BufferPool, PooledUninitOutput};
     /// use tenferro_tensor::Rank;
     /// let mut pool = BufferPool::new();
-    /// let mut output = PooledUninitOutput::<i32>::new(&mut pool, vec![1]).unwrap();
+    /// let mut output = PooledUninitOutput::<i32>::new(&pool, vec![1]).unwrap();
     /// output.as_uninit_slice_mut()[0].write(7);
     /// // SAFETY: the preceding write initializes every logical destination element.
     /// let tensor = unsafe { output.assume_init_as::<Rank<1>>() }.unwrap();
@@ -218,6 +238,20 @@ impl<'pool, T: PoolScalar> PooledUninitOutput<'pool, T> {
     {
         // SAFETY: the caller guarantees complete initialization.
         unsafe { self.finish(false) }
+    }
+
+    /// Finish a fully initialized ranked output while retaining its pool recycler.
+    ///
+    /// # Safety
+    /// Every logical element must have been initialized and no writer may retain
+    /// the output view.
+    ///
+    /// # Errors
+    /// Returns `Error::Validation` with `ValidationError::RankMismatch` if the
+    /// checked output metadata cannot be represented by the rank `R`.
+    pub unsafe fn assume_init_as_recycled<R: TensorRank>(self) -> Result<TypedTensor<T, R>> {
+        // SAFETY: the caller guarantees complete initialization.
+        unsafe { self.finish(true) }
     }
 
     /// Transfer a fully initialized output with automatic original-pool return.
@@ -238,7 +272,7 @@ impl<'pool, T: PoolScalar> PooledUninitOutput<'pool, T> {
     /// ```
     /// use tenferro_cpu_basic::{buffer_pool::BufferPool, PooledUninitOutput};
     /// let mut pool = BufferPool::new();
-    /// let mut output = PooledUninitOutput::<f64>::new(&mut pool, vec![1])?;
+    /// let mut output = PooledUninitOutput::<f64>::new(&pool, vec![1])?;
     /// output.as_uninit_slice_mut()[0].write(2.0);
     /// // SAFETY: the only element has been initialized.
     /// let tensor = unsafe { output.assume_init_recycled() }?;
@@ -268,25 +302,31 @@ impl<'pool, T: PoolScalar> PooledUninitOutput<'pool, T> {
                 unreachable!("a live pooled output owns its checkout");
             };
             let recycler = <T as crate::buffer_pool::private::Sealed>::pool_finish_recycled(
-                self.pool, checkout,
+                &mut self.pool,
+                checkout,
             );
             TypedTensor::from_vec_col_major_with_recycler(shape, data, recycler)
         } else {
             let tensor = TypedTensor::from_vec_col_major(shape, data)?;
+            // INVARIANT: a reused buffer handed out as a plain output stays
+            // counted in flight until the session settles the pool: normal exit
+            // clears the count, and an unwind replenishes one replacement so the
+            // retained budget stays warm (pinned by
+            // `pooled_uninit_guard_reused_success_handoff_reclaims_exact_capacity`).
             self.checkout = None;
             Ok(tensor)
         }
     }
 }
 
-impl<T: PoolScalar> Drop for PooledUninitOutput<'_, T> {
+impl<T: PoolScalar> Drop for PooledUninitOutput<T> {
     fn drop(&mut self) {
         let Some(checkout) = self.checkout.take() else {
             return;
         };
         let data = std::mem::take(&mut self.data);
         <T as crate::buffer_pool::private::Sealed>::pool_discard_uninit(
-            &mut *self.pool,
+            &mut self.pool,
             data,
             checkout,
         );

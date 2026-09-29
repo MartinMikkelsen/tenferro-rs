@@ -32,65 +32,93 @@ fn assert_ordered_needles(source_name: &str, source: &str, needles: &[&str]) {
 fn eager_generated_constant_and_shape_outputs_are_uploaded_before_backend_ops() {
     let eager_exec = ad_source("eager_exec.rs");
 
-    let helper = source_section(
+    let generated = source_section(
         &eager_exec,
-        "fn upload_generated_host_tensor",
-        "fn exec_standard_op_on_tensor_reads",
+        "fn generated_host_output(",
+        "pub(crate) fn exec_standard_op_on_tensor_reads_with_session",
     );
-    assert!(helper.contains("upload_host_tensor(TensorRead::from_tensor(&tensor))"));
-    assert!(
-        helper.contains("StdTensorOp::Constant { dtype, bytes } => constant_tensor(*dtype, bytes)")
+    assert!(generated
+        .contains("StdTensorOp::Constant { dtype, bytes } => constant_tensor(*dtype, bytes)"));
+    assert!(generated.contains("shape_of_host_tensor(*axis, shape).map(Some)"));
+
+    let read_session_path = source_section(
+        &eager_exec,
+        "pub(crate) fn exec_standard_op_on_tensor_reads_with_session",
+        "pub(crate) fn exec_standard_op_on_tensors_with_session",
     );
-    assert!(helper.contains(
-        "StdTensorOp::ShapeOf { axis } => shape_of_host_tensor(*axis, inputs[0].shape())?"
-    ));
+    assert_ordered_needles(
+        "exec_standard_op_on_tensor_reads_with_session",
+        read_session_path,
+        &[
+            "generated_host_output(op, inputs.first().map(TensorRead::shape))?",
+            ".upload_host_tensor(TensorRead::from_tensor(&host))",
+            "exec_standard_op_on_tensor_reads_in_session(op, inputs, exec)",
+        ],
+    );
+
+    let tensor_session_path = source_section(
+        &eager_exec,
+        "pub(crate) fn exec_standard_op_on_tensors_with_session",
+        "fn exec_standard_op_on_tensor_reads<B: BackendSessionHost>",
+    );
+    assert_ordered_needles(
+        "exec_standard_op_on_tensors_with_session",
+        tensor_session_path,
+        &[
+            "generated_host_output(op, inputs.first().map(|tensor| tensor.shape()))?",
+            ".upload_host_tensor(TensorRead::from_tensor(&host))",
+            "exec_standard_op_on_tensors_in_session(op, inputs, exec)",
+        ],
+    );
 
     let read_path = source_section(
         &eager_exec,
-        "fn exec_standard_op_on_tensor_reads",
-        "fn exec_standard_op_on_tensors",
+        "fn exec_standard_op_on_tensor_reads<B: BackendSessionHost>",
+        "pub(crate) fn exec_standard_op_on_tensor_reads_in_session",
     );
-    assert_ordered_needles(
-        "exec_standard_op_on_tensor_reads",
-        read_path,
-        &[
-            "execute_generated_host_output_on_backend_reads(op, inputs, backend)?",
-            ".with_backend_session",
-        ],
-    );
+    assert!(read_path.contains(".with_backend_session(|exec|"));
+    assert!(read_path.contains("exec_standard_op_on_tensor_reads_with_session(op, inputs, exec)"));
 
     let tensor_path = source_section(
         &eager_exec,
-        "fn exec_standard_op_on_tensors",
-        "pub(crate) fn exec_op_on_tensors_with_runtime",
+        "fn exec_standard_op_on_tensors<B: BackendSessionHost>",
+        "pub(crate) fn exec_standard_op_on_tensors_in_session",
     );
-    assert_ordered_needles(
-        "exec_standard_op_on_tensors",
-        tensor_path,
-        &[
-            "execute_generated_host_output_on_backend_tensors(op, inputs, backend)?",
-            ".with_backend_session",
-        ],
-    );
+    assert!(tensor_path.contains(".with_backend_session(|exec|"));
+    assert!(tensor_path.contains("exec_standard_op_on_tensors_with_session(op, inputs, exec)"));
 }
 
 #[test]
-fn eager_index_select_uploads_hidden_indices_before_importing_constant() {
+fn eager_index_select_imports_hidden_indices_through_borrowed_session() {
     let shape_packing = ad_source("shape_packing.rs");
     let index_select = source_section(
         &shape_packing,
-        "pub fn index_select(&self, axis: isize, positions: &[usize]) -> Result<Self>",
-        "    /// Stack tensors along a newly inserted axis.",
+        "pub fn index_select(",
+        "    /// Select entries from an axis by host-known positions.",
     );
-
     assert_ordered_needles(
-        "EagerTensor::index_select",
+        "EagerSession::index_select",
         index_select,
         &[
-            "backend.upload_host_tensor(TensorRead::from_tensor(&indices))?",
-            "self.ctx.constant_from(indices)?",
-            "self.gather(&indices, config)",
+            "self.ensure_runtime(tensor)?",
+            "index_select_config(tensor.shape(), axis, positions)?",
+            "self.constant_from_host(indices)?",
+            "self.gather(tensor, &indices, config)",
         ],
+    );
+    let eager = ad_source("eager.rs");
+    let upload = source_section(
+        &eager,
+        "pub fn constant_from_host(",
+        "/// Import a trainable leaf",
+    );
+    assert!(upload.contains(".upload_host_tensor(TensorRead::from_tensor(&tensor))"));
+    assert!(upload.contains("self.constant_from(uploaded)"));
+    let leaf = source_section(&eager, "fn new_leaf_with_session(", "fn new_result(");
+    assert_ordered_needles(
+        "new_leaf_with_session",
+        leaf,
+        &["Some(session) => session.to_contiguous_read(read)"],
     );
 }
 
@@ -106,7 +134,7 @@ fn eager_ad_seed_and_missing_tangent_zeroes_are_uploaded() {
 
     let eager_one_like = source_section(
         &eager,
-        "pub(crate) fn one_like_tensor<B: TensorBackend>",
+        "pub(crate) fn one_like_tensor(input: &Tensor, session: &mut dyn BackendSession)",
         "#[cfg(test)]",
     );
     assert!(eager_one_like.contains("ones_tensor(input.dtype(), input.shape().to_vec())"));

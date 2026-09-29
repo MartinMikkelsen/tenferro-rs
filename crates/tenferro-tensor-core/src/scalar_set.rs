@@ -6,56 +6,6 @@
 //! different set declares it with [`define_scalar_set!`] in its own crate, and
 //! its values implement this trait without touching tenferro's set.
 
-/// A closed set of scalar types carried by one tensor value type.
-///
-/// A set is represented by one value type: the default set's payload is opaque
-/// and a downstream set defines its own value enum, and [`ScalarSet::tag`]
-/// reports which member a value currently holds.
-///
-/// # Examples
-///
-/// ```rust
-/// use tenferro_tensor_core::{DefaultScalars, ScalarSet};
-///
-/// let value = DefaultScalars::from_vec_col_major(vec![1], vec![1.0_f64])?;
-/// assert_eq!(value.tag(), tenferro_tensor_core::DType::F64);
-/// # Ok::<(), tenferro_tensor_core::ValidationError>(())
-/// ```
-pub trait ScalarSet: Clone + core::fmt::Debug + 'static {
-    /// Tag identifying one member of this set.
-    type Tag: Copy + Eq + core::fmt::Debug + 'static;
-
-    /// Tags of every member, in declaration order.
-    const TAGS: &'static [Self::Tag];
-
-    /// Tag of the member this value currently holds.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use tenferro_tensor_core::{DType, DefaultScalars, ScalarSet};
-    ///
-    /// let value = DefaultScalars::from_vec_col_major(vec![1], vec![1.0_f64])?;
-    /// assert_eq!(value.tag(), DType::F64);
-    /// # Ok::<(), tenferro_tensor_core::ValidationError>(())
-    /// ```
-    fn tag(&self) -> Self::Tag;
-
-    /// Promote two members of this set to the member that represents both.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use tenferro_tensor_core::{DType, ScalarSet};
-    ///
-    /// assert_eq!(
-    ///     <tenferro_tensor_core::DefaultScalars as ScalarSet>::promote(DType::I32, DType::F32),
-    ///     DType::F64
-    /// );
-    /// ```
-    fn promote(lhs: Self::Tag, rhs: Self::Tag) -> Self::Tag;
-}
-
 /// Kind of arithmetic a set member belongs to.
 ///
 /// # Examples
@@ -170,20 +120,99 @@ pub const fn promote_specs(lhs: MemberSpec, rhs: MemberSpec) -> MemberSpec {
     }
 }
 
-/// Define a closed scalar set: its tag type, its value enum, and its membership.
+/// Promote two members of one set from its parallel tag and fact tables.
 ///
-/// The declaration lists each member once. The macro emits the tag enum, the
-/// value enum whose variants hold a
-/// [`HostTensor`](crate::HostTensor) of the member type, and the
-/// [`ScalarSet`] implementation. A downstream crate invokes this in its own
-/// crate, so tenferro never needs to know the set.
+/// `tags` and `specs` are emitted together in the same order by
+/// [`define_scalar_tag!`], so a tag that is not listed in `tags` (an externally
+/// defined member) promotes to itself.
 ///
 /// # Examples
 ///
 /// ```rust
-/// use tenferro_tensor_core::{define_scalar_set, HostTensor, ScalarSet};
+/// use tenferro_tensor_core::{promote_in_set, DType};
 ///
-/// define_scalar_set! {
+/// assert_eq!(
+///     promote_in_set(DType::TAGS, DType::SPECS, DType::I32, DType::F32),
+///     DType::F64
+/// );
+/// ```
+#[must_use]
+pub fn promote_in_set<Tag: Copy + PartialEq>(
+    tags: &[Tag],
+    specs: &[MemberSpec],
+    lhs: Tag,
+    rhs: Tag,
+) -> Tag {
+    // INVARIANT: `define_scalar_tag!` emits `TAGS` and `SPECS` from one member
+    // list, so the two tables always hold the same entries in the same order.
+    let (Some(lhs_index), Some(rhs_index)) = (
+        tags.iter().position(|tag| *tag == lhs),
+        tags.iter().position(|tag| *tag == rhs),
+    ) else {
+        return lhs;
+    };
+    let (Some(lhs_spec), Some(rhs_spec)) = (specs.get(lhs_index), specs.get(rhs_index)) else {
+        return lhs;
+    };
+    let target = promote_specs(*lhs_spec, *rhs_spec);
+    for (index, spec) in specs.iter().enumerate() {
+        if *spec == target {
+            if let Some(tag) = tags.get(index) {
+                return *tag;
+            }
+        }
+    }
+    let mut chosen: Option<(Tag, MemberSpec)> = None;
+    for (index, spec) in specs.iter().enumerate() {
+        let Some(tag) = tags.get(index).copied() else {
+            break;
+        };
+        if spec.kind != target.kind {
+            continue;
+        }
+        let better = match chosen {
+            None => true,
+            Some((_, current)) => {
+                let current_wide_enough = current.width >= target.width;
+                let candidate_wide_enough = spec.width >= target.width;
+                match (current_wide_enough, candidate_wide_enough) {
+                    (false, true) => true,
+                    (true, false) => false,
+                    (true, true) => {
+                        spec.width < current.width
+                            || (spec.width == current.width && spec.level < current.level)
+                    }
+                    (false, false) => {
+                        spec.width > current.width
+                            || (spec.width == current.width && spec.level < current.level)
+                    }
+                }
+            }
+        };
+        if better {
+            chosen = Some((tag, *spec));
+        }
+    }
+    match chosen {
+        Some((tag, _)) => tag,
+        None => lhs,
+    }
+}
+
+/// Define a closed scalar set's tag type and its promotion facts.
+///
+/// The declaration lists each member once. The macro emits the tag enum and the
+/// member facts (`spec`, `TAGS`, `SPECS`), plus the `external` variant when the
+/// declaration names one. Use this form when the value enum lives in another
+/// crate: tenferro's own preset set declares its tag here and its value enum
+/// beside the tensor family that carries it.
+///
+/// # Examples
+///
+/// ```rust
+/// use tenferro_tensor_core::{define_scalar_tag, MemberKind};
+///
+/// define_scalar_tag! {
 ///     /// Tag for a two-member set.
 ///     pub enum PairTag {
 ///         /// Double precision.
@@ -191,17 +220,13 @@ pub const fn promote_specs(lhs: MemberSpec, rhs: MemberSpec) -> MemberSpec {
 ///         /// Single precision.
 ///         F32 => f32 : Float 0 32,
 ///     }
-///     /// Value enum for a two-member set.
-///     pub enum Pair;
 /// }
 ///
-/// let value = Pair::F32(HostTensor::from_vec_col_major(vec![1], vec![1.0_f32])?);
-/// assert_eq!(value.tag(), PairTag::F32);
-/// assert_eq!(<Pair as ScalarSet>::TAGS, &[PairTag::F64, PairTag::F32]);
-/// # Ok::<(), tenferro_tensor_core::ValidationError>(())
+/// assert_eq!(PairTag::F32.spec().kind, MemberKind::Float);
+/// assert_eq!(PairTag::TAGS, &[PairTag::F64, PairTag::F32]);
 /// ```
 #[macro_export]
-macro_rules! define_scalar_set {
+macro_rules! define_scalar_tag {
     (
         $(#[$tag_meta:meta])*
         $tag_vis:vis enum $tag:ident {
@@ -210,8 +235,6 @@ macro_rules! define_scalar_set {
                 $variant:ident => $ty:ty : $kind:ident $level:literal $width:literal
             ),+ $(,)?
         }
-        $(#[$set_meta:meta])*
-        $set_vis:vis enum $set:ident;
         $( external $ext_variant:ident($ext_ty:ty); )?
     ) => {
         $(#[$tag_meta])*
@@ -222,15 +245,6 @@ macro_rules! define_scalar_set {
                 $variant,
             )+
             $( $ext_variant($ext_ty), )?
-        }
-
-        $(#[$set_meta])*
-        #[derive(Clone, Debug, PartialEq)]
-        $set_vis enum $set {
-            $(
-                $(#[$variant_meta])*
-                $variant($crate::HostTensor<$ty>),
-            )+
         }
 
         impl $tag {
@@ -273,77 +287,5 @@ macro_rules! define_scalar_set {
                 )+
             ];
         }
-
-        impl $crate::ScalarSet for $set {
-            type Tag = $tag;
-
-            const TAGS: &'static [Self::Tag] = &[
-                $(
-                    $tag::$variant,
-                )+
-            ];
-
-            fn tag(&self) -> Self::Tag {
-                match self {
-                    $(
-                        $set::$variant(_) => $tag::$variant,
-                    )+
-                }
-            }
-
-            fn promote(lhs: Self::Tag, rhs: Self::Tag) -> Self::Tag {
-                $(
-                    if matches!(lhs, $tag::$ext_variant(_)) {
-                        return lhs;
-                    }
-                    if matches!(rhs, $tag::$ext_variant(_)) {
-                        return rhs;
-                    }
-                )?
-                let target = $crate::promote_specs(lhs.spec(), rhs.spec());
-                for (index, spec) in <$tag>::SPECS.iter().enumerate() {
-                    if *spec == target {
-                        return <$tag>::TAGS[index];
-                    }
-                }
-                let mut chosen: Option<(usize, $crate::MemberSpec)> = None;
-                for (index, spec) in <$tag>::SPECS.iter().enumerate() {
-                    if spec.kind != target.kind {
-                        continue;
-                    }
-                    let better = match chosen {
-                        None => true,
-                        Some((_, current)) => {
-                            let current_wide_enough = current.width >= target.width;
-                            let candidate_wide_enough = spec.width >= target.width;
-                            match (current_wide_enough, candidate_wide_enough) {
-                                (false, true) => true,
-                                (true, false) => false,
-                                (true, true) => {
-                                    spec.width < current.width
-                                        || (spec.width == current.width
-                                            && spec.level < current.level)
-                                }
-                                (false, false) => {
-                                    spec.width > current.width
-                                        || (spec.width == current.width
-                                            && spec.level < current.level)
-                                }
-                            }
-                        }
-                    };
-                    if better {
-                        chosen = Some((index, *spec));
-                    }
-                }
-                match chosen {
-                    Some((index, _)) => <$tag>::TAGS[index],
-                    None => lhs,
-                }
-            }
-        }
     };
 }
-
-#[cfg(test)]
-mod tests;

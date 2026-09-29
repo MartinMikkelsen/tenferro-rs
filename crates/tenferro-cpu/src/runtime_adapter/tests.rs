@@ -11,8 +11,8 @@ use tenferro_runtime::{
     SpecializationRequirements,
 };
 use tenferro_tensor::{
-    CpuDomainId, GatherConfig, PadConfig, Placement, ScatterConfig, ShapeVec, SliceConfig,
-    StrideVec, Tensor, TensorIndexing,
+    BackendSessionHost, CpuDomainId, GatherConfig, PadConfig, Placement, ScatterConfig, ShapeVec,
+    SliceConfig, StrideVec, Tensor,
 };
 
 use super::{
@@ -117,7 +117,6 @@ fn public_cpu_runtime_registration_tracks_distinct_selected_cpu_domains() {
         },
         Arc::new(crate::CpuContext::with_threads(1).expect("first CPU context")),
         NonZeroUsize::new(1).unwrap(),
-        crate::CpuPlacementGuarantee::AdvisoryDeclared,
     )
     .expect("first CPU domain");
     let second_domain = crate::ExternalCpuDomain::new(
@@ -128,7 +127,6 @@ fn public_cpu_runtime_registration_tracks_distinct_selected_cpu_domains() {
         },
         Arc::new(crate::CpuContext::with_threads(1).expect("second CPU context")),
         NonZeroUsize::new(1).unwrap(),
-        crate::CpuPlacementGuarantee::AdvisoryDeclared,
     )
     .expect("second CPU domain");
     let first = crate::CpuBackend::from_external_managed_domains(first_domain_id, [first_domain])
@@ -183,7 +181,6 @@ fn public_cpu_runtime_registration_allows_two_selected_cpu_domains_in_one_runtim
         },
         Arc::new(crate::CpuContext::with_threads(1).expect("first CPU context")),
         NonZeroUsize::new(1).unwrap(),
-        crate::CpuPlacementGuarantee::AdvisoryDeclared,
     )
     .expect("first CPU domain");
     let second_domain = crate::ExternalCpuDomain::new(
@@ -194,7 +191,6 @@ fn public_cpu_runtime_registration_allows_two_selected_cpu_domains_in_one_runtim
         },
         Arc::new(crate::CpuContext::with_threads(1).expect("second CPU context")),
         NonZeroUsize::new(1).unwrap(),
-        crate::CpuPlacementGuarantee::AdvisoryDeclared,
     )
     .expect("second CPU domain");
     let first_backend = CpuBackend::from_external_managed_domains(first_domain_id, [first_domain])
@@ -423,10 +419,12 @@ fn cpu_backend_cache_owner_hooks_report_and_clear_current_engine_caches() {
         slice_sizes: vec![1],
     };
     backend
-        .gather(&operand, &indices, &config)
+        .with_backend_session(|__s| __s.gather(&operand, &indices, &config))
+        .unwrap()
         .expect("compile gather plan");
     backend
-        .gather(&operand, &indices, &config)
+        .with_backend_session(|__s| __s.gather(&operand, &indices, &config))
+        .unwrap()
         .expect("reuse gather plan");
     let populated = RuntimeCacheOwner::cache_stats(&backend).expect("populated cache stats");
     assert_eq!(populated.entries, 1);

@@ -6,7 +6,7 @@ use tenferro_cpu::CpuBackend;
 use tenferro_fft::FftNorm;
 use tenferro_gpu::cuda::gpu_available;
 
-use tenferro_runtime::{DType, Error, ErrorPhase, PrepareError, Tensor, UnsupportedReason};
+use tenferro_runtime::{DType, Error, ErrorPhase, PrepareError, Tensor};
 use tenferro_tensor::TensorRead;
 
 #[test]
@@ -82,13 +82,11 @@ fn cuda_traced_missing_extension_module_is_an_explicit_error() {
     assert!(
         matches!(
             prepare_error,
-            PrepareError::Unsupported {
-                reason: UnsupportedReason::Operation {
-                    operation: tenferro_fft::FFT_EXTENSION_FAMILY_ID,
-                },
+            PrepareError::MissingExtension {
+                family_id: tenferro_fft::FFT_EXTENSION_FAMILY_ID,
             }
         ),
-        "missing FFT registration returned the wrong unsupported operation: {prepare_error}"
+        "missing FFT registration returned the wrong prepare error: {prepare_error}"
     );
 }
 

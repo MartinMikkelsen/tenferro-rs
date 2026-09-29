@@ -27,7 +27,7 @@ let weights = TypedTensor::<f64>::from_vec_col_major(
     vec![3, 2],
     vec![0.5, -1.0, 1.5, 1.0, 2.0, -0.5],
 )?;
-let projected = backend.with_backend_session(|session| x.matmul(&weights, session))?;
+let projected = backend.with_backend_session(|session| x.matmul(&weights, session))??;
 assert_eq!(projected.shape(), &[2, 2]);
 assert_eq!(projected.host_data()?, &[3.0, 6.0, 3.5, 11.0]);
 ```
@@ -40,7 +40,7 @@ dynamic dtypes use `TensorSessionOpsExt`; for static scalar types use
 
 ## Eager tensors
 
-`EagerTensor` methods omit the backend argument because the runtime owns it.
+`EagerRuntime::with_eager_session` borrows execution for eager operations.
 Tracked values support `backward()` and functional eager transforms:
 
 <!-- snippet-source: docs/tutorial-code/src/bin/tenferro_compute_skill.rs#eager-operation -->
@@ -52,8 +52,10 @@ let x = runtime.variable_from(Tensor::from_vec_col_major(
     vec![3],
     vec![1.0_f64, 2.0, 3.0],
 )?)?;
-let prediction = x.mul(&x)?;
-let loss = prediction.reduce_sum(Some(&[0]))?;
+let loss = runtime.with_eager_session(|s| {
+    let prediction = s.mul(&x, &x)?;
+    s.reduce_sum(&prediction, Some(&[0]))
+})??;
 loss.backward()?;
 assert_eq!(
     x.grad()?.expect("tracked variable should receive a gradient").as_slice::<f64>()?,
@@ -65,7 +67,7 @@ assert_eq!(
 Common import recipes:
 
 - `tenferro_einsum::EagerEinsumExt` for eager einsum.
-- `tenferro_linalg::EagerTensorLinalgExt` for eager linear algebra.
+- `tenferro_linalg::EagerSessionLinalgExt` for borrowed eager linear algebra (`EagerTensorLinalgExt::solve` remains a calling-thread `no_grad` exception).
 - `tenferro_ad::{EagerRuntime, Tensor}` for eager values and runtime AD.
 
 ## Traced tensors and extensions

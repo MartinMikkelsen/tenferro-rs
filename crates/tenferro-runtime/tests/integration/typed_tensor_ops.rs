@@ -32,6 +32,7 @@ fn typed_tensor_reduction_and_structural_wrappers_preserve_values() {
                 ])
             },
         )
+        .unwrap()
         .unwrap();
     assert_eq!(row_sums.shape(), &[2]);
     assert_close(row_sums.host_data().unwrap(), &[6.0, 15.0]);
@@ -62,6 +63,7 @@ fn typed_tensor_matmul_rejects_non_matrix_inputs_without_rank_underflow() {
 
     let err = backend
         .with_backend_session(|session| scalar.matmul(&vector, session))
+        .unwrap()
         .unwrap_err();
 
     assert!(matches!(
@@ -84,6 +86,7 @@ fn direct_tensor_broadcast_uses_the_shared_shape_payload() {
 
     let error = backend
         .with_backend_session(|session| lhs.add(&rhs, session))
+        .unwrap()
         .unwrap_err();
 
     assert!(matches!(
@@ -94,4 +97,20 @@ fn direct_tensor_broadcast_uses_the_shared_shape_payload() {
         } if matches!(shape.as_ref(), ShapeMismatch::IncompatibleShapes { lhs, rhs }
             if lhs.as_slice() == [2] && rhs.as_slice() == [3])
     ));
+}
+
+#[test]
+fn typed_complex_abs_returns_the_real_dtype() {
+    use num_complex::Complex64;
+    let mut backend = CpuBackend::new();
+    let z = TypedTensor::<Complex64>::from_vec_col_major(
+        vec![2],
+        vec![Complex64::new(3.0, 4.0), Complex64::new(0.0, -2.0)],
+    )
+    .unwrap();
+    let magnitude = backend
+        .with_backend_session(|session| z.abs(session))
+        .unwrap()
+        .unwrap();
+    assert_close(magnitude.host_data().unwrap(), &[5.0, 2.0]);
 }

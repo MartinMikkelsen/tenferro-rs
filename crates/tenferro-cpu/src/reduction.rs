@@ -156,12 +156,6 @@ fn typed_bytes<T>(data: &[T]) -> &[u8] {
     unsafe { std::slice::from_raw_parts(data.as_ptr().cast::<u8>(), size_of_val(data)) }
 }
 
-fn typed_bytes_mut<T>(data: &mut [T]) -> &mut [u8] {
-    // SAFETY: `data` is an aligned typed slice. The erased reduction writes
-    // valid scalar values before the buffer is read through its typed view.
-    unsafe { std::slice::from_raw_parts_mut(data.as_mut_ptr().cast::<u8>(), size_of_val(data)) }
-}
-
 fn reduction_output_shape(input_shape: &[usize], axes: &[usize]) -> Vec<usize> {
     input_shape
         .iter()
@@ -853,28 +847,40 @@ where
         )
     }
     .map_err(|err| crate::Error::backend_source(label, err))?;
-    // SAFETY: ErasedReducePlan writes every destination element.
-    let mut output = unsafe { uninit_full_overwrite_vec(output_len) };
-    let mut dest = crate::erased_raw_strided_mut(
-        dtype,
-        typed_bytes_mut(&mut output),
-        &output_shape,
-        &output_strides,
-        0,
-    )
+    // The destination starts as `MaybeUninit<T>`: no `T` is claimed to exist
+    // until the full-overwrite plan below has written every element.
+    let mut output: Vec<std::mem::MaybeUninit<T>> = Vec::with_capacity(output_len);
+    output.resize_with(output_len, std::mem::MaybeUninit::uninit);
+    // SAFETY: `MaybeUninit<T>` has the size and alignment of `T`, so the slice
+    // covers exactly `output_len` elements of uninitialized byte storage.
+    let output_bytes = unsafe {
+        std::slice::from_raw_parts_mut(
+            output.as_mut_ptr().cast::<std::mem::MaybeUninit<u8>>(),
+            output_len * std::mem::size_of::<T>(),
+        )
+    };
+    let mut dest = unsafe {
+        // SAFETY: the storage is exclusively owned, aligned for `T` and sized
+        // for the validated column-major output; the following kernel
+        // overwrites every reachable element before typed exposure.
+        crate::erased_raw_strided_uninit_mut(dtype, output_bytes, &output_shape, &output_strides, 0)
+    }
     .map_err(|err| crate::Error::backend_source(label, err))?;
-    plan.execute(exec_context, &mut dest, &source)
+    let source_ptr = strided_kernel::ErasedRawStridedPtr::from_ref(&source);
+    plan.execute_uninit(exec_context, &mut dest, &source_ptr)
         .map_err(|err| crate::Error::backend_source(label, err))?;
 
+    let mut output = std::mem::ManuallyDrop::new(output);
+    // SAFETY: the reduction plan wrote every element, and `MaybeUninit<T>` and
+    // `T` share layout, so the allocation is a valid `Vec<T>`.
+    let output = unsafe {
+        Vec::from_raw_parts(
+            output.as_mut_ptr().cast::<T>(),
+            output.len(),
+            output.capacity(),
+        )
+    };
     TypedTensor::from_vec_col_major(output_shape, output)
-}
-
-#[allow(clippy::uninit_vec)]
-unsafe fn uninit_full_overwrite_vec<T>(len: usize) -> Vec<T> {
-    let mut output = Vec::with_capacity(len);
-    // SAFETY: the caller promises every element is overwritten before any read.
-    unsafe { output.set_len(len) };
-    output
 }
 
 fn typed_reduce_view_erased<T, TR>(

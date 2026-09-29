@@ -5,23 +5,30 @@ along a backend boundary.
 
 ## Crate Split
 
-`tenferro-tensor-core` owns backend-independent metadata and host-only
-adapters:
+`tenferro-tensor-core` owns backend-independent metadata only:
 
 - `TensorLayout<R>`, `Rank<N>`, `DynRank`, and `TensorRank`,
-- `ShapeVec`, `StrideVec`, and checked layout validation,
-- `DType`, `TensorScalar`, `HostTensor<T>`, dynamic host `Tensor`,
-  `HostTensorView`, `TensorView`, and `TensorRef`.
+- `ShapeVec`, `StrideVec`, `SliceSpec`, and checked layout validation,
+- `DType`, `TensorScalar` (`Real` plus `dtype()`), the scalar tag macro
+  `define_scalar_tag!`, and the promotion facts (`MemberKind`, `MemberSpec`,
+  `promote_specs`, `promote_in_set`).
 
-It must not expose a public `TypedTensor` alias and must not depend on backend
+It owns no tensor container, must not expose a public `TypedTensor` alias,
+must not refer back to tensor-owned types, and must not depend on backend
 buffers, CUDA, BLAS/LAPACK providers, execution traits, runtime caches, or AD.
 
 `tenferro-tensor` owns runtime/backend-capable tensor values:
 
-- `TypedTensor<T, R = DynRank>` for fixed scalar type and optional static rank,
+- `TypedTensor<T, R = DynRank, D = Dynamic>` for fixed scalar type, optional
+  static rank and a representation marker: `Host` (a plain or pooled `Vec<T>`,
+  with infallible host access, `Clone` and `Index`), `Gpu` (group-backed
+  storage with checked host access) or `Dynamic` (either, decided at runtime),
+- the host container family (`HostTensor`, `HostTensorView`, `DefaultScalars`,
+  `ScalarSet`, `define_scalar_set!`, `ErasedHostTensor`), moved here from core
+  by #1938,
 - dtype-erased dynamic-rank `Tensor`,
-- `TypedTensorView<'a, T, R>` and `TypedTensorViewMut<'a, T, R>` for borrowed
-  strided views,
+- `TypedTensorView<'a, T, R, D>` and `TypedTensorViewMut<'a, T, R, D>` for
+  borrowed strided views carrying the same representation marker,
 - `TensorView<'a>` and `TensorViewMut<'a>` for dtype-erased borrowed views,
 - `TensorRead<'a>` and `TensorWrite<'a>` for read/write kernel dispatch over
   either owned tensors or borrowed views,
@@ -116,5 +123,7 @@ tensors before CPU execution or host value inspection.
 
 Result-returning backend APIs report placement mismatches with
 `BackendFailure` diagnostics. Direct host-inspection methods such as
-`TypedTensor::host_data()` and `host_data_mut()` return `Result` and report
-backend buffers as runtime-state failures.
+`TypedTensor::host_data()` and `host_data_mut()` return `Result` on the `Gpu`
+and `Dynamic` representations and report backend buffers as runtime-state
+failures; on `Host` they are infallible. `into_host` / `into_gpu` are checked
+narrowing conversions that return the unchanged owner on failure.

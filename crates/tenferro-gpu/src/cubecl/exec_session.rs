@@ -1,12 +1,11 @@
 use cubecl::prelude::{CubeElement, CubePrimitive};
 use num_complex::{Complex32, Complex64};
-use std::any::TypeId;
 use std::marker::PhantomData;
 use std::rc::Rc;
 use tenferro_tensor::backend::{
-    BackendSession, BackendSessionHost, ElementwiseFusionPlan, ElementwiseReadOp,
-    GroupedGemmConfig, SessionCachedDot, TensorAnalytic, TensorBuffer, TensorDeviceTransfer,
-    TensorDot, TensorElementwise, TensorFusion, TensorIndexing, TensorReduction, TensorStructural,
+    BackendSession, BackendSessionHost, ElementwiseFusionPlan, ElementwiseReadOp, SessionCachedDot,
+    TensorAnalytic, TensorBuffer, TensorDeviceTransfer, TensorDot, TensorElementwise, TensorFusion,
+    TensorIndexing, TensorReduction, TensorStructural,
 };
 use tenferro_tensor::config::{
     CompareDir, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig,
@@ -15,12 +14,10 @@ use tenferro_tensor::DType;
 use tenferro_tensor::{
     with_session_entry_guard, TensorRank, TensorScalar, TensorViewCanonicalization, TypedTensorView,
 };
-use tenferro_tensor::{
-    DotGeneralAccumulation, Tensor, TensorRead, TensorValue, TensorWrite, TypedTensor,
-};
+use tenferro_tensor::{DotGeneralAccumulation, Tensor, TensorRead, TensorWrite, TypedTensor};
 
 use super::identity::GpuExtensionCapability;
-use super::{gemm, runtime::RawContextRestore};
+use super::{gemm, ops, runtime::RawContextRestore};
 use super::{
     raw, session_cubecl, CudaBackend, CudaDeviceInfo, CudaExtensionCache, CudaRuntime,
     CudaRuntimeIdentity,
@@ -67,8 +64,8 @@ impl Drop for CubeclExitFlush<'_> {
     }
 }
 
-/// Marker for the concrete erased CUDA execution-session target.
-#[doc(hidden)]
+/// Native-session marker for [`CudaExecSession`]; private to this crate so no other
+/// crate can create a token that claims to be this session.
 pub(super) struct CudaExecSessionMarker;
 
 /// Borrowed CUDA execution capability.
@@ -83,6 +80,14 @@ pub(super) struct CudaExecSessionMarker;
 /// carries thread-local execution capability. Success of an enrolled operation
 /// means the work was enqueued; only [`CudaExecSession::synchronize`] is a
 /// host barrier.
+///
+/// The backend owner is not an operation route, so an operation bound does not
+/// hold for it:
+///
+/// ```compile_fail
+/// fn requires_elementwise<B: tenferro_tensor::TensorElementwise>() {}
+/// requires_elementwise::<tenferro_gpu::cuda::CudaBackend>();
+/// ```
 #[derive(Debug)]
 pub struct CudaExecSession<'a> {
     backend: &'a mut CudaBackend,
@@ -432,13 +437,14 @@ pub fn with_cuda_exec_session<B, R>(
 where
     B: BackendSession + ?Sized,
 {
-    if session.session_type_id() != std::any::TypeId::of::<CudaExecSessionMarker>() {
-        return None;
-    }
-    let data = unsafe { session.session_data_mut() };
-    // SAFETY: the exact marker check and the BackendSession erased-pointer
-    // contract identify the value as CudaExecSession for this scoped visit.
-    Some(unsafe { f(&mut *(data.cast::<CudaExecSession<'static>>())) })
+    let data = session
+        .native_session()?
+        .into_marked_ptr::<CudaExecSessionMarker>()?;
+    // SAFETY: only `CudaExecSession::native_session` creates a token with the
+    // crate-private `CudaExecSessionMarker`, and it points that token at a live
+    // `CudaExecSession`. The token borrowed `*session` exclusively, and this function
+    // keeps holding `session: &mut B` for the whole scoped visit.
+    Some(unsafe { f(data.cast::<CudaExecSession<'static>>().as_mut()) })
 }
 
 macro_rules! delegate {
@@ -455,7 +461,22 @@ macro_rules! delegate {
     };
 }
 
-delegate!(TensorElementwise {
+macro_rules! delegate_ops {
+    ($trait:path {
+        $(fn $method:ident($($arg:ident: $arg_ty:ty),* $(,)?) -> $ret:ty;)*
+    } $(override { $($custom:item)* })?) => {
+        impl $trait for CudaExecSession<'_> {
+            $(
+                fn $method(&mut self, $($arg: $arg_ty),*) -> $ret {
+                    ops::$method(self.backend, $($arg),*)
+                }
+            )*
+            $($($custom)*)?
+        }
+    };
+}
+
+delegate_ops!(TensorElementwise {
     fn add_read(lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor>;
     fn sub_read(lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor>;
     fn mul_read(lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor>;
@@ -470,24 +491,34 @@ delegate!(TensorElementwise {
     fn compare_read(lhs: TensorRead<'_>, rhs: TensorRead<'_>, dir: &CompareDir) -> crate::Result<Tensor>;
     fn select_read(pred: TensorRead<'_>, on_true: TensorRead<'_>, on_false: TensorRead<'_>) -> crate::Result<Tensor>;
     fn clamp_read(input: TensorRead<'_>, lower: TensorRead<'_>, upper: TensorRead<'_>) -> crate::Result<Tensor>;
-    fn elementwise_read_into(op: ElementwiseReadOp, inputs: &[TensorRead<'_>], out: TensorWrite<'_>) -> crate::Result<()>;
-    fn add(lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor>;
-    fn sub(lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor>;
-    fn mul(lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor>;
-    fn neg(input: &Tensor) -> crate::Result<Tensor>;
-    fn conj(input: &Tensor) -> crate::Result<Tensor>;
-    fn div(lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor>;
     fn rem(lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor>;
-    fn abs(input: &Tensor) -> crate::Result<Tensor>;
-    fn sign(input: &Tensor) -> crate::Result<Tensor>;
-    fn maximum(lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor>;
-    fn minimum(lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor>;
-    fn compare(lhs: &Tensor, rhs: &Tensor, dir: &CompareDir) -> crate::Result<Tensor>;
-    fn select(pred: &Tensor, on_true: &Tensor, on_false: &Tensor) -> crate::Result<Tensor>;
-    fn clamp(input: &Tensor, lower: &Tensor, upper: &Tensor) -> crate::Result<Tensor>;
+} override {
+    // Read-into elementwise dispatch must stay session-shaped: the allocating
+    // fallback in `tenferro-tensor` is generic over `TensorElementwise`, and the
+    // session is the only type in this crate that implements it now. The native
+    // read-into kernels still run first, so no work moves onto the allocating path.
+    fn elementwise_read_into(
+        &mut self,
+        op: ElementwiseReadOp,
+        inputs: &[TensorRead<'_>],
+        mut out: TensorWrite<'_>,
+    ) -> crate::Result<()> {
+        if inputs.len() != op.arity() {
+            return Err(crate::Error::invalid_argument(
+                op.label(),
+                "inputs",
+                format!("expected {} inputs, got {}", op.arity(), inputs.len()),
+            ));
+        }
+        tenferro_tensor::backend::validate_read_into_destination(op.label(), inputs, &out)?;
+        if let Some(result) = self.backend.elementwise_read_into_native(op, inputs, &mut out) {
+            return result;
+        }
+        tenferro_tensor::backend::elementwise_read_into_via_allocating_ops(self, op, inputs, out)
+    }
 });
 
-delegate!(TensorAnalytic {
+delegate_ops!(TensorAnalytic {
     fn exp_read(input: TensorRead<'_>) -> crate::Result<Tensor>;
     fn log_read(input: TensorRead<'_>) -> crate::Result<Tensor>;
     fn sin_read(input: TensorRead<'_>) -> crate::Result<Tensor>;
@@ -498,27 +529,14 @@ delegate!(TensorAnalytic {
     fn pow_read(lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor>;
     fn expm1_read(input: TensorRead<'_>) -> crate::Result<Tensor>;
     fn log1p_read(input: TensorRead<'_>) -> crate::Result<Tensor>;
-    fn exp(input: &Tensor) -> crate::Result<Tensor>;
-    fn log(input: &Tensor) -> crate::Result<Tensor>;
-    fn sin(input: &Tensor) -> crate::Result<Tensor>;
-    fn cos(input: &Tensor) -> crate::Result<Tensor>;
-    fn tanh(input: &Tensor) -> crate::Result<Tensor>;
-    fn sqrt(input: &Tensor) -> crate::Result<Tensor>;
-    fn rsqrt(input: &Tensor) -> crate::Result<Tensor>;
-    fn pow(lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor>;
-    fn expm1(input: &Tensor) -> crate::Result<Tensor>;
-    fn log1p(input: &Tensor) -> crate::Result<Tensor>;
 });
 
-delegate!(TensorStructural {
+delegate_ops!(TensorStructural {
     fn transpose_read(input: TensorRead<'_>, perm: &[usize]) -> crate::Result<Tensor>;
     fn reshape_read(input: TensorRead<'_>, shape: &[usize]) -> crate::Result<Tensor>;
     fn broadcast_in_dim_read(input: TensorRead<'_>, shape: &[usize], dims: &[usize]) -> crate::Result<Tensor>;
     fn to_contiguous_read(input: TensorRead<'_>) -> crate::Result<Tensor>;
     fn copy_read_into(src: TensorRead<'_>, dst: TensorWrite<'_>) -> crate::Result<()>;
-    fn transpose(input: &Tensor, perm: &[usize]) -> crate::Result<Tensor>;
-    fn reshape(input: &Tensor, shape: &[usize]) -> crate::Result<Tensor>;
-    fn broadcast_in_dim(input: &Tensor, shape: &[usize], dims: &[usize]) -> crate::Result<Tensor>;
     fn cast(input: &Tensor, to: tenferro_tensor::DType) -> crate::Result<Tensor>;
     fn extract_diagonal(input: &Tensor, axis_a: usize, axis_b: usize) -> crate::Result<Tensor>;
     fn embed_diagonal(input: &Tensor, axis_a: usize, axis_b: usize) -> crate::Result<Tensor>;
@@ -526,20 +544,15 @@ delegate!(TensorStructural {
     fn triu(input: &Tensor, k: i64) -> crate::Result<Tensor>;
 });
 
-delegate!(TensorReduction {
+delegate_ops!(TensorReduction {
     fn reduce_sum_read(input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor>;
     fn reduce_prod_read(input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor>;
     fn reduce_max_read(input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor>;
     fn reduce_min_read(input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor>;
-    fn reduce_sum(input: &Tensor, axes: &[usize]) -> crate::Result<Tensor>;
     fn reduce_sum_squares_read(input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor>;
-    fn reduce_prod(input: &Tensor, axes: &[usize]) -> crate::Result<Tensor>;
-    fn reduce_max(input: &Tensor, axes: &[usize]) -> crate::Result<Tensor>;
-    fn reduce_min(input: &Tensor, axes: &[usize]) -> crate::Result<Tensor>;
 });
 
-delegate!(TensorDot {
-    fn dot_general(lhs: &Tensor, rhs: &Tensor, config: &DotGeneralConfig) -> crate::Result<Tensor>;
+delegate_ops!(TensorDot {
     fn dot_general_with_conj(
         lhs: &Tensor,
         rhs: &Tensor,
@@ -561,7 +574,7 @@ delegate!(TensorDot {
     ) -> crate::Result<()>;
 });
 
-delegate!(TensorIndexing {
+delegate_ops!(TensorIndexing {
     fn gather(
         operand: &Tensor,
         start_indices: &Tensor,
@@ -589,7 +602,7 @@ delegate!(TensorIndexing {
     fn reverse(input: &Tensor, axes: &[usize]) -> crate::Result<Tensor>;
 });
 
-delegate!(TensorFusion {
+delegate_ops!(TensorFusion {
     fn execute_elementwise_fusion(
         inputs: &[&Tensor],
         plan: &ElementwiseFusionPlan,
@@ -602,14 +615,6 @@ delegate!(TensorFusion {
         rhs_shape: &[usize],
         rhs_dims: &[usize],
     ) -> crate::Result<Option<Tensor>>;
-    fn execute_broadcast_multiply_value(
-        lhs: TensorRead<'_>,
-        lhs_shape: &[usize],
-        lhs_dims: &[usize],
-        rhs: TensorRead<'_>,
-        rhs_shape: &[usize],
-        rhs_dims: &[usize],
-    ) -> crate::Result<Option<TensorValue>>;
 });
 
 delegate!(TensorBuffer {
@@ -621,89 +626,39 @@ delegate!(TensorDeviceTransfer {
     fn upload_host_tensor(tensor: TensorRead<'_>) -> crate::Result<Tensor>;
 });
 
-macro_rules! delegate_cached {
-    ($(fn $method:ident($($arg:ident: $arg_ty:ty),* $(,)?) -> $ret:ty;)*) => {
-        impl SessionCachedDot for CudaExecSession<'_> {
-            $(
-                fn $method(&mut self, $($arg: $arg_ty),*) -> $ret {
-                    <CudaBackend as SessionCachedDot>::$method(self.backend, $($arg),*)
-                }
-            )*
-
-            // `CudaBackend` gets `SessionCachedDot` from the blanket impl over
-            // `TensorBackend`, so the read-based cached entries are overridden
-            // here rather than on the backend itself.
-            fn dot_general_read_cached(
-                &mut self,
-                _cache_slot: Option<usize>,
-                lhs: TensorRead<'_>,
-                rhs: TensorRead<'_>,
-                config: &DotGeneralConfig,
-            ) -> crate::Result<Tensor> {
-                gemm::dot_general_read_allocating(self.backend, lhs, rhs, config, false, false)
-            }
-
-            fn dot_general_with_conj_read_cached(
-                &mut self,
-                _cache_slot: Option<usize>,
-                lhs: TensorRead<'_>,
-                rhs: TensorRead<'_>,
-                config: &DotGeneralConfig,
-                lhs_conj: bool,
-                rhs_conj: bool,
-            ) -> crate::Result<Tensor> {
-                gemm::dot_general_read_allocating(
-                    self.backend,
-                    lhs,
-                    rhs,
-                    config,
-                    lhs_conj,
-                    rhs_conj,
-                )
-            }
-        }
-    };
-}
-
-delegate_cached! {
-    fn dot_general_cached(
-        cache_slot: Option<usize>,
-        lhs: &Tensor,
-        rhs: &Tensor,
+impl SessionCachedDot for CudaExecSession<'_> {
+    // Read-based cached dot paths keep strided operands on device; the plan
+    // cache is per backend, so the runtime cache slot stays unused.
+    fn dot_general_read_cached(
+        &mut self,
+        _cache_slot: Option<usize>,
+        lhs: TensorRead<'_>,
+        rhs: TensorRead<'_>,
         config: &DotGeneralConfig,
-    ) -> crate::Result<Tensor>;
-    fn dot_general_with_conj_cached(
-        cache_slot: Option<usize>,
-        lhs: &Tensor,
-        rhs: &Tensor,
+    ) -> crate::Result<Tensor> {
+        gemm::dot_general_read_allocating(self.backend, lhs, rhs, config, false, false)
+    }
+
+    fn dot_general_with_conj_read_cached(
+        &mut self,
+        _cache_slot: Option<usize>,
+        lhs: TensorRead<'_>,
+        rhs: TensorRead<'_>,
         config: &DotGeneralConfig,
         lhs_conj: bool,
         rhs_conj: bool,
-    ) -> crate::Result<Tensor>;
-    fn dot_general_read_into_accum_cached(
-        cache_slot: Option<usize>,
-        lhs: TensorRead<'_>,
-        rhs: TensorRead<'_>,
-        config: &DotGeneralConfig,
-        accumulation: DotGeneralAccumulation,
-        out: TensorWrite<'_>,
-    ) -> crate::Result<()>;
-    fn grouped_gemm_cached(
-        cache_slot: Option<usize>,
-        lhs: TensorRead<'_>,
-        rhs: TensorRead<'_>,
-        config: &GroupedGemmConfig<'_>,
-        out: TensorWrite<'_>,
-    ) -> crate::Result<()>;
+    ) -> crate::Result<Tensor> {
+        gemm::dot_general_read_allocating(self.backend, lhs, rhs, config, lhs_conj, rhs_conj)
+    }
 }
 
 impl BackendSession for CudaExecSession<'_> {
     fn vdot_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor> {
-        BackendSession::vdot_read(self.backend, lhs, rhs)
+        ops::vdot_read(self.backend, lhs, rhs)
     }
 
     fn norm_squared_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
-        BackendSession::norm_squared_read(self.backend, input)
+        ops::norm_squared_read(self.backend, input)
     }
 
     fn axpby_read_into_accum(
@@ -713,15 +668,14 @@ impl BackendSession for CudaExecSession<'_> {
         beta: tenferro_tensor::ContractionScalar,
         y: TensorWrite<'_>,
     ) -> crate::Result<()> {
-        BackendSession::axpby_read_into_accum(self.backend, alpha, x, beta, y)
+        ops::axpby_read_into_accum(self.backend, alpha, x, beta, y)
     }
 
-    fn session_type_id(&self) -> TypeId {
-        TypeId::of::<CudaExecSessionMarker>()
-    }
-
-    unsafe fn session_data_mut(&mut self) -> *mut () {
-        self as *mut Self as *mut ()
+    fn native_session(&mut self) -> Option<tenferro_tensor::NativeSessionRef<'_>> {
+        // SAFETY: `CudaExecSessionMarker` is private to this crate, and this is the only
+        // place a token carrying it is created; it always points to a
+        // `CudaExecSession`, exclusively borrowed for the token lifetime.
+        Some(unsafe { tenferro_tensor::NativeSessionRef::new::<CudaExecSessionMarker, _>(self) })
     }
 }
 
@@ -729,13 +683,13 @@ impl BackendSessionHost for CudaBackend {
     fn with_backend_session<R: Send>(
         &mut self,
         f: impl FnOnce(&mut dyn BackendSession) -> R + Send,
-    ) -> R {
+    ) -> Result<R, tenferro_tensor::SessionEntryError> {
         let mut session = CudaExecSession {
             backend: self,
             _not_send_sync: PhantomData,
         };
-        // Nested entry is caught by the portable in-session guard in debug
-        // builds; the CUDA runtime must never re-enter a session closure.
-        with_session_entry_guard(|| f(&mut session))
+        // The portable in-session guard rejects nested entry before `f` runs;
+        // the CUDA runtime must never re-enter a session closure.
+        with_session_entry_guard("CudaBackend", || f(&mut session))
     }
 }

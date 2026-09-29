@@ -4,7 +4,7 @@ use super::{
 };
 
 #[cfg(any(feature = "blas-openblas", feature = "blas-mkl"))]
-use super::blas_gemm::provider_should_use_gemm_batch;
+use super::blas_gemm::use_vendor_batch;
 #[cfg(feature = "cpu-blas")]
 use super::blas_gemm::BlasGemm;
 #[cfg(any(feature = "blas-openblas", feature = "blas-mkl"))]
@@ -17,8 +17,9 @@ use crate::provider::tests::execution_context_fixture;
 use crate::provider::ParallelMode;
 #[cfg(feature = "cpu-blas")]
 use num_complex::Complex64;
+use tenferro_tensor::BackendSessionHost;
 use tenferro_tensor::RuntimeCacheControl;
-use tenferro_tensor::{DotGeneralConfig, Tensor, TensorDot, TypedTensor};
+use tenferro_tensor::{DotGeneralConfig, Tensor, TypedTensor};
 #[cfg(feature = "cpu-faer")]
 use tenferro_tensor::{TensorRead, TensorView};
 
@@ -448,11 +449,14 @@ fn faer_read_transposed_view_uses_provider_runtime() {
     let mut backend =
         crate::CpuBackend::with_threads_and_kind(1, crate::CpuBackendKind::Faer).unwrap();
     let out = backend
-        .dot_general_read(
-            TensorRead::from_view(TensorView::F64(lhs_view)),
-            TensorRead::from_tensor(&rhs),
-            &config,
-        )
+        .with_backend_session(|__s| {
+            __s.dot_general_read(
+                TensorRead::from_view(TensorView::F64(lhs_view)),
+                TensorRead::from_tensor(&rhs),
+                &config,
+            )
+        })
+        .unwrap()
         .unwrap();
     assert_eq!(out.shape(), &[2, 2]);
     assert_eq!(out.as_slice::<f64>().unwrap(), &[50.0, 122.0, 68.0, 167.0]);
@@ -475,13 +479,17 @@ fn blas_dot_general_contract_trailing_rhs_dim() {
     };
     let mut backend =
         crate::CpuBackend::with_threads_and_kind(1, crate::CpuBackendKind::Blas).unwrap();
-    let out = backend
-        .dot_general(
-            &Tensor::from_typed::<f64>(lhs),
-            &Tensor::from_typed::<f64>(rhs),
+    let lhs = Tensor::from_typed::<f64>(lhs);
+    let rhs = Tensor::from_typed::<f64>(rhs);
+    let out = tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |session| {
+        session.dot_general_read(
+            tenferro_tensor::TensorRead::from_tensor(&lhs),
+            tenferro_tensor::TensorRead::from_tensor(&rhs),
             &config,
         )
-        .expect("dot_general should succeed");
+    })
+    .unwrap()
+    .expect("dot_general should succeed");
 
     assert_eq!(out.shape(), &[2, 2]);
     assert_eq!(out.as_slice::<f64>().unwrap(), &[89.0, 116.0, 98.0, 128.0]);
@@ -603,15 +611,23 @@ fn provider_gemm_batch_heuristic_keeps_medium_jobs_on_sequential_path() {
         }
     }
 
-    assert!(provider_should_use_gemm_batch(&[
-        batch(8, 8, 8),
-        batch(8, 8, 8)
-    ]));
-    assert!(!provider_should_use_gemm_batch(&[batch(8, 8, 8)]));
-    assert!(!provider_should_use_gemm_batch(&[
-        batch(8, 8, 8),
-        batch(32, 32, 32)
-    ]));
+    // The default policy threshold is the measured small-job cutoff.
+    let auto = crate::provider::CpuVendorBatch::default();
+    assert!(use_vendor_batch(auto, &[batch(8, 8, 8), batch(8, 8, 8)]));
+    assert!(!use_vendor_batch(auto, &[batch(8, 8, 8)]));
+    assert!(!use_vendor_batch(
+        auto,
+        &[batch(8, 8, 8), batch(32, 32, 32)]
+    ));
+    // A forced strategy overrides the cutoff in both directions.
+    assert!(use_vendor_batch(
+        crate::provider::CpuVendorBatch::Required,
+        &[batch(32, 32, 32)]
+    ));
+    assert!(!use_vendor_batch(
+        crate::provider::CpuVendorBatch::Forbidden,
+        &[batch(8, 8, 8), batch(8, 8, 8)]
+    ));
 }
 
 #[cfg(feature = "cpu-faer")]
@@ -679,4 +695,29 @@ fn faer_strided_gemm_accumulates_with_unit_beta_without_prescaling() {
 fn faer_singleton_strides_are_normalized_before_raw_gemm() {
     assert_eq!(super::normalize_singleton_stride(0, 1, 4), 4);
     assert_eq!(super::normalize_singleton_stride(0, 3, 4), 0);
+}
+
+#[test]
+fn small_gemms_stay_sequential_inside_parallel_contexts() {
+    use num_complex::Complex64;
+    let par = faer::Par::rayon(4);
+    // Below the threshold: sequential, whatever the context allowed.
+    assert!(matches!(
+        super::faer_gemm::small_gemm_parallelism::<f64>(par, 64, 64, 64),
+        faer::Par::Seq
+    ));
+    // At the threshold for reals, but complex elements weigh four times.
+    assert!(matches!(
+        super::faer_gemm::small_gemm_parallelism::<f64>(par, 128, 128, 64),
+        faer::Par::Rayon(_)
+    ));
+    assert!(matches!(
+        super::faer_gemm::small_gemm_parallelism::<Complex64>(par, 64, 64, 64),
+        faer::Par::Rayon(_)
+    ));
+    // A sequential context is never upgraded.
+    assert!(matches!(
+        super::faer_gemm::small_gemm_parallelism::<f64>(faer::Par::Seq, 512, 512, 512),
+        faer::Par::Seq
+    ));
 }

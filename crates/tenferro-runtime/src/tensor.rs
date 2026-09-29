@@ -25,11 +25,11 @@ impl TensorSessionOpsExt for Tensor {
     }
 
     fn exp(&self, session: &mut dyn BackendSession) -> Result<Tensor> {
-        session.exp(self)
+        session.exp_read(TensorRead::from_tensor(self))
     }
 
     fn reduce_sum(&self, axes: &[usize], session: &mut dyn BackendSession) -> Result<Tensor> {
-        session.reduce_sum(self, axes)
+        session.reduce_sum_read(TensorRead::from_tensor(self), axes)
     }
 
     fn convert(&self, to: DType, session: &mut dyn BackendSession) -> Result<Tensor> {
@@ -71,51 +71,51 @@ impl TensorSessionOpsExt for Tensor {
     }
 
     fn neg(&self, session: &mut dyn BackendSession) -> Result<Tensor> {
-        session.neg(self)
+        session.neg_read(TensorRead::from_tensor(self))
     }
 
     fn abs(&self, session: &mut dyn BackendSession) -> Result<Tensor> {
-        session.abs(self)
+        session.abs_read(TensorRead::from_tensor(self))
     }
 
     fn sign(&self, session: &mut dyn BackendSession) -> Result<Tensor> {
-        session.sign(self)
+        session.sign_read(TensorRead::from_tensor(self))
     }
 
     fn conj(&self, session: &mut dyn BackendSession) -> Result<Tensor> {
-        session.conj(self)
+        session.conj_read(TensorRead::from_tensor(self))
     }
 
     fn log(&self, session: &mut dyn BackendSession) -> Result<Tensor> {
-        session.log(self)
+        session.log_read(TensorRead::from_tensor(self))
     }
 
     fn expm1(&self, session: &mut dyn BackendSession) -> Result<Tensor> {
-        session.expm1(self)
+        session.expm1_read(TensorRead::from_tensor(self))
     }
 
     fn log1p(&self, session: &mut dyn BackendSession) -> Result<Tensor> {
-        session.log1p(self)
+        session.log1p_read(TensorRead::from_tensor(self))
     }
 
     fn sin(&self, session: &mut dyn BackendSession) -> Result<Tensor> {
-        session.sin(self)
+        session.sin_read(TensorRead::from_tensor(self))
     }
 
     fn cos(&self, session: &mut dyn BackendSession) -> Result<Tensor> {
-        session.cos(self)
+        session.cos_read(TensorRead::from_tensor(self))
     }
 
     fn tanh(&self, session: &mut dyn BackendSession) -> Result<Tensor> {
-        session.tanh(self)
+        session.tanh_read(TensorRead::from_tensor(self))
     }
 
     fn sqrt(&self, session: &mut dyn BackendSession) -> Result<Tensor> {
-        session.sqrt(self)
+        session.sqrt_read(TensorRead::from_tensor(self))
     }
 
     fn rsqrt(&self, session: &mut dyn BackendSession) -> Result<Tensor> {
-        session.rsqrt(self)
+        session.rsqrt_read(TensorRead::from_tensor(self))
     }
 
     fn compare(
@@ -159,15 +159,19 @@ impl TensorSessionOpsExt for Tensor {
 
     fn matmul(&self, rhs: &Tensor, session: &mut dyn BackendSession) -> Result<Tensor> {
         let config = matmul_config_for_shapes("matmul", self.shape(), rhs.shape())?;
-        session.dot_general(self, rhs, &config)
+        session.dot_general_read(
+            TensorRead::from_tensor(self),
+            TensorRead::from_tensor(rhs),
+            &config,
+        )
     }
 
     fn reshape(&self, shape: &[usize], session: &mut dyn BackendSession) -> Result<Tensor> {
-        session.reshape(self, shape)
+        session.reshape_read(TensorRead::from_tensor(self), shape)
     }
 
     fn transpose(&self, perm: &[usize], session: &mut dyn BackendSession) -> Result<Tensor> {
-        session.transpose(self, perm)
+        session.transpose_read(TensorRead::from_tensor(self), perm)
     }
 }
 

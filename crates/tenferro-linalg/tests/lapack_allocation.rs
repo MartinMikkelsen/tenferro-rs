@@ -142,11 +142,14 @@ fn steady_state(
     operation: impl Fn(&mut dyn tenferro_tensor::BackendSession) + Send + Sync,
 ) -> AllocationReport {
     for _ in 0..4 {
-        host.with_backend_session(|session| operation(session));
+        host.with_backend_session(|session| operation(session))
+            .unwrap();
     }
     let mut best: Option<AllocationReport> = None;
     for _ in 0..5 {
-        let report = host.with_backend_session(|session| measure(|| operation(session)));
+        let report = host
+            .with_backend_session(|session| measure(|| operation(session)))
+            .unwrap();
         if best.is_none_or(|best| report.allocations < best.allocations) {
             best = Some(report);
         }

@@ -23,9 +23,11 @@ pub(super) fn with_cpu_linalg<R>(
 where
     R: Send,
 {
-    backend.with_backend_session(|session| {
-        with_cpu_exec_session(session, f).expect("CpuBackend must expose CpuExecSession")
-    })
+    backend
+        .with_backend_session(|session| {
+            with_cpu_exec_session(session, f).expect("CpuBackend must expose CpuExecSession")
+        })
+        .unwrap()
 }
 
 fn get_f64(t: &Tensor, idx: &[usize]) -> f64 {
@@ -295,6 +297,8 @@ fn diagonal_scatter_config() -> ScatterConfig {
 mod backend;
 #[cfg(all(feature = "cpu-faer", feature = "cpu-blas"))]
 mod batched;
+#[cfg(feature = "cpu-blas")]
+mod blas_batch_policy;
 mod dtype;
 #[cfg(feature = "cpu-faer")]
 mod faer_lanes;

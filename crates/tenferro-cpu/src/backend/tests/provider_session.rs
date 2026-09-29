@@ -45,9 +45,17 @@ fn blas_sessions_reuse_entered_context_for_native_gemm_and_linalg() {
                         .unwrap();
                     })
                     .unwrap();
-                    let sum = session.add(&lhs, &rhs).unwrap();
+                    let sum = session
+                        .add_read(TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs))
+                        .unwrap();
                     assert_eq!(sum.as_slice::<f64>().unwrap(), &[6.0, 8.0, 10.0, 12.0]);
-                    let product = session.dot_general(&lhs, &rhs, &config).unwrap();
+                    let product = session
+                        .dot_general_read(
+                            TensorRead::from_tensor(&lhs),
+                            TensorRead::from_tensor(&rhs),
+                            &config,
+                        )
+                        .unwrap();
                     assert_eq!(
                         product.as_slice::<f64>().unwrap(),
                         &[23.0, 34.0, 31.0, 46.0]
@@ -55,9 +63,11 @@ fn blas_sessions_reuse_entered_context_for_native_gemm_and_linalg() {
                 }
             };
             if cached {
-                backend.with_backend_session_cached(&mut cache, run);
+                backend
+                    .with_backend_session_cached(&mut cache, run)
+                    .unwrap();
             } else {
-                backend.with_backend_session(run);
+                backend.with_backend_session(run).unwrap();
             }
             assert_eq!(context.executor_install_calls_for_test() - before, 1);
         }
@@ -70,33 +80,38 @@ fn blas_session_preserves_exclusion_and_recovers_after_callback_panic() {
         let mut backend = CpuBackend::with_threads_and_kind(threads, CpuBackendKind::Blas).unwrap();
         let other = CpuBackend::with_threads_and_kind(threads, CpuBackendKind::Blas).unwrap();
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            backend.with_backend_session(|_| {
-                let blocked = std::thread::scope(|scope| {
-                    scope
-                        .spawn(|| {
-                            other
-                                .try_acquire_execution_permit_for_test()
-                                .unwrap()
-                                .is_none()
-                        })
-                        .join()
-                        .unwrap()
-                });
-                assert!(
-                    blocked,
-                    "provider exclusion must cover the whole session callback"
-                );
-                panic!("session callback failure");
-            });
+            backend
+                .with_backend_session(|_| {
+                    let blocked = std::thread::scope(|scope| {
+                        scope
+                            .spawn(|| {
+                                other
+                                    .try_acquire_execution_permit_for_test()
+                                    .unwrap()
+                                    .is_none()
+                            })
+                            .join()
+                            .unwrap()
+                    });
+                    assert!(
+                        blocked,
+                        "provider exclusion must cover the whole session callback"
+                    );
+                    panic!("session callback failure");
+                })
+                .unwrap();
         }));
         assert_eq!(
             panic_message(outcome.unwrap_err()),
             "session callback failure"
         );
-        backend.with_backend_session(|session| {
-            crate::with_cpu_exec_session(session, |cpu| assert!(cpu.entered.is_some())).unwrap();
-        });
+        backend
+            .with_backend_session(|session| {
+                crate::with_cpu_exec_session(session, |cpu| assert!(cpu.entered.is_some()))
+                    .unwrap();
+            })
+            .unwrap();
         // Successful admission to an independent backend proves that unwind released the permit.
-        assert_eq!(other.install(|| 17_u32), 17);
+        assert_eq!(other.install(|| 17_u32).unwrap(), 17);
     }
 }

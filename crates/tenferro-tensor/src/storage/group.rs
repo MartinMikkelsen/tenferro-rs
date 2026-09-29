@@ -216,6 +216,13 @@ pub enum GroupError {
     RankMismatch { expected: usize, actual: usize },
     #[error("allocation slot {allocation} has more than one live descriptor")]
     AliasedAllocation { allocation: usize },
+    /// The descriptor is not its whole allocation in compact column-major
+    /// order at offset zero (for example a transpose, a slice or a broadcast),
+    /// so it cannot become an owned tensor without an explicit copy.
+    #[error(
+        "descriptor slot {slot} is not a compact whole-allocation layout; materialize it instead of extracting"
+    )]
+    NonCompactDescriptor { slot: usize },
 }
 
 /// N-way mutable split errors. Every error leaves the group unchanged.
@@ -294,6 +301,14 @@ impl<'a, T, R: TensorRank> GroupReadView<'a, T, R> {
             _borrow: PhantomData,
         }
     }
+
+    pub(crate) fn into_dyn(self) -> GroupReadView<'a, T, crate::DynRank> {
+        GroupReadView {
+            owner: self.owner,
+            descriptor: self.descriptor,
+            _borrow: PhantomData,
+        }
+    }
 }
 
 impl<T, R: TensorRank> std::fmt::Debug for GroupReadView<'_, T, R> {
@@ -347,13 +362,6 @@ impl<'a, T: TensorScalar, R: TensorRank> GroupReadView<'a, T, R> {
                 .as_ref()
                 .map_read(self.descriptor.span(), self.descriptor.dtype())
         }
-    }
-
-    pub(crate) fn backend_allocation(&self) -> Option<&'a dyn BackendAllocation> {
-        let allocation = unsafe { self.owner.as_ref().backend_allocation() }?;
-        Some(unsafe {
-            std::mem::transmute::<&dyn BackendAllocation, &'a dyn BackendAllocation>(allocation)
-        })
     }
 
     pub(crate) fn prepare_device_read_for_layout(
@@ -421,6 +429,14 @@ impl<'a, T: TensorScalar, R: TensorRank> GroupReadView<'a, T, R> {
 }
 
 impl<'a, T: 'static, R: TensorRank> GroupReadView<'a, T, R> {
+    pub(crate) fn backend_allocation(&self) -> Option<&'a dyn BackendAllocation> {
+        // SAFETY: the group borrow retains the owner for `'a`.
+        let allocation = unsafe { self.owner.as_ref().backend_allocation() }?;
+        Some(unsafe {
+            std::mem::transmute::<&dyn BackendAllocation, &'a dyn BackendAllocation>(allocation)
+        })
+    }
+
     pub(crate) fn backend_buffer(&self) -> Option<&'a crate::StorageBuffer<T>> {
         // SAFETY: the owner pointer is bounded by the group borrow carried by
         // this view, and the root buffer cannot be resized after import.
@@ -1500,12 +1516,14 @@ impl AllocationGroup {
     ///
     /// # Errors
     ///
-    /// Returns [`GroupError::AliasedAllocation`] for an aliased allocation or
-    /// [`GroupError::InvalidDescriptor`] for an invalid slot; every extraction
-    /// failure leaves the group unchanged.
+    /// Returns [`GroupError::AliasedAllocation`] for an aliased allocation,
+    /// [`GroupError::NonCompactDescriptor`] for a strided, offset or partial
+    /// descriptor, or [`GroupError::InvalidDescriptor`] for an invalid slot;
+    /// every extraction failure leaves the group unchanged.
     #[allow(clippy::result_large_err)]
     pub fn take_tensor(&mut self, slot: DescriptorSlot) -> Result<crate::Tensor, GroupError> {
         let (_, descriptor) = self.resolve_descriptor(slot)?;
+        self.ensure_whole_compact(slot, descriptor)?;
         let descriptor = descriptor.clone();
         let dtype = descriptor.dtype();
         let layout = descriptor.layout().clone();
@@ -1555,8 +1573,10 @@ impl AllocationGroup {
     /// # Errors
     ///
     /// Returns [`GroupError::AliasedAllocation`] when another descriptor
-    /// references the allocation, or [`GroupError::InvalidDescriptor`] for an
-    /// invalid slot. Each extraction failure returns the unchanged group.
+    /// references the allocation, [`GroupError::NonCompactDescriptor`] for a
+    /// strided, offset or partial descriptor, or
+    /// [`GroupError::InvalidDescriptor`] for an invalid slot. Each extraction
+    /// failure returns the unchanged group.
     #[allow(clippy::result_large_err)]
     pub fn into_tensor(self, slot: DescriptorSlot) -> Result<crate::Tensor, (Self, GroupError)> {
         let (_, descriptor) = match self.resolve_descriptor(slot) {
@@ -1577,6 +1597,9 @@ impl AllocationGroup {
                     allocation: allocation.index(),
                 },
             ));
+        }
+        if let Err(error) = self.ensure_whole_compact(slot, descriptor) {
+            return Err((self, error));
         }
         let dtype = descriptor.dtype();
         let layout = descriptor.layout().clone();
@@ -1646,16 +1669,93 @@ impl AllocationGroup {
         Ok((group, DescriptorSlot(0)))
     }
 
-    pub(crate) fn into_host_vec<T: TensorScalar>(
-        self,
+    // INVARIANT: a rejected host export must return the unchanged group, so the
+    // wide `(Self, String)` pair is the ownership contract rather than a bug.
+    // A host group's descriptor always spans its whole allocation
+    // (`from_host_vec` records `ByteRange::new(0, span.byte_len())`), so handing
+    // back the allocation's vector is exactly the descriptor's logical range.
+    #[allow(clippy::result_large_err)]
+    pub(crate) fn into_host_vec<T: 'static>(
+        mut self,
         slot: DescriptorSlot,
-    ) -> Result<Vec<T>, String> {
+    ) -> Result<Vec<T>, (Self, String)> {
+        // INVARIANT: the descriptor stays in place and only the allocation is
+        // taken, so a rejected host export can return the exact unchanged group
+        // rather than consuming the caller's remaining ownership.
+        let allocation = match self.resolve_descriptor(slot) {
+            Ok((_, descriptor)) => descriptor.allocation,
+            Err(error) => return Err((self, error.to_string())),
+        };
+        let owner = match self
+            .allocations
+            .get_mut(allocation.index())
+            .map(Option::take)
+        {
+            Some(Some(owner)) => owner,
+            Some(None) => {
+                return Err((
+                    self,
+                    GroupError::AllocationSlotVacant {
+                        slot: allocation.index(),
+                    }
+                    .to_string(),
+                ))
+            }
+            None => {
+                return Err((
+                    self,
+                    GroupError::AllocationSlotOutOfBounds {
+                        slot: allocation.index(),
+                    }
+                    .to_string(),
+                ))
+            }
+        };
+        match owner.into_host_vec::<T>() {
+            Ok(data) => Ok(data),
+            Err((owner, error)) => {
+                self.allocations[allocation.index()] = Some(owner);
+                Err((self, error.to_string()))
+            }
+        }
+    }
+
+    /// Reject a descriptor an owned tensor cannot represent: an owned tensor is
+    /// its whole allocation in compact column-major order at offset zero, so a
+    /// strided, offset or partial descriptor would otherwise change value on
+    /// extraction.
+    fn ensure_whole_compact(
+        &self,
+        slot: DescriptorSlot,
+        descriptor: &DescriptorRecord,
+    ) -> Result<(), GroupError> {
+        let index = descriptor.allocation.index();
         let owner = self
-            .into_owner(slot)
-            .map_err(|(_, error)| error.to_string())?;
-        owner
-            .into_host_vec::<T>()
-            .map_err(|error| error.to_string())
+            .allocations
+            .get(index)
+            .ok_or(GroupError::AllocationSlotOutOfBounds { slot: index })?
+            .as_ref()
+            .ok_or(GroupError::AllocationSlotVacant { slot: index })?;
+        let root = owner.as_ref().root_identity().root_span();
+        let span = descriptor.span();
+        let layout = descriptor.layout();
+        let compact =
+            layout
+                .is_compact_col_major()
+                .map_err(|error| GroupError::InvalidDescriptor {
+                    message: error.to_string(),
+                })?;
+        let whole = span.byte_offset() == root.byte_offset()
+            && span.byte_len() == root.byte_len()
+            && descriptor
+                .element_count()
+                .checked_mul(descriptor.element_size())
+                == Some(span.byte_len());
+        if compact && layout.offset() == 0 && whole {
+            Ok(())
+        } else {
+            Err(GroupError::NonCompactDescriptor { slot: slot.index() })
+        }
     }
 
     fn resolve_descriptor(

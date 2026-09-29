@@ -7,7 +7,9 @@
 use tenferro_bf16_proof::reduction::product_in_f32_accumulation;
 use tenferro_bf16_proof::{bf16, Bf16, Bf16Add, Bf16Mul, Bf16Set, Bf16Sub, Bf16Tag};
 use tenferro_cpu::BinaryScalarOp;
-use tenferro_tensor_core::{HostTensor, Scalar, ScalarArithmetic, ScalarDomain, ScalarSet};
+use tenferro_tensor::HostTensor;
+use tenferro_tensor::ScalarSet;
+use tenferro_tensor_core::{Scalar, ScalarArithmetic, ScalarDomain};
 
 fn tensor(values: &[f32]) -> HostTensor<Bf16> {
     HostTensor::from_vec_col_major(

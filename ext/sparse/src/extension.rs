@@ -351,14 +351,14 @@ impl<B: TensorBackend + 'static> PreparedOperationExecutor for SparseReferencePr
             .map_err(|source| {
                 RuntimeError::runtime_state_source("extension", ErrorPhase::Execution, source)
             })?;
-        let mut ctx = tenferro_runtime::ExtensionExecutionContext::new(backend, extension_caches);
-        let materialized_inputs = ctx.backend_mut().with_backend_session(|exec| {
+        let _ = extension_caches;
+        let materialized_inputs = backend.with_backend_session(|exec| {
             inputs
                 .iter()
                 .cloned()
                 .map(|input| exec.to_contiguous_read(input))
                 .collect::<Result<Vec<_>>>()
-        })?;
+        })??;
         let input_refs: Vec<&Tensor> = materialized_inputs.iter().collect();
         Ok(execute_sparse_reference_payload(
             self.family_id,

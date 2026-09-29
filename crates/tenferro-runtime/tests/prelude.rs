@@ -9,6 +9,7 @@ fn prelude_calls_backend_explicit_tensor_operation() {
     let mut backend = CpuBackend::new();
     let sum = backend
         .with_backend_session(|session| lhs.add(&rhs, session))
+        .unwrap()
         .unwrap();
     assert_eq!(sum.as_slice::<f64>().unwrap(), &[4.0, 6.0]);
 }

@@ -2,9 +2,9 @@ use std::sync::Arc;
 
 use tenferro_ad::error::{Error, Result};
 use tenferro_ad::extension::{
-    apply_eager_with_targeted_extension_session, EagerExtensionBackendKind, EagerExtensionTarget,
+    apply_eager_with_targeted_extension_in_session, EagerExtensionBackendKind, EagerExtensionTarget,
 };
-use tenferro_ad::EagerTensor;
+use tenferro_ad::{EagerSession, EagerTensor};
 use tenferro_cpu::CpuBackend;
 #[cfg(feature = "cuda")]
 use tenferro_gpu::cuda::CudaBackend;
@@ -18,7 +18,9 @@ use crate::{
     FftNorm, FftOperation,
 };
 
-/// FFT extension methods for [`EagerTensor`].
+/// Consuming in-place FFT methods for [`EagerTensor`].
+/// Ordinary eager FFT operations use [`EagerSessionFftExt`] inside a borrowed
+/// `EagerRuntime::with_eager_session` region.
 pub trait EagerTensorFftExt {
     /// Consume a uniquely owned, untracked, compact column-major CPU complex
     /// tensor and overwrite it with its FFT. Shape and allocation are preserved; no implicit copy occurs.
@@ -76,106 +78,6 @@ pub trait EagerTensorFftExt {
         axis: isize,
         norm: FftNorm,
     ) -> std::result::Result<EagerTensor, crate::EagerFftInPlaceError>;
-
-    /// Execute a complex FFT, or a full-spectrum FFT for real input.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use num_complex::Complex64;
-    /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
-    /// use tenferro_fft::{EagerTensorFftExt, FftNorm};
-    ///
-    /// let x = EagerTensor::from_tensor_in(
-    ///     Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap(),
-    ///     EagerRuntime::new()?,
-    /// )?;
-    /// let y = x.fft(None, -1, FftNorm::Backward)?;
-    /// assert_eq!(y.value()?.as_slice::<Complex64>().unwrap()[0], Complex64::new(3.0, 0.0));
-    /// # Ok::<(), tenferro_ad::Error>(())
-    /// ```
-    ///
-    /// # Errors
-    ///
-    /// Returns a validation error for an invalid axis or transform length, an
-    /// extension error for an unsupported dtype or backend, and a runtime-state
-    /// error when the eager runtime is unavailable.
-    fn fft(&self, n: Option<usize>, axis: isize, norm: FftNorm) -> Result<EagerTensor>;
-
-    /// Execute an inverse complex FFT.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use num_complex::Complex64;
-    /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
-    /// use tenferro_fft::{EagerTensorFftExt, FftNorm};
-    ///
-    /// let x = EagerTensor::from_tensor_in(
-    ///     Tensor::from_vec_col_major(vec![2], vec![Complex64::new(3.0, 0.0), Complex64::new(-1.0, 0.0)]).unwrap(),
-    ///     EagerRuntime::new()?,
-    /// )?;
-    /// let y = x.ifft(None, -1, FftNorm::Backward)?;
-    /// assert_eq!(y.shape(), &[2]);
-    /// # Ok::<(), tenferro_ad::Error>(())
-    /// ```
-    ///
-    /// # Errors
-    ///
-    /// Returns a validation error for an invalid axis or transform length, an
-    /// extension error for non-complex input or an unsupported backend, and a
-    /// runtime-state error when the eager runtime is unavailable.
-    fn ifft(&self, n: Option<usize>, axis: isize, norm: FftNorm) -> Result<EagerTensor>;
-
-    /// Execute a one-sided real FFT.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
-    /// use tenferro_fft::{EagerTensorFftExt, FftNorm};
-    ///
-    /// let x = EagerTensor::from_tensor_in(
-    ///     Tensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap(),
-    ///     EagerRuntime::new()?,
-    /// )?;
-    /// let y = x.rfft(None, -1, FftNorm::Backward)?;
-    /// assert_eq!(y.shape(), &[3]);
-    /// # Ok::<(), tenferro_ad::Error>(())
-    /// ```
-    ///
-    /// # Errors
-    ///
-    /// Returns a validation error for an invalid axis or transform length, an
-    /// extension error for non-real input or an unsupported backend, and a
-    /// runtime-state error when the eager runtime is unavailable.
-    fn rfft(&self, n: Option<usize>, axis: isize, norm: FftNorm) -> Result<EagerTensor>;
-
-    /// Execute an inverse real FFT from a one-sided complex spectrum.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use num_complex::Complex64;
-    /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
-    /// use tenferro_fft::{EagerTensorFftExt, FftNorm};
-    ///
-    /// let x = EagerTensor::from_tensor_in(
-    ///     Tensor::from_vec_col_major(vec![3], vec![Complex64::new(10.0, 0.0), Complex64::new(-2.0, 2.0), Complex64::new(-2.0, 0.0)]).unwrap(),
-    ///     EagerRuntime::new()?,
-    /// )?;
-    /// let y = x.irfft(Some(4), -1, FftNorm::Backward)?;
-    /// assert_eq!(y.shape(), &[4]);
-    /// # Ok::<(), tenferro_ad::Error>(())
-    /// ```
-    ///
-    /// # Errors
-    ///
-    /// Returns a validation error for an invalid axis, transform length, or
-    /// spectrum length, an extension error for non-complex input or an
-    /// unsupported backend, and a runtime-state error when the eager runtime is
-    /// unavailable.
-    fn irfft(&self, n: Option<usize>, axis: isize, norm: FftNorm) -> Result<EagerTensor>;
 }
 
 impl EagerTensorFftExt for EagerTensor {
@@ -194,44 +96,202 @@ impl EagerTensorFftExt for EagerTensor {
     ) -> std::result::Result<EagerTensor, crate::EagerFftInPlaceError> {
         crate::eager_in_place::apply(self, FftOperation::C2cInverse, axis, norm)
     }
+}
 
-    fn fft(&self, n: Option<usize>, axis: isize, norm: FftNorm) -> Result<EagerTensor> {
-        let operation = runtime_forward_fft_operation(self.dtype())?;
-        apply_eager_fft("fft", self, operation, n, axis, norm)
+/// FFT extension methods on a runtime-bound borrowed eager session.
+///
+/// # Examples
+///
+/// ```rust
+/// use tenferro_ad::{EagerRuntime, Tensor};
+/// use tenferro_fft::{EagerSessionFftExt, FftNorm};
+/// let ctx = EagerRuntime::new()?;
+/// let result = ctx.with_eager_session(|session| {
+///     let input = session.constant_from(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?)?;
+///     session.fft(&input, None, -1, FftNorm::Backward)
+/// })??;
+/// assert_eq!(result.shape(), &[2]);
+/// # Ok::<(), tenferro_ad::Error>(())
+/// ```
+pub trait EagerSessionFftExt {
+    /// Perform a complex or full-spectrum real FFT on this borrowed session.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use num_complex::Complex64;
+    /// use tenferro_ad::{EagerRuntime, Tensor};
+    /// use tenferro_fft::{EagerSessionFftExt, FftNorm};
+    /// let ctx = EagerRuntime::new()?;
+    /// let result = ctx.with_eager_session(|session| {
+    ///     let x = session.constant_from(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?)?;
+    ///     session.fft(&x, None, -1, FftNorm::Backward)
+    /// })??;
+    /// assert_eq!(result.value()?.as_slice::<Complex64>()?[0], Complex64::new(3.0, 0.0));
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns typed validation, backend, module-installation or unsupported
+    /// executor errors; it never opens a nested eager session.
+    fn fft(
+        &mut self,
+        input: &EagerTensor,
+        n: Option<usize>,
+        axis: isize,
+        norm: FftNorm,
+    ) -> Result<EagerTensor>;
+
+    /// Perform an inverse complex FFT on this borrowed session.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use num_complex::Complex64;
+    /// use tenferro_ad::{EagerRuntime, Tensor};
+    /// use tenferro_fft::{EagerSessionFftExt, FftNorm};
+    /// let ctx = EagerRuntime::new()?;
+    /// let result = ctx.with_eager_session(|session| {
+    ///     let x = session.constant_from(Tensor::from_vec_col_major(vec![2], vec![Complex64::new(3.0, 0.0), Complex64::new(-1.0, 0.0)])?)?;
+    ///     session.ifft(&x, None, -1, FftNorm::Backward)
+    /// })??;
+    /// assert_eq!(result.value()?.as_slice::<Complex64>()?, &[Complex64::new(1.0, 0.0), Complex64::new(2.0, 0.0)]);
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
+    /// # Errors
+    /// Returns typed validation, unsupported-dtype, module or backend errors.
+    fn ifft(
+        &mut self,
+        input: &EagerTensor,
+        n: Option<usize>,
+        axis: isize,
+        norm: FftNorm,
+    ) -> Result<EagerTensor>;
+
+    /// Perform a one-sided real FFT on this borrowed session.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_ad::{EagerRuntime, Tensor};
+    /// use tenferro_fft::{EagerSessionFftExt, FftNorm};
+    /// let ctx = EagerRuntime::new()?;
+    /// let result = ctx.with_eager_session(|session| {
+    ///     let x = session.constant_from(Tensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0])?)?;
+    ///     session.rfft(&x, None, -1, FftNorm::Backward)
+    /// })??;
+    /// assert_eq!(result.shape(), &[3]);
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
+    /// # Errors
+    /// Returns typed validation, unsupported-dtype, module or backend errors.
+    fn rfft(
+        &mut self,
+        input: &EagerTensor,
+        n: Option<usize>,
+        axis: isize,
+        norm: FftNorm,
+    ) -> Result<EagerTensor>;
+
+    /// Perform an inverse real FFT on this borrowed session.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use num_complex::Complex64;
+    /// use tenferro_ad::{EagerRuntime, Tensor};
+    /// use tenferro_fft::{EagerSessionFftExt, FftNorm};
+    /// let ctx = EagerRuntime::new()?;
+    /// let result = ctx.with_eager_session(|session| {
+    ///     let x = session.constant_from(Tensor::from_vec_col_major(vec![3], vec![Complex64::new(10.0, 0.0), Complex64::new(-2.0, 2.0), Complex64::new(-2.0, 0.0)])?)?;
+    ///     session.irfft(&x, Some(4), -1, FftNorm::Backward)
+    /// })??;
+    /// assert_eq!(result.shape(), &[4]);
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
+    /// # Errors
+    /// Returns typed validation, unsupported-dtype, module or backend errors.
+    fn irfft(
+        &mut self,
+        input: &EagerTensor,
+        n: Option<usize>,
+        axis: isize,
+        norm: FftNorm,
+    ) -> Result<EagerTensor>;
+}
+
+impl EagerSessionFftExt for EagerSession<'_> {
+    fn fft(
+        &mut self,
+        input: &EagerTensor,
+        n: Option<usize>,
+        axis: isize,
+        norm: FftNorm,
+    ) -> Result<EagerTensor> {
+        let operation = runtime_forward_fft_operation(input.dtype())?;
+        apply_eager_fft_in_session(self, "fft", input, operation, n, axis, norm)
     }
 
-    fn ifft(&self, n: Option<usize>, axis: isize, norm: FftNorm) -> Result<EagerTensor> {
+    fn ifft(
+        &mut self,
+        input: &EagerTensor,
+        n: Option<usize>,
+        axis: isize,
+        norm: FftNorm,
+    ) -> Result<EagerTensor> {
         require_runtime_dtype(
             "ifft",
-            self.dtype(),
+            input.dtype(),
             &[DType::C32, DType::C64],
             "C32 or C64",
         )?;
-        apply_eager_fft("ifft", self, FftOperation::C2cInverse, n, axis, norm)
+        apply_eager_fft_in_session(self, "ifft", input, FftOperation::C2cInverse, n, axis, norm)
     }
 
-    fn rfft(&self, n: Option<usize>, axis: isize, norm: FftNorm) -> Result<EagerTensor> {
+    fn rfft(
+        &mut self,
+        input: &EagerTensor,
+        n: Option<usize>,
+        axis: isize,
+        norm: FftNorm,
+    ) -> Result<EagerTensor> {
         require_runtime_dtype(
             "rfft",
-            self.dtype(),
+            input.dtype(),
             &[DType::F32, DType::F64],
             "F32 or F64",
         )?;
-        apply_eager_fft("rfft", self, FftOperation::R2cOnesided, n, axis, norm)
+        apply_eager_fft_in_session(
+            self,
+            "rfft",
+            input,
+            FftOperation::R2cOnesided,
+            n,
+            axis,
+            norm,
+        )
     }
 
-    fn irfft(&self, n: Option<usize>, axis: isize, norm: FftNorm) -> Result<EagerTensor> {
+    fn irfft(
+        &mut self,
+        input: &EagerTensor,
+        n: Option<usize>,
+        axis: isize,
+        norm: FftNorm,
+    ) -> Result<EagerTensor> {
         require_runtime_dtype(
             "irfft",
-            self.dtype(),
+            input.dtype(),
             &[DType::C32, DType::C64],
             "C32 or C64",
         )?;
-        apply_eager_fft("irfft", self, FftOperation::C2r, n, axis, norm)
+        apply_eager_fft_in_session(self, "irfft", input, FftOperation::C2r, n, axis, norm)
     }
 }
 
-fn apply_eager_fft(
+fn apply_eager_fft_in_session(
+    session: &mut EagerSession<'_>,
     op_name: &'static str,
     input: &EagerTensor,
     operation: FftOperation,
@@ -239,7 +299,7 @@ fn apply_eager_fft(
     axis: isize,
     norm: FftNorm,
 ) -> Result<EagerTensor> {
-    let op = prepare_runtime_fft_op(
+    let op = Arc::new(prepare_runtime_fft_op(
         op_name,
         operation,
         input.shape().len(),
@@ -247,12 +307,14 @@ fn apply_eager_fft(
         n,
         axis,
         norm,
-    )?;
-
-    let op = Arc::new(op);
-    let mut outputs =
-        apply_eager_with_targeted_extension_session(op, &[input], eager_extension_module)?
-            .into_iter();
+    )?);
+    let mut outputs = apply_eager_with_targeted_extension_in_session(
+        session,
+        op,
+        &[input],
+        eager_extension_module,
+    )?
+    .into_iter();
     match (outputs.next(), outputs.next()) {
         (Some(output), None) => Ok(output),
         _ => Err(Error::Internal(

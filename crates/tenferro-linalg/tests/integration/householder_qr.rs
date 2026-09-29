@@ -74,26 +74,28 @@ fn check_factor_dtype<T: SampleScalar>() {
         .collect::<Vec<_>>();
     let input = Tensor::from_vec_col_major(vec![3, 2], values.clone()).unwrap();
     let mut backend = CpuBackend::new();
-    backend.with_backend_session(|session| {
-        let state = input.householder_qr(session).unwrap();
-        let q = state
-            .q_columns(0..2, QrOptions::default(), session)
-            .unwrap();
-        let r = state.r(QrOptions::default(), session).unwrap();
-        let reconstructed = product_generic(
-            q.as_slice::<T>().unwrap(),
-            3,
-            2,
-            r.as_slice::<T>().unwrap(),
-            2,
-        );
-        let error = reconstructed
-            .iter()
-            .zip(values)
-            .map(|(actual, expected)| (*actual - expected).magnitude())
-            .fold(0.0, f64::max);
-        assert!(error < 2.0e-5, "maximum reconstruction error: {error}");
-    });
+    backend
+        .with_backend_session(|session| {
+            let state = input.householder_qr(session).unwrap();
+            let q = state
+                .q_columns(0..2, QrOptions::default(), session)
+                .unwrap();
+            let r = state.r(QrOptions::default(), session).unwrap();
+            let reconstructed = product_generic(
+                q.as_slice::<T>().unwrap(),
+                3,
+                2,
+                r.as_slice::<T>().unwrap(),
+                2,
+            );
+            let error = reconstructed
+                .iter()
+                .zip(values)
+                .map(|(actual, expected)| (*actual - expected).magnitude())
+                .fold(0.0, f64::max);
+            assert!(error < 2.0e-5, "maximum reconstruction error: {error}");
+        })
+        .unwrap();
 }
 
 fn product_generic<T: SampleScalar>(
@@ -136,33 +138,35 @@ fn check_append_dtype<T: SampleScalar>() {
     let a = Tensor::from_vec_col_major(vec![3, 1], a_values).unwrap();
     let b = Tensor::from_vec_col_major(vec![3, 1], b_values).unwrap();
     let mut backend = CpuBackend::new();
-    backend.with_backend_session(|session| {
-        let state = a
-            .householder_qr(session)
-            .unwrap()
-            .append_columns(&b, session)
-            .unwrap();
-        let q = state
-            .q_columns(0..2, QrOptions::default(), session)
-            .unwrap();
-        let r = state.r(QrOptions::default(), session).unwrap();
-        let reconstructed = product_generic(
-            q.as_slice::<T>().unwrap(),
-            3,
-            2,
-            r.as_slice::<T>().unwrap(),
-            2,
-        );
-        let error = reconstructed
-            .iter()
-            .zip(expected)
-            .map(|(actual, expected)| (*actual - expected).magnitude())
-            .fold(0.0, f64::max);
-        assert!(
-            error < 2.0e-5,
-            "maximum append reconstruction error: {error}"
-        );
-    });
+    backend
+        .with_backend_session(|session| {
+            let state = a
+                .householder_qr(session)
+                .unwrap()
+                .append_columns(&b, session)
+                .unwrap();
+            let q = state
+                .q_columns(0..2, QrOptions::default(), session)
+                .unwrap();
+            let r = state.r(QrOptions::default(), session).unwrap();
+            let reconstructed = product_generic(
+                q.as_slice::<T>().unwrap(),
+                3,
+                2,
+                r.as_slice::<T>().unwrap(),
+                2,
+            );
+            let error = reconstructed
+                .iter()
+                .zip(expected)
+                .map(|(actual, expected)| (*actual - expected).magnitude())
+                .fold(0.0, f64::max);
+            assert!(
+                error < 2.0e-5,
+                "maximum append reconstruction error: {error}"
+            );
+        })
+        .unwrap();
 }
 
 #[test]
@@ -200,6 +204,7 @@ fn concrete_compact_qr_appends_and_reconstructs() {
             );
             Ok::<(), tenferro_tensor::Error>(())
         })
+        .unwrap()
         .unwrap();
 }
 
@@ -226,6 +231,7 @@ fn rank_deficient_zero_append_and_tall_to_wide_transition_reconstruct() {
             );
             Ok::<(), tenferro_tensor::Error>(())
         })
+        .unwrap()
         .unwrap();
 }
 
@@ -237,11 +243,13 @@ fn concrete_from_factors_requires_upper_trapezoidal_r() {
     let invalid_r = Tensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 1.0, 3.0, 4.0]).unwrap();
     let mut backend = CpuBackend::new();
 
-    backend.with_backend_session(|session| {
-        let error = HouseholderQr::<Tensor>::from_factors(&q, &invalid_r, session)
-            .expect_err("non-trapezoidal R must be rejected");
-        assert!(matches!(error, tenferro_tensor::Error::Validation { .. }));
-    });
+    backend
+        .with_backend_session(|session| {
+            let error = HouseholderQr::<Tensor>::from_factors(&q, &invalid_r, session)
+                .expect_err("non-trapezoidal R must be rejected");
+            assert!(matches!(error, tenferro_tensor::Error::Validation { .. }));
+        })
+        .unwrap();
 }
 
 #[test]
@@ -288,14 +296,16 @@ fn householder_qr_r_grad_matches_finite_difference() {
     let scalar_loss = |data: Vec<f64>| {
         let input = Tensor::from_vec_col_major(vec![3, 2], data).unwrap();
         let mut backend = CpuBackend::new();
-        backend.with_backend_session(|session| {
-            let r = input
-                .householder_qr(session)
-                .unwrap()
-                .r(QrOptions::default(), session)
-                .unwrap();
-            r.as_slice::<f64>().unwrap().iter().sum::<f64>()
-        })
+        backend
+            .with_backend_session(|session| {
+                let r = input
+                    .householder_qr(session)
+                    .unwrap()
+                    .r(QrOptions::default(), session)
+                    .unwrap();
+                r.as_slice::<f64>().unwrap().iter().sum::<f64>()
+            })
+            .unwrap()
     };
     let step = 1.0e-6;
     for (index, &gradient) in actual.iter().enumerate() {
@@ -363,20 +373,82 @@ fn householder_qr_two_appends_produce_all_input_gradients() {
 #[test]
 fn eager_compact_qr_executes_on_cpu() {
     use tenferro_ad::{EagerRuntime, EagerTensor};
-    use tenferro_linalg::EagerTensorLinalgExt;
+    use tenferro_linalg::EagerSessionLinalgExt;
 
     let runtime = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
     let a = EagerTensor::from_tensor_in(
         Tensor::from_vec_col_major(vec![3, 2], vec![1.0_f64, 0.0, 1.0, 0.0, 1.0, 1.0]).unwrap(),
-        runtime,
+        runtime.clone(),
     )
     .unwrap();
-    let state = a.householder_qr().unwrap();
-    assert_eq!(state.r(QrOptions::default()).unwrap().shape(), &[2, 2]);
-    assert_eq!(
-        state.q_columns(0..2, QrOptions::default()).unwrap().shape(),
-        &[3, 2]
-    );
+    let (r, q) = runtime
+        .with_eager_session(|session| {
+            let state = session.householder_qr(&a)?;
+            Ok::<_, tenferro_ad::Error>((
+                state.r(QrOptions::default(), session)?,
+                state.q_columns(0..2, QrOptions::default(), session)?,
+            ))
+        })
+        .unwrap()
+        .unwrap();
+    assert_eq!(r.shape(), &[2, 2]);
+    assert_eq!(q.shape(), &[3, 2]);
+}
+
+#[cfg(feature = "autodiff")]
+#[test]
+fn eager_borrowed_compact_qr_append_import_and_ad() {
+    use tenferro_ad::{AdContext, EagerRuntime, EagerTensor};
+    use tenferro_linalg::{EagerSessionLinalgExt, HouseholderQr};
+
+    let ad = AdContext::builder()
+        .with_semantic_extension_rules(tenferro_linalg::semantic_ad_rules().unwrap())
+        .unwrap()
+        .build()
+        .unwrap();
+    let runtime = EagerRuntime::with_cpu_backend_and_ad_context(CpuBackend::new(), &ad).unwrap();
+    let a = EagerTensor::requires_grad_in(
+        Tensor::from_vec_col_major([3, 1], vec![1.0_f64, 0.0, 1.0]).unwrap(),
+        runtime.clone(),
+    )
+    .unwrap();
+    let b = EagerTensor::requires_grad_in(
+        Tensor::from_vec_col_major([3, 1], vec![0.0_f64, 1.0, 0.0]).unwrap(),
+        runtime.clone(),
+    )
+    .unwrap();
+    let foreign = EagerTensor::from_tensor_in(
+        Tensor::from_vec_col_major([3, 1], vec![0.0_f64, 1.0, 0.0]).unwrap(),
+        EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap(),
+    )
+    .unwrap();
+    let (q, r, imported_r, loss) = runtime
+        .with_eager_session(|session| {
+            let state = session.householder_qr(&a)?;
+            assert!(matches!(
+                state.append_columns(&foreign, session),
+                Err(tenferro_ad::Error::ContextMismatch { .. })
+            ));
+            let state = state.append_columns(&b, session)?;
+            let q = state.q_columns(0..2, QrOptions::default(), session)?;
+            let r = state.r(QrOptions::default(), session)?;
+            let imported = HouseholderQr::<EagerTensor>::from_factors(&q, &r, session)?;
+            let imported_r = imported.r(QrOptions::default(), session)?;
+            let loss = session.reduce_sum(&r, None)?;
+            Ok::<_, tenferro_ad::Error>((q, r, imported_r, loss))
+        })
+        .unwrap()
+        .unwrap();
+    assert_eq!(q.shape(), &[3, 2]);
+    assert_eq!(r.shape(), &[2, 2]);
+    assert_eq!(imported_r.shape(), &[2, 2]);
+    let gradient = runtime.grad(&loss, &b).unwrap();
+    let grad = gradient.value().unwrap();
+    assert!(grad
+        .as_slice::<f64>()
+        .unwrap()
+        .iter()
+        .all(|value| value.is_finite()));
 }
 
 // ---------------------------------------------------------------------------
@@ -472,7 +544,8 @@ fn full_q_columns_are_orthonormal_and_complete_the_thin_factor() {
                 complement.as_slice::<f64>().unwrap(),
                 &full_data[n * m..m * m],
             );
-        });
+        })
+        .unwrap();
     }
 }
 
@@ -511,7 +584,8 @@ fn full_q_positive_diagonal_gauge_fixes_only_the_thin_columns() {
                     "{provider}: gauged column {col} norm {norm}"
                 );
             }
-        });
+        })
+        .unwrap();
     }
 }
 
@@ -532,7 +606,8 @@ fn square_and_empty_full_q_ranges_stay_consistent() {
                 .q_columns(2..2, QrOptions::default(), session)
                 .unwrap();
             assert_eq!(empty.shape(), &[3, 0]);
-        });
+        })
+        .unwrap();
 
         // Wide input: k == m, so the full-Q width is m and there is no complement.
         let wide = Tensor::from_vec_col_major(vec![2, 4], tall_sample(2, 4)).unwrap();
@@ -542,7 +617,8 @@ fn square_and_empty_full_q_ranges_stay_consistent() {
                 .q_columns(0..2, QrOptions::default(), session)
                 .unwrap();
             assert_eq!(full.shape(), &[2, 2], "{provider}: wide full-Q shape");
-        });
+        })
+        .unwrap();
     }
 }
 
@@ -571,7 +647,8 @@ fn q_column_ranges_past_the_full_q_width_are_rejected() {
                 )
                 .unwrap_err();
             assert!(format!("{inverted}").contains("range"));
-        });
+        })
+        .unwrap();
     }
 }
 

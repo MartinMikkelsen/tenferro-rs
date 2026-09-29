@@ -29,7 +29,8 @@ Then keep execution inside one session:
 
 ```rust
 let mut backend = CpuBackend::new();
-let values = backend.with_backend_session(|session| input.svdvals(session))?;
+// The outer `?` reports session admission; the inner one the operation.
+let values = backend.with_backend_session(|session| input.svdvals(session))??;
 ```
 
 ## Autodiff context changes

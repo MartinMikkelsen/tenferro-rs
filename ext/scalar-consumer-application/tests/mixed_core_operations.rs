@@ -15,7 +15,7 @@ use tenferro_df64_proof::{Df64, Df64Add};
 use tenferro_runtime::extension::apply;
 use tenferro_runtime::{GraphCompiler, Runtime, TracedTensor};
 use tenferro_tensor::Tensor;
-use tenferro_tensor_core::{ErasedHostTensor, HostTensor};
+use tenferro_tensor::{ErasedHostTensor, HostTensor};
 
 /// A runtime carrying the standard engine and the contribution's module together.
 fn mixed_runtime() -> Runtime {

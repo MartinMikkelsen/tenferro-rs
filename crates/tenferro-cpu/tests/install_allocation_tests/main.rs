@@ -48,11 +48,11 @@ fn warm_empty_backend_install_has_no_mandatory_allocation() {
     for threads in [1, 2, 4] {
         let backend = CpuBackend::with_threads_and_kind(threads, CpuBackendKind::Faer).unwrap();
         for _ in 0..32 {
-            backend.install(|| ());
+            backend.install(|| ()).unwrap();
         }
 
         let minimum = (0..64)
-            .map(|_| count_allocations(|| backend.install(|| ())))
+            .map(|_| count_allocations(|| backend.install(|| ()).unwrap()))
             .min()
             .unwrap();
         assert_eq!(

@@ -250,9 +250,16 @@ fn provider_capabilities_require_wired_per_call_controls() {
         builtin.contains("uncontrolled_external_capabilities()"),
         "until sound provider-specific controls are implemented, built-in BLAS must remain conservative",
     );
+    let domain_validation = capabilities
+        .split_once("pub(crate) fn validate_provider_for_domain")
+        .expect("domain validation should be explicit")
+        .1
+        .split_once("fn enforced_provider_thread_limit")
+        .expect("thread-limit helper should follow domain validation")
+        .0;
     assert!(
-        capabilities.contains("domain_cpus == process_allowed_cpus"),
-        "exact external-worker placement may use only the process-wide domain exception",
+        !domain_validation.contains("capabilities.placement"),
+        "cooperative domains validate the thread count only; provider-created threads are unmanaged (#1938 D8)",
     );
 }
 

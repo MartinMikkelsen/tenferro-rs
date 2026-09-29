@@ -12,8 +12,8 @@ use tenferro_cpu::{
     discover_cpu_topology, CpuBackend, CpuBackendKind, CpuDomainExecutor,
     CpuDomainExecutorCapabilities, CpuDomainExecutorError, CpuExecutorAffinity,
     CpuExecutorReentrancy, CpuExecutorShutdown, CpuInnerParallelism, CpuPlacementControl,
-    CpuPlacementGuarantee, CpuProviderBundle, CpuProviderExecutionCapabilities,
-    CpuThreadCountControl, ExternalCpuDomain, ResolvedCpuPlacement, ScopedCpuJob, ScopedCpuJobs,
+    CpuProviderBundle, CpuProviderExecutionCapabilities, CpuThreadCountControl, ExternalCpuDomain,
+    ResolvedCpuPlacement, ScopedCpuJob, ScopedCpuJobs,
 };
 use tenferro_tensor::{
     BackendStorageHandle, CpuDomainId, ErrorKind, MemoryKind, Placement,
@@ -133,7 +133,6 @@ fn external_backend(executor: Arc<dyn CpuDomainExecutor>) -> CpuBackend {
         ResolvedCpuPlacement::AllAllowed { cpus: allowed },
         executor,
         NonZeroUsize::new(1).unwrap(),
-        CpuPlacementGuarantee::ExactDeclared,
     )
     .unwrap();
     let bundle = CpuProviderBundle::builder(CpuBackendKind::default_compiled())

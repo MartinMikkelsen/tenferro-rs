@@ -13,8 +13,7 @@ use crate::{
 };
 use num_complex::{Complex32, Complex64};
 
-#[doc(hidden)]
-struct DefaultReadBackendSessionMarker;
+mod cached_dot_defaults;
 
 pub(crate) struct DefaultReadBackend {
     calls: Vec<&'static str>,
@@ -188,134 +187,216 @@ impl TensorElementwise for DefaultReadBackend {
         Ok(())
     }
 
-    fn add(&mut self, _lhs: &Tensor, _rhs: &Tensor) -> crate::Result<Tensor> {
+    // Reproduce the previous read-half default: delegate an owned tensor and
+    // reject a borrowed view.
+    fn add_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor> {
+        let _ = crate::backend::read_owned_tensor("add", lhs)?;
+        let _ = crate::backend::read_owned_tensor("add", rhs)?;
         self.calls.push("add");
         Ok(marker())
     }
 
-    fn sub(&mut self, _lhs: &Tensor, _rhs: &Tensor) -> crate::Result<Tensor> {
+    // Reproduce the previous read-half default: delegate an owned tensor and
+    // reject a borrowed view.
+    fn sub_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor> {
+        let _ = crate::backend::read_owned_tensor("sub", lhs)?;
+        let _ = crate::backend::read_owned_tensor("sub", rhs)?;
         self.calls.push("sub");
         Ok(marker())
     }
 
-    fn mul(&mut self, _lhs: &Tensor, _rhs: &Tensor) -> crate::Result<Tensor> {
+    // Reproduce the previous read-half default: delegate an owned tensor and
+    // reject a borrowed view.
+    fn mul_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor> {
+        let _ = crate::backend::read_owned_tensor("mul", lhs)?;
+        let _ = crate::backend::read_owned_tensor("mul", rhs)?;
         self.calls.push("mul");
         Ok(marker())
     }
 
-    fn neg(&mut self, _input: &Tensor) -> crate::Result<Tensor> {
+    // Reproduce the previous read-half default: delegate an owned tensor and
+    // reject a borrowed view.
+    fn neg_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
+        let _ = crate::backend::read_owned_tensor("neg", input)?;
         self.calls.push("neg");
         Ok(marker())
     }
 
-    fn conj(&mut self, _input: &Tensor) -> crate::Result<Tensor> {
+    // Reproduce the previous read-half default: delegate an owned tensor and
+    // reject a borrowed view.
+    fn conj_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
+        let _ = crate::backend::read_owned_tensor("conj", input)?;
         self.calls.push("conj");
         Ok(marker())
     }
 
-    fn div(&mut self, _lhs: &Tensor, _rhs: &Tensor) -> crate::Result<Tensor> {
+    // Reproduce the previous read-half default: delegate an owned tensor and
+    // reject a borrowed view.
+    fn div_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor> {
+        let _ = crate::backend::read_owned_tensor("div", lhs)?;
+        let _ = crate::backend::read_owned_tensor("div", rhs)?;
         self.calls.push("div");
         Ok(marker())
     }
 
-    fn abs(&mut self, _input: &Tensor) -> crate::Result<Tensor> {
+    // Reproduce the previous read-half default: delegate an owned tensor and
+    // reject a borrowed view.
+    fn abs_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
+        let _ = crate::backend::read_owned_tensor("abs", input)?;
         self.calls.push("abs");
         Ok(marker())
     }
 
-    fn sign(&mut self, _input: &Tensor) -> crate::Result<Tensor> {
+    // Reproduce the previous read-half default: delegate an owned tensor and
+    // reject a borrowed view.
+    fn sign_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
+        let _ = crate::backend::read_owned_tensor("sign", input)?;
         self.calls.push("sign");
         Ok(marker())
     }
 
-    fn maximum(&mut self, _lhs: &Tensor, _rhs: &Tensor) -> crate::Result<Tensor> {
+    // Reproduce the previous read-half default: delegate an owned tensor and
+    // reject a borrowed view.
+    fn maximum_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor> {
+        let _ = crate::backend::read_owned_tensor("maximum", lhs)?;
+        let _ = crate::backend::read_owned_tensor("maximum", rhs)?;
         self.calls.push("maximum");
         Ok(marker())
     }
 
-    fn minimum(&mut self, _lhs: &Tensor, _rhs: &Tensor) -> crate::Result<Tensor> {
+    // Reproduce the previous read-half default: delegate an owned tensor and
+    // reject a borrowed view.
+    fn minimum_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor> {
+        let _ = crate::backend::read_owned_tensor("minimum", lhs)?;
+        let _ = crate::backend::read_owned_tensor("minimum", rhs)?;
         self.calls.push("minimum");
         Ok(marker())
     }
 
-    fn compare(
+    // Reproduce the previous read-half default: delegate an owned tensor and
+    // reject a borrowed view.
+    fn compare_read(
         &mut self,
-        _lhs: &Tensor,
-        _rhs: &Tensor,
-        _dir: &CompareDir,
+        lhs: TensorRead<'_>,
+        rhs: TensorRead<'_>,
+        dir: &CompareDir,
     ) -> crate::Result<Tensor> {
+        let _ = crate::backend::read_owned_tensor("compare", lhs)?;
+        let _ = crate::backend::read_owned_tensor("compare", rhs)?;
+        let _ = dir;
         self.calls.push("compare");
         Ok(marker())
     }
 
-    fn select(
+    // Reproduce the previous read-half default: delegate an owned tensor and
+    // reject a borrowed view.
+    fn select_read(
         &mut self,
-        _pred: &Tensor,
-        _on_true: &Tensor,
-        _on_false: &Tensor,
+        pred: TensorRead<'_>,
+        on_true: TensorRead<'_>,
+        on_false: TensorRead<'_>,
     ) -> crate::Result<Tensor> {
+        let _ = crate::backend::read_owned_tensor("select", pred)?;
+        let _ = crate::backend::read_owned_tensor("select", on_true)?;
+        let _ = crate::backend::read_owned_tensor("select", on_false)?;
         self.calls.push("select");
         Ok(marker())
     }
 
-    fn clamp(
+    // Reproduce the previous read-half default: delegate an owned tensor and
+    // reject a borrowed view.
+    fn clamp_read(
         &mut self,
-        _input: &Tensor,
-        _lower: &Tensor,
-        _upper: &Tensor,
+        input: TensorRead<'_>,
+        lower: TensorRead<'_>,
+        upper: TensorRead<'_>,
     ) -> crate::Result<Tensor> {
+        let _ = crate::backend::read_owned_tensor("clamp", input)?;
+        let _ = crate::backend::read_owned_tensor("clamp", lower)?;
+        let _ = crate::backend::read_owned_tensor("clamp", upper)?;
         self.calls.push("clamp");
         Ok(marker())
     }
 }
 
 impl TensorAnalytic for DefaultReadBackend {
-    fn exp(&mut self, _input: &Tensor) -> crate::Result<Tensor> {
+    // Reproduce the previous read-half default: delegate an owned tensor and
+    // reject a borrowed view.
+    fn exp_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
+        let _ = crate::backend::read_owned_tensor("exp", input)?;
         self.calls.push("exp");
         Ok(marker())
     }
 
-    fn log(&mut self, _input: &Tensor) -> crate::Result<Tensor> {
+    // Reproduce the previous read-half default: delegate an owned tensor and
+    // reject a borrowed view.
+    fn log_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
+        let _ = crate::backend::read_owned_tensor("log", input)?;
         self.calls.push("log");
         Ok(marker())
     }
 
-    fn sin(&mut self, _input: &Tensor) -> crate::Result<Tensor> {
+    // Reproduce the previous read-half default: delegate an owned tensor and
+    // reject a borrowed view.
+    fn sin_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
+        let _ = crate::backend::read_owned_tensor("sin", input)?;
         self.calls.push("sin");
         Ok(marker())
     }
 
-    fn cos(&mut self, _input: &Tensor) -> crate::Result<Tensor> {
+    // Reproduce the previous read-half default: delegate an owned tensor and
+    // reject a borrowed view.
+    fn cos_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
+        let _ = crate::backend::read_owned_tensor("cos", input)?;
         self.calls.push("cos");
         Ok(marker())
     }
 
-    fn tanh(&mut self, _input: &Tensor) -> crate::Result<Tensor> {
+    // Reproduce the previous read-half default: delegate an owned tensor and
+    // reject a borrowed view.
+    fn tanh_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
+        let _ = crate::backend::read_owned_tensor("tanh", input)?;
         self.calls.push("tanh");
         Ok(marker())
     }
 
-    fn sqrt(&mut self, _input: &Tensor) -> crate::Result<Tensor> {
+    // Reproduce the previous read-half default: delegate an owned tensor and
+    // reject a borrowed view.
+    fn sqrt_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
+        let _ = crate::backend::read_owned_tensor("sqrt", input)?;
         self.calls.push("sqrt");
         Ok(marker())
     }
 
-    fn rsqrt(&mut self, _input: &Tensor) -> crate::Result<Tensor> {
+    // Reproduce the previous read-half default: delegate an owned tensor and
+    // reject a borrowed view.
+    fn rsqrt_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
+        let _ = crate::backend::read_owned_tensor("rsqrt", input)?;
         self.calls.push("rsqrt");
         Ok(marker())
     }
 
-    fn pow(&mut self, _lhs: &Tensor, _rhs: &Tensor) -> crate::Result<Tensor> {
+    // Reproduce the previous read-half default: delegate an owned tensor and
+    // reject a borrowed view.
+    fn pow_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor> {
+        let _ = crate::backend::read_owned_tensor("pow", lhs)?;
+        let _ = crate::backend::read_owned_tensor("pow", rhs)?;
         self.calls.push("pow");
         Ok(marker())
     }
 
-    fn expm1(&mut self, _input: &Tensor) -> crate::Result<Tensor> {
+    // Reproduce the previous read-half default: delegate an owned tensor and
+    // reject a borrowed view.
+    fn expm1_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
+        let _ = crate::backend::read_owned_tensor("expm1", input)?;
         self.calls.push("expm1");
         Ok(marker())
     }
 
-    fn log1p(&mut self, _input: &Tensor) -> crate::Result<Tensor> {
+    // Reproduce the previous read-half default: delegate an owned tensor and
+    // reject a borrowed view.
+    fn log1p_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
+        let _ = crate::backend::read_owned_tensor("log1p", input)?;
         self.calls.push("log1p");
         Ok(marker())
     }
@@ -392,14 +473,14 @@ impl TensorStructural for DefaultReadBackend {
             };
         }
         match src.dtype() {
-            crate::DType::F32 => copy_typed!(src.into_typed::<f32>()?, dst, F32, f32),
-            crate::DType::F64 => copy_typed!(src.into_typed::<f64>()?, dst, F64, f64),
-            crate::DType::I32 => copy_typed!(src.into_typed::<i32>()?, dst, I32, i32),
-            crate::DType::I64 => copy_typed!(src.into_typed::<i64>()?, dst, I64, i64),
-            crate::DType::Bool => copy_typed!(src.into_typed::<bool>()?, dst, Bool, bool),
+            crate::DType::F32 => copy_typed!(src.into_typed::<f32>().unwrap(), dst, F32, f32),
+            crate::DType::F64 => copy_typed!(src.into_typed::<f64>().unwrap(), dst, F64, f64),
+            crate::DType::I32 => copy_typed!(src.into_typed::<i32>().unwrap(), dst, I32, i32),
+            crate::DType::I64 => copy_typed!(src.into_typed::<i64>().unwrap(), dst, I64, i64),
+            crate::DType::Bool => copy_typed!(src.into_typed::<bool>().unwrap(), dst, Bool, bool),
             crate::DType::C32 => {
                 copy_typed!(
-                    src.into_typed::<num_complex::Complex32>()?,
+                    src.into_typed::<num_complex::Complex32>().unwrap(),
                     dst,
                     C32,
                     num_complex::Complex32
@@ -407,7 +488,7 @@ impl TensorStructural for DefaultReadBackend {
             }
             crate::DType::C64 => {
                 copy_typed!(
-                    src.into_typed::<num_complex::Complex64>()?,
+                    src.into_typed::<num_complex::Complex64>().unwrap(),
                     dst,
                     C64,
                     num_complex::Complex64
@@ -420,23 +501,30 @@ impl TensorStructural for DefaultReadBackend {
         Ok(())
     }
 
-    fn transpose(&mut self, _input: &Tensor, _perm: &[usize]) -> crate::Result<Tensor> {
+    fn transpose_read(&mut self, input: TensorRead<'_>, perm: &[usize]) -> crate::Result<Tensor> {
+        let _ = crate::backend::read_owned_tensor("transpose", input)?;
+        let _ = perm;
         self.calls.push("transpose");
         Ok(marker())
     }
 
-    fn reshape(&mut self, _input: &Tensor, _shape: &[usize]) -> crate::Result<Tensor> {
+    fn reshape_read(&mut self, input: TensorRead<'_>, shape: &[usize]) -> crate::Result<Tensor> {
+        let _input = crate::backend::read_owned_tensor("reshape", input)?;
+        let _shape = shape;
         self.calls.push("reshape");
         self.reshape_shapes.push(_shape.to_vec());
         Ok(marker())
     }
 
-    fn broadcast_in_dim(
+    fn broadcast_in_dim_read(
         &mut self,
-        _input: &Tensor,
-        _shape: &[usize],
-        _dims: &[usize],
+        input: TensorRead<'_>,
+        shape: &[usize],
+        dims: &[usize],
     ) -> crate::Result<Tensor> {
+        let _input = crate::backend::read_owned_tensor("broadcast_in_dim", input)?;
+        let _shape = shape;
+        let _dims = dims;
         self.calls.push("broadcast_in_dim");
         Ok(marker())
     }
@@ -478,22 +566,30 @@ impl TensorStructural for DefaultReadBackend {
 }
 
 impl TensorReduction for DefaultReadBackend {
-    fn reduce_sum(&mut self, _input: &Tensor, _axes: &[usize]) -> crate::Result<Tensor> {
+    fn reduce_sum_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
+        let _input = crate::backend::read_owned_tensor("reduce_sum", input)?;
+        let _axes = axes;
         self.calls.push("reduce_sum");
         Ok(marker())
     }
 
-    fn reduce_prod(&mut self, _input: &Tensor, _axes: &[usize]) -> crate::Result<Tensor> {
+    fn reduce_prod_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
+        let _input = crate::backend::read_owned_tensor("reduce_prod", input)?;
+        let _axes = axes;
         self.calls.push("reduce_prod");
         Ok(marker())
     }
 
-    fn reduce_max(&mut self, _input: &Tensor, _axes: &[usize]) -> crate::Result<Tensor> {
+    fn reduce_max_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
+        let _input = crate::backend::read_owned_tensor("reduce_max", input)?;
+        let _axes = axes;
         self.calls.push("reduce_max");
         Ok(marker())
     }
 
-    fn reduce_min(&mut self, _input: &Tensor, _axes: &[usize]) -> crate::Result<Tensor> {
+    fn reduce_min_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
+        let _input = crate::backend::read_owned_tensor("reduce_min", input)?;
+        let _axes = axes;
         self.calls.push("reduce_min");
         Ok(marker())
     }
@@ -580,19 +676,35 @@ impl TensorIndexing for DefaultReadBackend {
 }
 
 impl TensorDot for DefaultReadBackend {
-    fn dot_general(
+    // The previous read-half default delegated an owned pair to the one-shot
+    // method and materialized views through to_contiguous_read before
+    // contracting. That one-shot is gone, so its body lives here and both read
+    // paths use it.
+    fn dot_general_read(
         &mut self,
-        _lhs: &Tensor,
-        _rhs: &Tensor,
+        lhs: TensorRead<'_>,
+        rhs: TensorRead<'_>,
         _config: &DotGeneralConfig,
     ) -> crate::Result<Tensor> {
-        self.calls.push("dot_general");
-        self.dot_result
-            .as_ref()
-            .map(Tensor::duplicate)
-            .transpose()
-            .map(|result| result.unwrap_or_else(marker))
+        if lhs.as_tensor().is_some() && rhs.as_tensor().is_some() {
+            return record_dot_general(self);
+        }
+        let lhs = self.to_contiguous_read(lhs)?;
+        let rhs = self.to_contiguous_read(rhs)?;
+        let _ = (&lhs, &rhs);
+        record_dot_general(self)
     }
+}
+
+/// The deleted `dot_general` one-shot body, shared by both read paths.
+fn record_dot_general(backend: &mut DefaultReadBackend) -> crate::Result<Tensor> {
+    backend.calls.push("dot_general");
+    backend
+        .dot_result
+        .as_ref()
+        .map(Tensor::duplicate)
+        .transpose()
+        .map(|result| result.unwrap_or_else(marker))
 }
 
 impl TensorFusion for DefaultReadBackend {}
@@ -621,17 +733,16 @@ impl BackendRuntimeCache for DefaultReadBackend {
 
 impl BackendCachedDot for DefaultReadBackend {}
 
-impl BackendSession for DefaultReadBackend {
-    fn session_type_id(&self) -> std::any::TypeId {
-        std::any::TypeId::of::<DefaultReadBackendSessionMarker>()
-    }
+impl BackendSession for DefaultReadBackend {}
 
-    unsafe fn session_data_mut(&mut self) -> *mut () {
-        self as *mut Self as *mut ()
+impl BackendSessionHost for DefaultReadBackend {
+    fn with_backend_session<R: Send>(
+        &mut self,
+        f: impl FnOnce(&mut dyn crate::BackendSession) -> R + Send,
+    ) -> Result<R, crate::SessionEntryError> {
+        crate::with_session_entry_guard("test backend", || f(self))
     }
 }
-
-impl BackendSessionHost for DefaultReadBackend {}
 
 impl TensorBackend for DefaultReadBackend {}
 
@@ -837,35 +948,41 @@ fn default_read_methods_delegate_owned_tensors_and_reject_views() {
         .dot_general_with_conj(&a, &b, &config, true, false)
         .unwrap();
     let mut cache = ();
-    BackendCachedDot::dot_general_read_cached(
-        &mut backend,
-        &mut cache,
-        Some(0),
-        TensorRead::from_tensor(&a),
-        TensorRead::from_tensor(&b),
-        &config,
-    )
-    .unwrap();
-    BackendCachedDot::dot_general_read_cached(
-        &mut backend,
-        &mut cache,
-        Some(1),
-        TensorRead::from_view(TensorView::F64(view_source.as_view())),
-        TensorRead::from_tensor(&b),
-        &config,
-    )
-    .unwrap();
-    BackendCachedDot::dot_general_with_conj_read_cached(
-        &mut backend,
-        &mut cache,
-        Some(2),
-        TensorRead::from_tensor(&a),
-        TensorRead::from_tensor(&b),
-        &config,
-        true,
-        false,
-    )
-    .unwrap();
+    backend
+        .with_backend_session_cached(&mut cache, |__s| {
+            __s.dot_general_read_cached(
+                Some(0),
+                TensorRead::from_tensor(&a),
+                TensorRead::from_tensor(&b),
+                &config,
+            )
+        })
+        .unwrap()
+        .unwrap();
+    backend
+        .with_backend_session_cached(&mut cache, |__s| {
+            __s.dot_general_read_cached(
+                Some(1),
+                TensorRead::from_view(TensorView::F64(view_source.as_view())),
+                TensorRead::from_tensor(&b),
+                &config,
+            )
+        })
+        .unwrap()
+        .unwrap();
+    backend
+        .with_backend_session_cached(&mut cache, |__s| {
+            __s.dot_general_with_conj_read_cached(
+                Some(2),
+                TensorRead::from_tensor(&a),
+                TensorRead::from_tensor(&b),
+                &config,
+                true,
+                false,
+            )
+        })
+        .unwrap()
+        .unwrap();
 
     let err = backend
         .add_read(
@@ -1360,30 +1477,34 @@ fn run_grouped_f64_default_combo(
             let out_view =
                 TypedTensorViewMut::from_slice(vec![1], vec![1], 1, out_storage.as_mut_slice())
                     .unwrap();
-            BackendCachedDot::grouped_gemm_cached(
-                &mut backend,
-                &mut cache,
-                Some(3),
-                lhs_read,
-                rhs_read,
-                &config,
-                TensorWrite::from_view(TensorViewMut::F64(out_view)),
-            )
-            .unwrap();
+            backend
+                .with_backend_session_cached(&mut cache, |__s| {
+                    __s.grouped_gemm_cached(
+                        Some(3),
+                        lhs_read,
+                        rhs_read,
+                        &config,
+                        TensorWrite::from_view(TensorViewMut::F64(out_view)),
+                    )
+                })
+                .unwrap()
+                .unwrap();
         }
         out_storage
     } else {
         let mut out = Tensor::from_vec_col_major(vec![1], vec![9.0_f64]).unwrap();
-        BackendCachedDot::grouped_gemm_cached(
-            &mut backend,
-            &mut cache,
-            Some(3),
-            lhs_read,
-            rhs_read,
-            &config,
-            TensorWrite::from_tensor(&mut out),
-        )
-        .unwrap();
+        backend
+            .with_backend_session_cached(&mut cache, |__s| {
+                __s.grouped_gemm_cached(
+                    Some(3),
+                    lhs_read,
+                    rhs_read,
+                    &config,
+                    TensorWrite::from_tensor(&mut out),
+                )
+            })
+            .unwrap()
+            .unwrap();
         out.as_slice::<f64>().unwrap().to_vec()
     }
 }
@@ -1428,16 +1549,18 @@ fn grouped_gemm_default_fallback_updates_shared_buffer_offsets() {
         ..Default::default()
     };
 
-    BackendCachedDot::grouped_gemm_cached(
-        &mut backend,
-        &mut cache,
-        Some(9),
-        TensorRead::from_tensor(&lhs),
-        TensorRead::from_tensor(&rhs),
-        &config,
-        TensorWrite::from_tensor(&mut out),
-    )
-    .unwrap();
+    backend
+        .with_backend_session_cached(&mut cache, |__s| {
+            __s.grouped_gemm_cached(
+                Some(9),
+                TensorRead::from_tensor(&lhs),
+                TensorRead::from_tensor(&rhs),
+                &config,
+                TensorWrite::from_tensor(&mut out),
+            )
+        })
+        .unwrap()
+        .unwrap();
 
     assert_eq!(out.as_slice::<f64>().unwrap(), &[13.0, 20.0, 23.0, 40.0]);
     assert_eq!(
@@ -1462,24 +1585,26 @@ fn grouped_gemm_default_fallback_covers_supported_dtypes() {
         dot_result: Some(Tensor::from_vec_col_major(vec![1, 1], vec![2.0_f32]).unwrap()),
         ..Default::default()
     };
-    BackendCachedDot::grouped_gemm_cached(
-        &mut backend,
-        &mut cache,
-        None,
-        TensorRead::from_tensor(&lhs),
-        TensorRead::from_tensor(&rhs),
-        &GroupedGemmConfig::new(
-            &jobs,
-            DotGeneralAccumulation {
-                lhs_conj: false,
-                rhs_conj: false,
-                alpha: ContractionScalar::F32(3.0),
-                beta: ContractionScalar::F32(1.0),
-            },
-        ),
-        TensorWrite::from_tensor(&mut out),
-    )
-    .unwrap();
+    backend
+        .with_backend_session_cached(&mut cache, |__s| {
+            __s.grouped_gemm_cached(
+                None,
+                TensorRead::from_tensor(&lhs),
+                TensorRead::from_tensor(&rhs),
+                &GroupedGemmConfig::new(
+                    &jobs,
+                    DotGeneralAccumulation {
+                        lhs_conj: false,
+                        rhs_conj: false,
+                        alpha: ContractionScalar::F32(3.0),
+                        beta: ContractionScalar::F32(1.0),
+                    },
+                ),
+                TensorWrite::from_tensor(&mut out),
+            )
+        })
+        .unwrap()
+        .unwrap();
     assert_eq!(out.as_slice::<f32>().unwrap(), &[11.0]);
 
     let lhs = Tensor::from_vec_col_major(vec![1], vec![Complex32::new(1.0, 0.0)]).unwrap();
@@ -1491,24 +1616,26 @@ fn grouped_gemm_default_fallback_covers_supported_dtypes() {
         ),
         ..Default::default()
     };
-    BackendCachedDot::grouped_gemm_cached(
-        &mut backend,
-        &mut cache,
-        None,
-        TensorRead::from_tensor(&lhs),
-        TensorRead::from_tensor(&rhs),
-        &GroupedGemmConfig::new(
-            &jobs,
-            DotGeneralAccumulation {
-                lhs_conj: false,
-                rhs_conj: false,
-                alpha: ContractionScalar::C32(Complex32::new(2.0, 0.0)),
-                beta: ContractionScalar::C32(Complex32::new(0.0, 1.0)),
-            },
-        ),
-        TensorWrite::from_tensor(&mut out),
-    )
-    .unwrap();
+    backend
+        .with_backend_session_cached(&mut cache, |__s| {
+            __s.grouped_gemm_cached(
+                None,
+                TensorRead::from_tensor(&lhs),
+                TensorRead::from_tensor(&rhs),
+                &GroupedGemmConfig::new(
+                    &jobs,
+                    DotGeneralAccumulation {
+                        lhs_conj: false,
+                        rhs_conj: false,
+                        alpha: ContractionScalar::C32(Complex32::new(2.0, 0.0)),
+                        beta: ContractionScalar::C32(Complex32::new(0.0, 1.0)),
+                    },
+                ),
+                TensorWrite::from_tensor(&mut out),
+            )
+        })
+        .unwrap()
+        .unwrap();
     assert_eq!(
         out.as_slice::<Complex32>().unwrap(),
         &[Complex32::new(3.0, 5.0)]
@@ -1523,24 +1650,26 @@ fn grouped_gemm_default_fallback_covers_supported_dtypes() {
         ),
         ..Default::default()
     };
-    BackendCachedDot::grouped_gemm_cached(
-        &mut backend,
-        &mut cache,
-        None,
-        TensorRead::from_tensor(&lhs),
-        TensorRead::from_tensor(&rhs),
-        &GroupedGemmConfig::new(
-            &jobs,
-            DotGeneralAccumulation {
-                lhs_conj: false,
-                rhs_conj: false,
-                alpha: ContractionScalar::C64(Complex64::new(1.0, 0.0)),
-                beta: ContractionScalar::C64(Complex64::new(0.0, 0.0)),
-            },
-        ),
-        TensorWrite::from_tensor(&mut out),
-    )
-    .unwrap();
+    backend
+        .with_backend_session_cached(&mut cache, |__s| {
+            __s.grouped_gemm_cached(
+                None,
+                TensorRead::from_tensor(&lhs),
+                TensorRead::from_tensor(&rhs),
+                &GroupedGemmConfig::new(
+                    &jobs,
+                    DotGeneralAccumulation {
+                        lhs_conj: false,
+                        rhs_conj: false,
+                        alpha: ContractionScalar::C64(Complex64::new(1.0, 0.0)),
+                        beta: ContractionScalar::C64(Complex64::new(0.0, 0.0)),
+                    },
+                ),
+                TensorWrite::from_tensor(&mut out),
+            )
+        })
+        .unwrap()
+        .unwrap();
     assert_eq!(
         out.as_slice::<Complex64>().unwrap(),
         &[Complex64::new(4.0, -2.0)]
@@ -1726,16 +1855,18 @@ fn grouped_gemm_default_fallback_rejects_offsets_that_do_not_fit_isize() {
         ..Default::default()
     };
 
-    let err = BackendCachedDot::grouped_gemm_cached(
-        &mut backend,
-        &mut cache,
-        None,
-        TensorRead::from_tensor(&lhs),
-        TensorRead::from_tensor(&rhs),
-        &config,
-        TensorWrite::from_tensor(&mut out),
-    )
-    .unwrap_err();
+    let err = backend
+        .with_backend_session_cached(&mut cache, |__s| {
+            __s.grouped_gemm_cached(
+                None,
+                TensorRead::from_tensor(&lhs),
+                TensorRead::from_tensor(&rhs),
+                &config,
+                TensorWrite::from_tensor(&mut out),
+            )
+        })
+        .unwrap()
+        .unwrap_err();
 
     assert!(err.to_string().contains("offset"));
 }
@@ -1747,6 +1878,7 @@ fn tensor_index_select_builds_gather_config_and_validates_inputs() {
 
     backend
         .with_backend_session(|session| input.index_select(-1, &[2, 0], session))
+        .unwrap()
         .unwrap();
 
     let indices = backend.gather_indices.as_ref().unwrap();
@@ -1762,11 +1894,13 @@ fn tensor_index_select_builds_gather_config_and_validates_inputs() {
 
     let axis_err = backend
         .with_backend_session(|session| input.index_select(2, &[0], session))
+        .unwrap()
         .unwrap_err();
     assert!(axis_err.to_string().contains("axis 2"));
 
     let position_err = backend
         .with_backend_session(|session| input.index_select(1, &[3], session))
+        .unwrap()
         .unwrap_err();
     assert!(position_err
         .to_string()
@@ -1781,6 +1915,7 @@ fn tensor_stack_reshapes_then_concatenates_and_validates_inputs() {
 
     backend
         .with_backend_session(|session| Tensor::stack(&[&a, &b], -1, session))
+        .unwrap()
         .unwrap();
 
     assert_eq!(backend.reshape_shapes, vec![vec![2, 1], vec![2, 1]]);
@@ -1789,12 +1924,14 @@ fn tensor_stack_reshapes_then_concatenates_and_validates_inputs() {
     let empty: [&Tensor; 0] = [];
     let empty_err = backend
         .with_backend_session(|session| Tensor::stack(&empty, 0, session))
+        .unwrap()
         .unwrap_err();
     assert!(empty_err.to_string().contains("at least one input"));
 
     let c = Tensor::from_vec_col_major(vec![3], vec![0.0_f64; 3]).unwrap();
     let shape_err = backend
         .with_backend_session(|session| Tensor::stack(&[&a, &c], 0, session))
+        .unwrap()
         .unwrap_err();
     assert!(matches!(
         shape_err,
@@ -1806,6 +1943,7 @@ fn tensor_stack_reshapes_then_concatenates_and_validates_inputs() {
 
     let axis_err = backend
         .with_backend_session(|session| Tensor::stack(&[&a], 2, session))
+        .unwrap()
         .unwrap_err();
     assert!(axis_err.to_string().contains("axis 2"));
 }

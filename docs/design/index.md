@@ -12,6 +12,9 @@ migration notes live under [Plans](../plans/), not this active design index.
 | [api-and-convention-freeze.md](./api-and-convention-freeze.md) | Clean-break release posture for public API, API consistency detection, crate ownership, naming conventions, docs ownership, and audit/remediation workflow |
 | [supported-ops.md](./supported-ops.md) | Crate-by-crate inventory of supported primal and AD operations |
 | [tensor.md](./tensor.md) | Tensor representation, ownership model |
+| [tensor-session-redesign-1938.md](./tensor-session-redesign-1938.md) | Accepted #1938 target for compact tensor/storage/views and explicit session execution, with per-decision implemented mappings |
+| [exec-session.md](./exec-session.md) | Backend execution sessions: fallible entry, native-session visitors, runtime use |
+| [session-oriented-concrete-apis.md](./session-oriented-concrete-apis.md) | Session-borrowing concrete operation surface and its migration record |
 | [storage-ownership-contracts.md](./storage-ownership-contracts.md) | Normative Phase 1 contracts for the storage ownership redesign (#1555): span access and retirement, allocation groups, submission, method distribution, raw handles and reclamation, documentation ownership, and AD value retention |
 | [tensor-prims.md](./tensor-prims.md) | Tensor backend protocol and execution surface |
 | [backend-capability.md](./backend-capability.md) | Runtime backend capability descriptor for typed/erased tensor support and generated CUDA coverage |
@@ -39,7 +42,7 @@ migration notes live under [Plans](../plans/), not this active design index.
 | [testing.md](./testing.md) | Testing and performance verification strategy |
 | [nested-cargo-debug-profile.md](./nested-cargo-debug-profile.md) | Repository-owned Cargo environment defaults for debug-free guide and trybuild fixture workspaces |
 | [execution-engine-provider-architecture.md](./execution-engine-provider-architecture.md) | Authoritative runtime-owned execution-engine, provider registration, preparation, and scheduled execution architecture |
-| [explicit-session-boundary.md](./explicit-session-boundary.md) | Which functions may create backend execution state: target session contract, the audited session-entry inventory (#1926), migration slices, audit-gate design, and the measurement protocol for session-entry claims |
+| [explicit-session-boundary.md](./explicit-session-boundary.md) | Delivered backend/eager explicit-session boundary (#1926/#1929), historical migration inventory, audit gate, and deferred A2 ownership/performance work (#1938/#1927/#1904); see the [reduced-contract handoff](../worklogs/2026-09-27-1929-reduced-contract-handoff.md) |
 | [review-decision-records.md](./review-decision-records.md) | Relationship between historical plans, reviewer-facing work logs, and durable design records |
 | [change-aware-ci.md](./change-aware-ci.md) | Conservative pull-request classification, shared command profiles, stable required checks, and trusted RunPod recovery |
 | [ci-cache-trust.md](./ci-cache-trust.md) | CI cache namespace trust model, the single trusted default-branch cache writer, material-input cache keys, and immutable GPU archive artifact reuse across allocation retries |
