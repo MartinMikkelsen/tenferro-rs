@@ -1,10 +1,10 @@
 use tenferro_cpu::{scalar_binary_into, scalar_fold, AddOp};
 use tenferro_df64_proof::{Df64, Df64Add};
-use tenferro_tensor::HostTensor;
+use tenferro_tensor::{DynRank, Host, TypedTensor};
 use tenferro_tensor_core::{ad_admission, AdAdmissionError, ScalarArithmetic, ScalarDomain};
 
-fn df64(values: &[f64]) -> HostTensor<Df64> {
-    HostTensor::from_vec_col_major(
+fn df64(values: &[f64]) -> TypedTensor<Df64, DynRank, Host> {
+    TypedTensor::<_, DynRank, Host>::from_host_vec_col_major(
         vec![values.len()],
         values.iter().copied().map(Df64::from_f64).collect(),
     )
@@ -59,9 +59,14 @@ fn external_scalar_keeps_low_order_information_through_the_elementwise_entry_poi
 
 #[test]
 fn preset_scalar_f64_uses_the_same_entry_points() {
-    let lhs = HostTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
-    let rhs = HostTensor::from_vec_col_major(vec![2], vec![10.0_f64, 20.0]).unwrap();
-    let mut destination = HostTensor::from_vec_col_major(vec![2], vec![0.0_f64, 0.0]).unwrap();
+    let lhs = TypedTensor::<_, DynRank, Host>::from_host_vec_col_major(vec![2], vec![1.0_f64, 2.0])
+        .unwrap();
+    let rhs =
+        TypedTensor::<_, DynRank, Host>::from_host_vec_col_major(vec![2], vec![10.0_f64, 20.0])
+            .unwrap();
+    let mut destination =
+        TypedTensor::<_, DynRank, Host>::from_host_vec_col_major(vec![2], vec![0.0_f64, 0.0])
+            .unwrap();
 
     scalar_binary_into::<f64, AddOp>("add", &mut destination, &lhs, &rhs).unwrap();
     assert_eq!(destination.as_slice(), &[11.0, 22.0]);
@@ -73,7 +78,7 @@ fn preset_scalar_f64_uses_the_same_entry_points() {
 #[test]
 fn mutable_borrow_through_the_public_tensor_type_reaches_the_entry_point() {
     let mut values = df64(&[1.0, 2.0]);
-    for element in values.as_mut_slice() {
+    for element in values.host_data_mut() {
         *element = *element + Df64::from_f64(1.0);
     }
 
@@ -110,7 +115,8 @@ fn mismatched_shapes_are_rejected_without_touching_the_destination() {
 
 #[test]
 fn empty_input_folds_to_the_initial_value() {
-    let empty: HostTensor<Df64> = HostTensor::from_vec_col_major(vec![0], Vec::new()).unwrap();
+    let empty: TypedTensor<Df64, DynRank, Host> =
+        TypedTensor::<_, DynRank, Host>::from_host_vec_col_major(vec![0], Vec::new()).unwrap();
     let total = scalar_fold::<Df64, Df64Add>("sum", &empty, Df64::zero()).unwrap();
     assert_eq!(total, Df64::zero());
 }
@@ -159,11 +165,15 @@ fn external_scalar_reaches_the_shared_admission_query() {
 #[test]
 fn external_crate_defines_its_own_scalar_set() {
     use tenferro_df64_proof::{ExtendedSet, ExtendedTag};
-    use tenferro_tensor::HostTensor;
     use tenferro_tensor::ScalarSet;
+    use tenferro_tensor::{DynRank, Host, TypedTensor};
 
     let value = ExtendedSet::Df64(
-        HostTensor::from_vec_col_major(vec![1], vec![Df64::from_f64(2.0)]).unwrap(),
+        TypedTensor::<_, DynRank, Host>::from_host_vec_col_major(
+            vec![1],
+            vec![Df64::from_f64(2.0)],
+        )
+        .unwrap(),
     );
     assert_eq!(value.tag(), ExtendedTag::Df64);
     assert_eq!(
@@ -181,13 +191,20 @@ fn external_crate_defines_its_own_scalar_set() {
 
 #[test]
 fn erased_values_carry_a_scalar_tenferro_does_not_define() {
-    use tenferro_tensor::{ErasedHostTensor, HostTensor};
+    use tenferro_tensor::{DynRank, ErasedHostTensor, Host, TypedTensor};
 
     let low = 2f64.powi(-80);
     let mut values = [
-        ErasedHostTensor::new(HostTensor::from_vec_col_major(vec![2], vec![1.0_f64, low]).unwrap()),
         ErasedHostTensor::new(
-            HostTensor::from_vec_col_major(vec![1], vec![Df64::from_f64(2.0)]).unwrap(),
+            TypedTensor::<_, DynRank, Host>::from_host_vec_col_major(vec![2], vec![1.0_f64, low])
+                .unwrap(),
+        ),
+        ErasedHostTensor::new(
+            TypedTensor::<_, DynRank, Host>::from_host_vec_col_major(
+                vec![1],
+                vec![Df64::from_f64(2.0)],
+            )
+            .unwrap(),
         ),
     ];
 
@@ -205,12 +222,13 @@ fn erased_values_carry_a_scalar_tenferro_does_not_define() {
 
     // A mismatched recovery returns nothing rather than reinterpreting bytes.
     assert!(values[0].downcast_ref::<Df64>().is_none());
-    let owned =
-        ErasedHostTensor::new(HostTensor::from_vec_col_major(vec![1], vec![1.0_f64]).unwrap());
+    let owned = ErasedHostTensor::new(
+        TypedTensor::<_, DynRank, Host>::from_host_vec_col_major(vec![1], vec![1.0_f64]).unwrap(),
+    );
     assert!(owned.into_typed::<Df64>().is_none());
 
     // Mutation through the erased value reaches the stored tensor.
-    values[1].downcast_mut::<Df64>().unwrap().as_mut_slice()[0] = Df64::from_f64(5.0);
+    values[1].downcast_mut::<Df64>().unwrap().host_data_mut()[0] = Df64::from_f64(5.0);
     assert_eq!(
         values[1].downcast_ref::<Df64>().unwrap().as_slice(),
         &[Df64::from_f64(5.0)]
@@ -220,7 +238,7 @@ fn erased_values_carry_a_scalar_tenferro_does_not_define() {
 #[test]
 fn two_sets_containing_the_same_scalar_share_one_numerical_instantiation() {
     use tenferro_df64_proof::ExtendedSet;
-    use tenferro_tensor::{DefaultScalars, HostTensor};
+    use tenferro_tensor::{DefaultScalars, DynRank, Host, TypedTensor};
 
     // Extract the same f64 scalar from two different sets. The default set's
     // payload is opaque, so it is read back through the typed accessor.
@@ -228,16 +246,20 @@ fn two_sets_containing_the_same_scalar_share_one_numerical_instantiation() {
         .unwrap()
         .into_vec_col_major::<f64>()
         .unwrap();
-    let from_default = HostTensor::from_vec_col_major(shape, data).unwrap();
+    let from_default =
+        TypedTensor::<_, DynRank, Host>::from_host_vec_col_major(shape, data).unwrap();
 
     let from_extended = match ExtendedSet::F64(
-        HostTensor::from_vec_col_major(vec![2], vec![10.0_f64, 20.0]).unwrap(),
+        TypedTensor::<_, DynRank, Host>::from_host_vec_col_major(vec![2], vec![10.0_f64, 20.0])
+            .unwrap(),
     ) {
         ExtendedSet::F64(tensor) => tensor,
         _ => unreachable!(),
     };
 
-    let mut out = HostTensor::from_vec_col_major(vec![2], vec![0.0_f64, 0.0]).unwrap();
+    let mut out =
+        TypedTensor::<_, DynRank, Host>::from_host_vec_col_major(vec![2], vec![0.0_f64, 0.0])
+            .unwrap();
     scalar_binary_into::<f64, AddOp>("add", &mut out, &from_default, &from_extended).unwrap();
 
     assert_eq!(out.as_slice(), &[11.0, 22.0]);

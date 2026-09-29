@@ -48,9 +48,8 @@ selected dynamically, when you want the broad concrete tensor operation
 API, or when you need to pass CPU or CUDA tensors through backend dispatch.
 
 `tenferro-tensor-core` is lower-level: it owns rank/layout metadata, dtype tags
-and scalar promotion facts. The tensor types, including the host container
-`HostTensor<T>` and the backend-capable `TypedTensor<T, R, D>`, live in
-`tenferro-tensor`.
+and scalar promotion facts. The tensor types live in `tenferro-tensor`; plain
+host data, including a custom scalar type, is `TypedTensor<T, R, Host>`.
 
 `EagerTensor` is concrete eager execution. It wraps `Tensor` values in an
 `EagerRuntime`, so each operation computes a concrete result immediately.

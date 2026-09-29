@@ -7,8 +7,8 @@ use std::sync::{Arc, Mutex};
 
 use num_complex::{Complex32, Complex64};
 use tenferro_tensor::{
-    AllocationDomainId, AllocationId, BackendSessionHost, BackendStorage, DType, ErasedHostTensor,
-    HostAccessError, HostReadGuard, HostTensor, HostWriteGuard, MemoryKind, Placement,
+    AllocationDomainId, AllocationId, BackendSessionHost, BackendStorage, DType, DynRank,
+    ErasedHostTensor, Host, HostAccessError, HostReadGuard, HostWriteGuard, MemoryKind, Placement,
     SharedTensorAllocationDomain, StorageBuffer, Tensor, TensorRead, TensorScalar, TensorView,
     TensorWrite, TypedTensor, TypedTensorView,
 };
@@ -337,8 +337,10 @@ fn host_input_under_a_managed_domain_is_cloned_as_host_storage() {
 
 #[test]
 fn to_contiguous_copies_an_externally_defined_payload_into_owned_storage() {
-    let payload =
-        ErasedHostTensor::new(HostTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap());
+    let payload = ErasedHostTensor::new(
+        TypedTensor::<f64, DynRank, Host>::from_host_vec_col_major(vec![2], vec![1.0_f64, 2.0])
+            .unwrap(),
+    );
     let element = payload.element_type_id();
     let input = Tensor::external(payload);
     let mut backend = CpuBackend::with_threads(1).unwrap();
@@ -441,8 +443,10 @@ fn copy_read_into_reports_a_view_dtype_mismatch_without_writing() {
 
 #[test]
 fn copy_read_into_refuses_an_externally_defined_source_payload() {
-    let payload =
-        ErasedHostTensor::new(HostTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap());
+    let payload = ErasedHostTensor::new(
+        TypedTensor::<f64, DynRank, Host>::from_host_vec_col_major(vec![2], vec![1.0_f64, 2.0])
+            .unwrap(),
+    );
     let element = payload.element_type_id();
     let source = Tensor::external(payload);
     let mut destination =

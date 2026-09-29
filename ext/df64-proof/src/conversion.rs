@@ -5,7 +5,7 @@
 //! multi-hop rule: every pair must exist on its own.
 
 use tenferro_tensor::Tensor;
-use tenferro_tensor::{ErasedHostTensor, HostTensor};
+use tenferro_tensor::{DynRank, ErasedHostTensor, Host, TypedTensor};
 
 use crate::Df64;
 
@@ -19,7 +19,7 @@ fn df64_values<'a>(tensor: &'a Tensor, op: &'static str) -> tenferro_tensor::Res
     match tensor.external_payload() {
         Some(payload) => payload
             .downcast_ref::<Df64>()
-            .map(HostTensor::as_slice)
+            .map(TypedTensor::<Df64, DynRank, Host>::as_slice)
             .ok_or_else(|| {
                 tenferro_tensor::Error::unsupported_dtype(
                     op,
@@ -77,11 +77,11 @@ fn f64_values<'a>(tensor: &'a Tensor, op: &'static str) -> tenferro_tensor::Resu
 /// ```rust
 /// use tenferro_df64_proof::{conversion, Df64};
 /// use tenferro_tensor::Tensor;
-/// use tenferro_tensor::{ErasedHostTensor, HostTensor};
+/// use tenferro_tensor::{DynRank, ErasedHostTensor, Host, TypedTensor};
 ///
 /// let low = Df64 { hi: 1.0, lo: 2f64.powi(-52) };
 /// let tensor = Tensor::external(ErasedHostTensor::new(
-///     HostTensor::from_vec_col_major(vec![1], vec![low])?,
+///     TypedTensor::<_, DynRank, Host>::from_host_vec_col_major(vec![1], vec![low])?,
 /// ));
 ///
 /// // The low component is part of the value, so it is part of the result.
@@ -130,7 +130,7 @@ pub fn to_f64(tensor: &Tensor) -> tenferro_tensor::Result<Tensor> {
 pub fn to_df64(tensor: &Tensor) -> tenferro_tensor::Result<Tensor> {
     let values = f64_values(tensor, "f64_to_df64")?;
     let widened: Vec<Df64> = values.iter().copied().map(Df64::from_f64).collect();
-    let payload = HostTensor::from_vec_col_major(tensor.shape().to_vec(), widened)
-        .map_err(|source| tenferro_tensor::Error::validation("f64_to_df64", source))?;
+    let payload =
+        TypedTensor::<_, DynRank, Host>::from_host_vec_col_major(tensor.shape().to_vec(), widened)?;
     Ok(Tensor::external(ErasedHostTensor::new(payload)))
 }

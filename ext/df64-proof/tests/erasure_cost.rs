@@ -11,14 +11,18 @@
 use std::hint::black_box;
 use std::time::Instant;
 
-use tenferro_tensor::{ErasedHostTensor, HostTensor};
+use tenferro_tensor::{DynRank, ErasedHostTensor, Host, TypedTensor};
 
 const ITERATIONS: usize = 200_000;
 const ELEMENTS: usize = 64;
 const ROUNDS: usize = 9;
 
-fn payload() -> HostTensor<f64> {
-    HostTensor::from_vec_col_major(vec![ELEMENTS], vec![1.0_f64; ELEMENTS]).unwrap()
+fn payload() -> TypedTensor<f64, DynRank, Host> {
+    TypedTensor::<_, DynRank, Host>::from_host_vec_col_major(
+        vec![ELEMENTS],
+        vec![1.0_f64; ELEMENTS],
+    )
+    .unwrap()
 }
 
 fn ns_per_iteration(mut body: impl FnMut()) -> f64 {

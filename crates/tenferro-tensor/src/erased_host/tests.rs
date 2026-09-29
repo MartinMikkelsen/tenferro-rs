@@ -1,15 +1,19 @@
-use crate::{ErasedHostTensor, HostTensor};
+use crate::{DynRank, ErasedHostTensor, Error, Host, TypedTensor};
 use tenferro_tensor_core::ValidationError;
 
-fn f64_tensor(values: &[f64]) -> HostTensor<f64> {
-    HostTensor::from_vec_col_major(vec![values.len()], values.to_vec()).unwrap()
+fn f64_tensor(values: &[f64]) -> TypedTensor<f64, DynRank, Host> {
+    TypedTensor::<_, DynRank, Host>::from_host_vec_col_major(vec![values.len()], values.to_vec())
+        .unwrap()
 }
 
 #[test]
 fn type_identity_uses_the_actual_rust_type() {
     let erased = ErasedHostTensor::new(f64_tensor(&[1.0]));
 
-    assert_eq!(erased.type_id(), core::any::TypeId::of::<HostTensor<f64>>());
+    assert_eq!(
+        erased.type_id(),
+        core::any::TypeId::of::<TypedTensor<f64, DynRank, Host>>()
+    );
     assert!(erased.is::<f64>());
     assert!(!erased.is::<f32>());
     assert!(!erased.is::<i32>());
@@ -32,7 +36,7 @@ fn recovery_by_the_right_type_returns_the_tensor() {
         erased.downcast_ref::<f64>().unwrap().as_slice(),
         &[1.0, 2.0]
     );
-    erased.downcast_mut::<f64>().unwrap().as_mut_slice()[0] = 9.0;
+    erased.downcast_mut::<f64>().unwrap().host_data_mut()[0] = 9.0;
     assert_eq!(
         erased.downcast_ref::<f64>().unwrap().as_slice(),
         &[9.0, 2.0]
@@ -50,7 +54,10 @@ fn debug_reports_a_stable_description() {
 }
 
 fn matrix(values: &[f64]) -> ErasedHostTensor {
-    ErasedHostTensor::new(HostTensor::from_vec_col_major(vec![2, 2], values.to_vec()).unwrap())
+    ErasedHostTensor::new(
+        TypedTensor::<_, DynRank, Host>::from_host_vec_col_major(vec![2, 2], values.to_vec())
+            .unwrap(),
+    )
 }
 
 #[test]
@@ -104,18 +111,27 @@ fn an_invalid_permutation_reports_the_specific_error() {
 
     assert!(matches!(
         erased.permuted(&[0]),
-        Err(ValidationError::InvalidPermutationLength {
-            expected: 2,
-            actual: 1
+        Err(Error::Validation {
+            source: ValidationError::InvalidPermutationLength {
+                expected: 2,
+                actual: 1
+            },
+            ..
         })
     ));
     assert!(matches!(
         erased.permuted(&[0, 2]),
-        Err(ValidationError::AxisOutOfBounds { axis: 2, rank: 2 })
+        Err(Error::Validation {
+            source: ValidationError::AxisOutOfBounds { axis: 2, rank: 2 },
+            ..
+        })
     ));
     assert!(matches!(
         erased.permuted(&[0, 0]),
-        Err(ValidationError::DuplicateAxis { axis: 0, .. })
+        Err(Error::Validation {
+            source: ValidationError::DuplicateAxis { axis: 0, .. },
+            ..
+        })
     ));
 }
 
@@ -140,7 +156,7 @@ fn duplication_copies_the_payload_while_a_clone_shares_it() {
 
     let mut copy = erased.duplicate();
     assert!(!copy.shares_payload_with(&erased));
-    copy.downcast_mut::<f64>().unwrap().as_mut_slice()[0] = 9.0;
+    copy.downcast_mut::<f64>().unwrap().host_data_mut()[0] = 9.0;
     assert_eq!(erased.as_dense::<f64>().unwrap().0, &[1.0, 2.0, 3.0, 4.0]);
     assert_eq!(copy.as_dense::<f64>().unwrap().0, &[9.0, 2.0, 3.0, 4.0]);
 

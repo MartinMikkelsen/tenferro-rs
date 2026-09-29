@@ -1,9 +1,10 @@
-use tenferro_tensor::HostTensor;
+use tenferro_tensor::{DynRank, Host, TypedTensor};
 
 use super::{scalar_binary_into, scalar_fold, AddOp, SubOp};
 
-fn tensor(values: &[f64]) -> HostTensor<f64> {
-    HostTensor::from_vec_col_major(vec![values.len()], values.to_vec()).unwrap()
+fn tensor(values: &[f64]) -> TypedTensor<f64, DynRank, Host> {
+    TypedTensor::<_, DynRank, Host>::from_host_vec_col_major(vec![values.len()], values.to_vec())
+        .unwrap()
 }
 
 #[test]
@@ -40,10 +41,12 @@ fn elementwise_rejects_operands_of_different_shapes() {
 
 #[test]
 fn elementwise_handles_an_empty_destination() {
-    let lhs: HostTensor<f64> = HostTensor::from_vec_col_major(vec![0], Vec::new()).unwrap();
-    let rhs: HostTensor<f64> = HostTensor::from_vec_col_major(vec![0], Vec::new()).unwrap();
-    let mut destination: HostTensor<f64> =
-        HostTensor::from_vec_col_major(vec![0], Vec::new()).unwrap();
+    let lhs: TypedTensor<f64, DynRank, Host> =
+        TypedTensor::<_, DynRank, Host>::from_host_vec_col_major(vec![0], Vec::new()).unwrap();
+    let rhs: TypedTensor<f64, DynRank, Host> =
+        TypedTensor::<_, DynRank, Host>::from_host_vec_col_major(vec![0], Vec::new()).unwrap();
+    let mut destination: TypedTensor<f64, DynRank, Host> =
+        TypedTensor::<_, DynRank, Host>::from_host_vec_col_major(vec![0], Vec::new()).unwrap();
 
     scalar_binary_into::<f64, AddOp>("add", &mut destination, &lhs, &rhs).unwrap();
 
@@ -68,30 +71,38 @@ fn fold_uses_the_caller_operation_and_initial_value() {
 #[test]
 fn integer_arithmetic_through_the_shared_entry_point_wraps() {
     use crate::scalar_ops::{scalar_binary_into, scalar_fold, AddOp, MulOp, SubOp};
-    use tenferro_tensor::HostTensor;
+    use tenferro_tensor::{DynRank, Host, TypedTensor};
 
     // The preset path wraps for integers, and the shared entry points have to agree with it in
     // every build: the operator would panic on overflow in a debug build instead.
-    let maximum = HostTensor::from_vec_col_major(vec![1], vec![i32::MAX]).expect("shape");
-    let one = HostTensor::from_vec_col_major(vec![1], vec![1]).expect("shape");
-    let mut destination = HostTensor::from_vec_col_major(vec![1], vec![0]).expect("shape");
+    let maximum = TypedTensor::<_, DynRank, Host>::from_host_vec_col_major(vec![1], vec![i32::MAX])
+        .expect("shape");
+    let one =
+        TypedTensor::<_, DynRank, Host>::from_host_vec_col_major(vec![1], vec![1]).expect("shape");
+    let mut destination =
+        TypedTensor::<_, DynRank, Host>::from_host_vec_col_major(vec![1], vec![0]).expect("shape");
     scalar_binary_into::<i32, AddOp>("add", &mut destination, &maximum, &one).expect("addition");
     assert_eq!(destination.as_slice(), &[i32::MIN]);
 
-    let minimum = HostTensor::from_vec_col_major(vec![1], vec![i32::MIN]).expect("shape");
+    let minimum = TypedTensor::<_, DynRank, Host>::from_host_vec_col_major(vec![1], vec![i32::MIN])
+        .expect("shape");
     scalar_binary_into::<i32, SubOp>("sub", &mut destination, &minimum, &one).expect("subtraction");
     assert_eq!(destination.as_slice(), &[i32::MAX]);
 
-    let large = HostTensor::from_vec_col_major(vec![1], vec![i64::MAX]).expect("shape");
-    let two = HostTensor::from_vec_col_major(vec![1], vec![2]).expect("shape");
-    let mut destination = HostTensor::from_vec_col_major(vec![1], vec![0]).expect("shape");
+    let large = TypedTensor::<_, DynRank, Host>::from_host_vec_col_major(vec![1], vec![i64::MAX])
+        .expect("shape");
+    let two =
+        TypedTensor::<_, DynRank, Host>::from_host_vec_col_major(vec![1], vec![2]).expect("shape");
+    let mut destination =
+        TypedTensor::<_, DynRank, Host>::from_host_vec_col_major(vec![1], vec![0]).expect("shape");
     scalar_binary_into::<i64, MulOp>("mul", &mut destination, &large, &two).expect("product");
     assert_eq!(destination.as_slice(), &[i64::MAX.wrapping_mul(2)]);
 
     // The reduction folds through the same contract.
     let total = scalar_fold::<i32, AddOp>(
         "sum",
-        &HostTensor::from_vec_col_major(vec![2], vec![i32::MAX, 1]).expect("shape"),
+        &TypedTensor::<_, DynRank, Host>::from_host_vec_col_major(vec![2], vec![i32::MAX, 1])
+            .expect("shape"),
         0,
     )
     .expect("reduction");

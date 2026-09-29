@@ -23,7 +23,7 @@
 ///
 /// let value = DefaultScalars::from_vec_col_major(vec![1], vec![1.0_f64])?;
 /// assert_eq!(value.tag(), tenferro_tensor_core::DType::F64);
-/// # Ok::<(), tenferro_tensor_core::ValidationError>(())
+/// # Ok::<(), tenferro_tensor::Error>(())
 /// ```
 pub trait ScalarSet: Clone + core::fmt::Debug + 'static {
     /// Tag identifying one member of this set.
@@ -41,7 +41,7 @@ pub trait ScalarSet: Clone + core::fmt::Debug + 'static {
     ///
     /// let value = DefaultScalars::from_vec_col_major(vec![1], vec![1.0_f64])?;
     /// assert_eq!(value.tag(), DType::F64);
-    /// # Ok::<(), tenferro_tensor_core::ValidationError>(())
+    /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
     fn tag(&self) -> Self::Tag;
 
@@ -64,14 +64,15 @@ pub trait ScalarSet: Clone + core::fmt::Debug + 'static {
 ///
 /// The declaration lists each member once. The macro emits the tag enum, the
 /// value enum whose variants hold a
-/// [`HostTensor`](tenferro_tensor::HostTensor) of the member type, and the
+/// host [`TypedTensor`](crate::TypedTensor) (`TypedTensor<T, DynRank, Host>`)
+/// of the member type, and the
 /// [`ScalarSet`] implementation. A downstream crate invokes this in its own
 /// crate, so tenferro never needs to know the set.
 ///
 /// # Examples
 ///
 /// ```rust
-/// use tenferro_tensor::{define_scalar_set, HostTensor, ScalarSet};
+/// use tenferro_tensor::{define_scalar_set, DynRank, Host, ScalarSet, TypedTensor};
 ///
 /// define_scalar_set! {
 ///     /// Tag for a two-member set.
@@ -85,10 +86,13 @@ pub trait ScalarSet: Clone + core::fmt::Debug + 'static {
 ///     pub enum Pair;
 /// }
 ///
-/// let value = Pair::F32(HostTensor::from_vec_col_major(vec![1], vec![1.0_f32])?);
+/// let value = Pair::F32(TypedTensor::<f32, DynRank, Host>::from_host_vec_col_major(
+///     vec![1],
+///     vec![1.0_f32],
+/// )?);
 /// assert_eq!(value.tag(), PairTag::F32);
 /// assert_eq!(<Pair as ScalarSet>::TAGS, &[PairTag::F64, PairTag::F32]);
-/// # Ok::<(), tenferro_tensor_core::ValidationError>(())
+/// # Ok::<(), tenferro_tensor::Error>(())
 /// ```
 #[macro_export]
 macro_rules! define_scalar_set {
@@ -116,11 +120,11 @@ macro_rules! define_scalar_set {
         }
 
         $(#[$set_meta])*
-        #[derive(Clone, Debug, PartialEq)]
+        #[derive(Clone, Debug)]
         $set_vis enum $set {
             $(
                 $(#[$variant_meta])*
-                $variant($crate::HostTensor<$ty>),
+                $variant($crate::TypedTensor<$ty, $crate::DynRank, $crate::Host>),
             )+
         }
 

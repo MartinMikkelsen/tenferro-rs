@@ -15,11 +15,12 @@ use tenferro_df64_proof::Df64;
 use tenferro_runtime::extension::apply;
 use tenferro_runtime::{GraphCompiler, Runtime, TracedTensor};
 use tenferro_tensor::{DType, Tensor};
-use tenferro_tensor::{ErasedHostTensor, HostTensor};
+use tenferro_tensor::{DynRank, ErasedHostTensor, Host, TypedTensor};
 
 fn external(values: Vec<Df64>, shape: Vec<usize>) -> Tensor {
     Tensor::external(ErasedHostTensor::new(
-        HostTensor::from_vec_col_major(shape, values).expect("shape matches data"),
+        TypedTensor::<_, DynRank, Host>::from_host_vec_col_major(shape, values)
+            .expect("shape matches data"),
     ))
 }
 

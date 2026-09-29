@@ -5289,21 +5289,19 @@ pub trait TensorScalar: Copy + Clone + Send + Sync + 'static + private::Sealed {
     /// ```
     /// use tenferro_tensor::{DType, TensorScalar};
     ///
-    /// let set = <f64 as TensorScalar>::into_default_scalars(vec![2].into(), vec![1.0, 2.0])?;
+    /// let set = <f64 as TensorScalar>::into_default_scalars(vec![2], vec![1.0, 2.0])?;
     /// assert_eq!(set.dtype(), DType::F64);
-    /// # Ok::<(), tenferro_tensor_core::ValidationError>(())
+    /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
     ///
     /// # Errors
     ///
-    /// Returns [`tenferro_tensor_core::ValidationError::ShapeDataLengthMismatch`]
-    /// when the shape product differs from `data.len()`, or
-    /// [`tenferro_tensor_core::ValidationError::IntegerOverflow`] when shape
-    /// arithmetic overflows.
+    /// Returns [`crate::Error::Validation`] when the shape product differs from
+    /// `data.len()` or shape arithmetic overflows.
     fn into_default_scalars(
-        shape: tenferro_tensor_core::ShapeVec,
+        shape: Vec<usize>,
         data: Vec<Self>,
-    ) -> tenferro_tensor_core::Result<crate::DefaultScalars>;
+    ) -> crate::Result<crate::DefaultScalars>;
 
     /// Borrow the default scalar set's values when it holds this scalar type.
     ///
@@ -5317,7 +5315,7 @@ pub trait TensorScalar: Copy + Clone + Send + Sync + 'static + private::Sealed {
     /// let set = DefaultScalars::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?;
     /// assert_eq!(<f64 as TensorScalar>::default_scalars_slice(&set), Some(&[1.0, 2.0][..]));
     /// assert!(<f32 as TensorScalar>::default_scalars_slice(&set).is_none());
-    /// # Ok::<(), tenferro_tensor::ValidationError>(())
+    /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
     fn default_scalars_slice(set: &crate::DefaultScalars) -> Option<&[Self]>;
 
@@ -5335,7 +5333,7 @@ pub trait TensorScalar: Copy + Clone + Send + Sync + 'static + private::Sealed {
     ///     values[0] = 5.0;
     /// }
     /// assert_eq!(set.as_slice::<f64>()?, &[5.0, 2.0]);
-    /// # Ok::<(), tenferro_tensor::ValidationError>(())
+    /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
     fn default_scalars_slice_mut(set: &mut crate::DefaultScalars) -> Option<&mut [Self]>;
 
@@ -5352,9 +5350,10 @@ pub trait TensorScalar: Copy + Clone + Send + Sync + 'static + private::Sealed {
     /// let host = <f64 as TensorScalar>::from_default_scalars(set);
     /// assert_eq!(host.as_ref().map(|t| t.shape()), Some(&[2][..]));
     /// assert_eq!(host.as_ref().map(|t| t.as_slice()), Some(&[1.0, 2.0][..]));
-    /// # Ok::<(), tenferro_tensor::ValidationError>(())
+    /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
-    fn from_default_scalars(set: crate::DefaultScalars) -> Option<crate::HostTensor<Self>>;
+    fn from_default_scalars(set: crate::DefaultScalars)
+        -> Option<TypedTensor<Self, DynRank, Host>>;
 
     /// Wrap typed column-major data into a [`Tensor`] enum variant.
     ///
@@ -5549,19 +5548,21 @@ macro_rules! impl_tensor_scalar {
             }
 
             fn into_default_scalars(
-                shape: tenferro_tensor_core::ShapeVec,
+                shape: Vec<usize>,
                 data: Vec<Self>,
-            ) -> tenferro_tensor_core::Result<crate::DefaultScalars> {
-                crate::HostTensor::from_vec_col_major(shape, data).map(|tensor| {
-                    crate::DefaultScalars::from_payload(
-                        crate::host_container::DefaultScalarsValue::$variant(tensor),
-                    )
-                })
+            ) -> crate::Result<crate::DefaultScalars> {
+                TypedTensor::<Self, DynRank, Host>::from_host_vec_col_major(shape, data).map(
+                    |tensor| {
+                        crate::DefaultScalars::from_payload(
+                            crate::default_scalars::DefaultScalarsValue::$variant(tensor),
+                        )
+                    },
+                )
             }
 
             fn default_scalars_slice(set: &crate::DefaultScalars) -> Option<&[Self]> {
                 match set.payload() {
-                    crate::host_container::DefaultScalarsValue::$variant(tensor) => {
+                    crate::default_scalars::DefaultScalarsValue::$variant(tensor) => {
                         Some(tensor.as_slice())
                     }
                     _ => None,
@@ -5570,16 +5571,18 @@ macro_rules! impl_tensor_scalar {
 
             fn default_scalars_slice_mut(set: &mut crate::DefaultScalars) -> Option<&mut [Self]> {
                 match set.payload_mut() {
-                    crate::host_container::DefaultScalarsValue::$variant(tensor) => {
-                        Some(tensor.as_mut_slice())
+                    crate::default_scalars::DefaultScalarsValue::$variant(tensor) => {
+                        Some(tensor.host_data_mut())
                     }
                     _ => None,
                 }
             }
 
-            fn from_default_scalars(set: crate::DefaultScalars) -> Option<crate::HostTensor<Self>> {
+            fn from_default_scalars(
+                set: crate::DefaultScalars,
+            ) -> Option<TypedTensor<Self, DynRank, Host>> {
                 match set.into_payload() {
-                    crate::host_container::DefaultScalarsValue::$variant(tensor) => Some(tensor),
+                    crate::default_scalars::DefaultScalarsValue::$variant(tensor) => Some(tensor),
                     _ => None,
                 }
             }
@@ -5765,14 +5768,16 @@ impl Tensor {
     ///
     /// ```rust
     /// use tenferro_tensor::{DType, Tensor};
-    /// use tenferro_tensor::{ErasedHostTensor, HostTensor};
+    /// use tenferro_tensor::{DynRank, ErasedHostTensor, Host, TypedTensor};
     ///
-    /// let payload = ErasedHostTensor::new(HostTensor::from_vec_col_major(vec![1], vec![1.0_f64])?);
+    /// let payload = ErasedHostTensor::new(
+    ///     TypedTensor::<f64, DynRank, Host>::from_host_vec_col_major(vec![1], vec![1.0_f64])?,
+    /// );
     /// let element = payload.element_type_id();
     /// let tensor = Tensor::external(payload);
     /// assert_eq!(tensor.dtype(), DType::External(element));
     /// assert_eq!(tensor.shape(), &[1]);
-    /// # Ok::<(), tenferro_tensor_core::ValidationError>(())
+    /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
     #[must_use]
     pub fn external(payload: crate::ErasedHostTensor) -> Self {
@@ -5815,12 +5820,14 @@ impl Tensor {
     ///
     /// ```
     /// use tenferro_tensor::Tensor;
-    /// use tenferro_tensor::{ErasedHostTensor, HostTensor};
+    /// use tenferro_tensor::{DynRank, ErasedHostTensor, Host, TypedTensor};
     ///
-    /// let payload = ErasedHostTensor::new(HostTensor::from_vec_col_major(vec![1], vec![1.0_f64])?);
+    /// let payload = ErasedHostTensor::new(
+    ///     TypedTensor::<f64, DynRank, Host>::from_host_vec_col_major(vec![1], vec![1.0_f64])?,
+    /// );
     /// let tensor = Tensor::external(payload);
     /// assert!(tensor.external_payload().is_some());
-    /// # Ok::<(), tenferro_tensor_core::ValidationError>(())
+    /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
     #[must_use]
     pub fn external_payload(&self) -> Option<&crate::ErasedHostTensor> {
@@ -5840,12 +5847,14 @@ impl Tensor {
     ///
     /// ```
     /// use tenferro_tensor::{Placement, Tensor};
-    /// use tenferro_tensor::{ErasedHostTensor, HostTensor};
+    /// use tenferro_tensor::{DynRank, ErasedHostTensor, Host, TypedTensor};
     ///
-    /// let payload = ErasedHostTensor::new(HostTensor::from_vec_col_major(vec![1], vec![1.0_f64])?);
+    /// let payload = ErasedHostTensor::new(
+    ///     TypedTensor::<f64, DynRank, Host>::from_host_vec_col_major(vec![1], vec![1.0_f64])?,
+    /// );
     /// let tensor = Tensor::external_with_placement(payload, Placement::default());
     /// assert!(tensor.external_payload().is_some());
-    /// # Ok::<(), tenferro_tensor_core::ValidationError>(())
+    /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
     #[must_use]
     pub fn external_with_placement(payload: crate::ErasedHostTensor, placement: Placement) -> Self {
@@ -5863,13 +5872,13 @@ impl Tensor {
     ///
     /// ```
     /// use tenferro_tensor::Tensor;
-    /// use tenferro_tensor::{ErasedHostTensor, HostTensor};
+    /// use tenferro_tensor::{DynRank, ErasedHostTensor, Host, TypedTensor};
     ///
     /// let mut tensor = Tensor::external(ErasedHostTensor::new(
-    ///     HostTensor::from_vec_col_major(vec![1], vec![1.0_f64])?,
+    ///     TypedTensor::<f64, DynRank, Host>::from_host_vec_col_major(vec![1], vec![1.0_f64])?,
     /// ));
     /// assert!(tensor.external_payload_mut().is_some());
-    /// # Ok::<(), tenferro_tensor_core::ValidationError>(())
+    /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
     #[must_use]
     pub fn external_payload_mut(&mut self) -> Option<&mut crate::ErasedHostTensor> {

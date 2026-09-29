@@ -17,7 +17,7 @@ pub use op::{AddOp, BinaryScalarOp, MulOp, SubOp};
 
 use strided_kernel::{reduce, zip_map2_into, StridedView, StridedViewMut};
 use tenferro_tensor::col_major_strides;
-use tenferro_tensor::HostTensor;
+use tenferro_tensor::{DynRank, Host, TypedTensor};
 
 fn strides_for(shape: &[usize]) -> crate::Result<Vec<isize>> {
     col_major_strides(shape)
@@ -43,11 +43,11 @@ fn require_same_shape(op: &'static str, lhs: &[usize], rhs: &[usize]) -> crate::
 ///
 /// ```rust
 /// use tenferro_internal_cpu_kernels::scalar_ops::{scalar_binary_into, AddOp};
-/// use tenferro_tensor::HostTensor;
+/// use tenferro_tensor::{DynRank, Host, TypedTensor};
 ///
-/// let lhs = HostTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?;
-/// let rhs = HostTensor::from_vec_col_major(vec![2], vec![10.0_f64, 20.0])?;
-/// let mut out = HostTensor::from_vec_col_major(vec![2], vec![0.0_f64, 0.0])?;
+/// let lhs = TypedTensor::<_, DynRank, Host>::from_host_vec_col_major(vec![2], vec![1.0_f64, 2.0])?;
+/// let rhs = TypedTensor::<_, DynRank, Host>::from_host_vec_col_major(vec![2], vec![10.0_f64, 20.0])?;
+/// let mut out = TypedTensor::<_, DynRank, Host>::from_host_vec_col_major(vec![2], vec![0.0_f64, 0.0])?;
 /// scalar_binary_into::<f64, AddOp>("add", &mut out, &lhs, &rhs)?;
 /// assert_eq!(out.as_slice(), &[11.0, 22.0]);
 /// # Ok::<(), Box<dyn std::error::Error>>(())
@@ -59,9 +59,9 @@ fn require_same_shape(op: &'static str, lhs: &[usize], rhs: &[usize]) -> crate::
 /// or [`Error::BackendSource`] when the underlying strided traversal rejects the views.
 pub fn scalar_binary_into<T, Op>(
     op: &'static str,
-    destination: &mut HostTensor<T>,
-    lhs: &HostTensor<T>,
-    rhs: &HostTensor<T>,
+    destination: &mut TypedTensor<T, DynRank, Host>,
+    lhs: &TypedTensor<T, DynRank, Host>,
+    rhs: &TypedTensor<T, DynRank, Host>,
 ) -> crate::Result<()>
 where
     T: Copy + Send + Sync,
@@ -73,7 +73,7 @@ where
     let strides = strides_for(lhs.shape())?;
     let destination_shape = destination.shape().to_vec();
     let mut destination_view: StridedViewMut<'_, T> =
-        StridedViewMut::new(destination.as_mut_slice(), &destination_shape, &strides, 0)
+        StridedViewMut::new(destination.host_data_mut(), &destination_shape, &strides, 0)
             .map_err(|err| crate::Error::backend_source(op, err))?;
     let lhs_view: StridedView<'_, T> = StridedView::new(lhs.as_slice(), lhs.shape(), &strides, 0)
         .map_err(|err| crate::Error::backend_source(op, err))?;
@@ -97,9 +97,9 @@ where
 ///
 /// ```rust
 /// use tenferro_internal_cpu_kernels::scalar_ops::{scalar_fold, AddOp};
-/// use tenferro_tensor::HostTensor;
+/// use tenferro_tensor::{DynRank, Host, TypedTensor};
 ///
-/// let values = HostTensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0])?;
+/// let values = TypedTensor::<_, DynRank, Host>::from_host_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0])?;
 /// let total = scalar_fold::<f64, AddOp>("sum", &values, 0.0_f64)?;
 /// assert_eq!(total, 6.0);
 /// # Ok::<(), Box<dyn std::error::Error>>(())
@@ -109,7 +109,11 @@ where
 ///
 /// Returns [`Error::BackendSource`] when the strided reduction rejects the view, which
 /// happens when the source's shape has an invalid stride layout.
-pub fn scalar_fold<T, Op>(op: &'static str, source: &HostTensor<T>, init: T) -> crate::Result<T>
+pub fn scalar_fold<T, Op>(
+    op: &'static str,
+    source: &TypedTensor<T, DynRank, Host>,
+    init: T,
+) -> crate::Result<T>
 where
     T: Copy + Send + Sync,
     Op: BinaryScalarOp<T>,

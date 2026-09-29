@@ -8,10 +8,10 @@
 //! read sees the permuted order without any narrowing.
 
 use tenferro_bf16_proof::Bf16;
-use tenferro_tensor::{ErasedHostTensor, HostTensor};
+use tenferro_tensor::{DynRank, ErasedHostTensor, Host, TypedTensor};
 
 fn payload(values: &[f32], shape: &[usize]) -> ErasedHostTensor {
-    let host = HostTensor::from_vec_col_major(
+    let host = TypedTensor::<_, DynRank, Host>::from_host_vec_col_major(
         shape.to_vec(),
         values.iter().copied().map(Bf16::from_f32).collect(),
     )

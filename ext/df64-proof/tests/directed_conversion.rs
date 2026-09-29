@@ -8,16 +8,19 @@
 use tenferro_cpu::{scalar_binary_into, AddOp, SubOp};
 use tenferro_df64_proof::{conversion, Df64};
 use tenferro_tensor::{DType, Tensor};
-use tenferro_tensor::{ErasedHostTensor, HostTensor};
+use tenferro_tensor::{DynRank, ErasedHostTensor, Host, TypedTensor};
 
 fn external_df64(values: &[Df64]) -> Tensor {
     Tensor::external(ErasedHostTensor::new(
-        HostTensor::from_vec_col_major(vec![values.len()], values.to_vec())
-            .expect("shape matches data"),
+        TypedTensor::<_, DynRank, Host>::from_host_vec_col_major(
+            vec![values.len()],
+            values.to_vec(),
+        )
+        .expect("shape matches data"),
     ))
 }
 
-fn payload_of(tensor: &Tensor) -> &HostTensor<Df64> {
+fn payload_of(tensor: &Tensor) -> &TypedTensor<Df64, DynRank, Host> {
     match tensor.external_payload() {
         Some(payload) => payload.downcast_ref::<Df64>().expect("df64 payload"),
         None => panic!("expected an external payload"),
@@ -30,7 +33,7 @@ fn values_of(tensor: &Tensor) -> &[Df64] {
 
 /// The mutable public projection reaches the payload, so a destination is filled
 /// without a copy back into the caller's tensor.
-fn destination_for(tensor: &mut Tensor) -> &mut HostTensor<Df64> {
+fn destination_for(tensor: &mut Tensor) -> &mut TypedTensor<Df64, DynRank, Host> {
     match tensor.external_payload_mut() {
         Some(payload) => payload.downcast_mut::<Df64>().expect("df64 payload"),
         None => panic!("expected an external payload"),
@@ -166,7 +169,8 @@ fn a_directed_conversion_rejects_a_payload_of_another_element_type() {
     assert!(conversion::to_f64(&other).is_ok());
 
     let foreign = Tensor::external(ErasedHostTensor::new(
-        HostTensor::from_vec_col_major(vec![1], vec![7_i64]).expect("shape matches data"),
+        TypedTensor::<_, DynRank, Host>::from_host_vec_col_major(vec![1], vec![7_i64])
+            .expect("shape matches data"),
     ));
     assert!(conversion::to_f64(&foreign).is_err());
     assert!(conversion::to_df64(&foreign).is_err());

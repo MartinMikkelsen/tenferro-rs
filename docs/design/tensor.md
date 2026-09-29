@@ -23,9 +23,10 @@ buffers, CUDA, BLAS/LAPACK providers, execution traits, runtime caches, or AD.
   static rank and a representation marker: `Host` (a plain or pooled `Vec<T>`,
   with infallible host access, `Clone` and `Index`), `Gpu` (group-backed
   storage with checked host access) or `Dynamic` (either, decided at runtime),
-- the host container family (`HostTensor`, `HostTensorView`, `DefaultScalars`,
-  `ScalarSet`, `define_scalar_set!`, `ErasedHostTensor`), moved here from core
-  by #1938,
+- the scalar-set layer (`DefaultScalars`, `ScalarSet`, `define_scalar_set!`)
+  and the dtype-erased external value `ErasedHostTensor`, whose payloads are
+  `TypedTensor<T, DynRank, Host>`; there is no separate host container
+  (#1946 F8),
 - dtype-erased dynamic-rank `Tensor`,
 - `TypedTensorView<'a, T, R, D>` and `TypedTensorViewMut<'a, T, R, D>` for
   borrowed strided views carrying the same representation marker,

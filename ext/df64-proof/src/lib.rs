@@ -3,7 +3,7 @@
 //! This crate exists to show that the ordinary CPU numerical path in
 //! `tenferro-cpu` does not require the preset scalar types. It defines its own
 //! real scalar as a two-`f64` expansion, stores it in
-//! [`tenferro_tensor::HostTensor`], and executes through
+//! a host [`tenferro_tensor::TypedTensor`], and executes through
 //! [`tenferro_cpu::scalar_binary_into`] and [`tenferro_cpu::scalar_fold`] using
 //! the same traversal the preset scalars use.
 //!
@@ -42,13 +42,13 @@ tenferro_tensor::define_scalar_set! {
     ///
     /// ```rust
     /// use tenferro_df64_proof::{Df64, ExtendedSet, ExtendedTag};
-    /// use tenferro_tensor::{HostTensor, ScalarSet};
+    /// use tenferro_tensor::{DynRank, Host, ScalarSet, TypedTensor};
     ///
     /// let value = ExtendedSet::Df64(
-    ///     HostTensor::from_vec_col_major(vec![1], vec![Df64::from_f64(2.0)])?,
+    ///     TypedTensor::<_, DynRank, Host>::from_host_vec_col_major(vec![1], vec![Df64::from_f64(2.0)])?,
     /// );
     /// assert_eq!(value.tag(), ExtendedTag::Df64);
-    /// # Ok::<(), tenferro_tensor_core::ValidationError>(())
+    /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
     pub enum ExtendedSet;
 }

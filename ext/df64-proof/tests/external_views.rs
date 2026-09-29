@@ -8,11 +8,11 @@
 use tenferro_cpu::scalar_fold;
 use tenferro_df64_proof::{Df64, Df64Add};
 use tenferro_tensor::{DType, Tensor};
-use tenferro_tensor::{ErasedHostTensor, HostTensor};
+use tenferro_tensor::{DynRank, ErasedHostTensor, Host, TypedTensor};
 
 fn payload(values: &[Df64], shape: &[usize]) -> ErasedHostTensor {
     ErasedHostTensor::new(
-        HostTensor::from_vec_col_major(shape.to_vec(), values.to_vec())
+        TypedTensor::<_, DynRank, Host>::from_host_vec_col_major(shape.to_vec(), values.to_vec())
             .expect("shape matches data"),
     )
 }
@@ -194,7 +194,8 @@ fn a_sum_reduction_over_a_view_retains_low_order_information() {
             values.push(*view.element_at::<Df64>(&[first, second]).expect("in range"));
         }
     }
-    let dense = HostTensor::from_vec_col_major(vec![4], values).expect("shape matches data");
+    let dense = TypedTensor::<_, DynRank, Host>::from_host_vec_col_major(vec![4], values)
+        .expect("shape matches data");
 
     let total = scalar_fold::<Df64, Df64Add>("sum", &dense, Df64::zero()).expect("reduction");
     // 1 + 2^-80 + 2^-80 = 1 + 2^-79 exactly.

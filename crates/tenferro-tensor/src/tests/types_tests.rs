@@ -2323,10 +2323,12 @@ fn erased_payload_accessors_cover_every_preset_dtype() {
 
 #[test]
 fn an_external_payload_is_carried_by_the_value_type() {
-    use crate::{ErasedHostTensor, HostTensor};
+    use crate::{DynRank, ErasedHostTensor, Host};
 
-    let payload =
-        ErasedHostTensor::new(HostTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap());
+    let payload = ErasedHostTensor::new(
+        TypedTensor::<f64, DynRank, Host>::from_host_vec_col_major(vec![2], vec![1.0_f64, 2.0])
+            .unwrap(),
+    );
     let element = payload.element_type_id();
     let tensor = Tensor::external(payload);
 
@@ -2349,7 +2351,7 @@ fn an_external_payload_is_carried_by_the_value_type() {
             payload
                 .downcast_mut::<f64>()
                 .expect("payload type")
-                .as_mut_slice()[0] = 9.0;
+                .host_data_mut()[0] = 9.0;
             assert_eq!(
                 payload.as_dense::<f64>().expect("dense payload").0,
                 &[9.0, 2.0]

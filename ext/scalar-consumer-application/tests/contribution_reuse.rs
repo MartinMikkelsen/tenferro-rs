@@ -12,15 +12,16 @@
 use tenferro_cpu::scalar_binary_into;
 use tenferro_df64_proof::{Df64, Df64Add, ExtendedSet};
 use tenferro_scalar_consumer_application::ApplicationSet;
-use tenferro_tensor::HostTensor;
 use tenferro_tensor::ScalarSet;
+use tenferro_tensor::{DynRank, Host, TypedTensor};
 
-fn vector(values: Vec<Df64>) -> HostTensor<Df64> {
-    HostTensor::from_vec_col_major(vec![values.len()], values).expect("shape matches data")
+fn vector(values: Vec<Df64>) -> TypedTensor<Df64, DynRank, Host> {
+    TypedTensor::<_, DynRank, Host>::from_host_vec_col_major(vec![values.len()], values)
+        .expect("shape matches data")
 }
 
 /// The member the contribution's own set stores.
-fn member_of_the_contribution_set() -> HostTensor<Df64> {
+fn member_of_the_contribution_set() -> TypedTensor<Df64, DynRank, Host> {
     match ExtendedSet::Df64(vector(vec![Df64::from_f64(1.0)])) {
         ExtendedSet::Df64(value) => value,
         other => panic!(
@@ -31,7 +32,7 @@ fn member_of_the_contribution_set() -> HostTensor<Df64> {
 }
 
 /// The same member as the application's set stores it under its own tag.
-fn member_of_the_application_set() -> HostTensor<Df64> {
+fn member_of_the_application_set() -> TypedTensor<Df64, DynRank, Host> {
     match ApplicationSet::Df64(vector(vec![Df64::from_f64(1.0)])) {
         ApplicationSet::Df64(value) => value,
         other => panic!(

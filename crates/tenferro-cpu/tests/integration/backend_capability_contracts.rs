@@ -569,13 +569,13 @@ fn tensor_public_surface_has_no_context_free_materialization_api() {
         "to_contiguous",
         "to_tensor",
     ]);
-    // D4 host-container compaction: tenferro-tensor owns a host container whose
-    // compaction copies host elements with no backend, session or device, and
-    // `ErasedHostTensor` exposes exactly that. It is the named exception to this
+    // D4 host-container compaction: tenferro-tensor's dtype-erased host values
+    // (the default scalar set and `ErasedHostTensor`) compact by copying host
+    // elements with no backend, session or device. They are the named exception to this
     // rule, so those two modules are excluded from the *public materialization*
     // name check while every other check below still covers them. The exclusion
     // is only sound while they stay host-only, which the next assertion pins.
-    const HOST_CONTAINER_MODULES: [&str; 2] = ["host_container.rs", "erased_host.rs"];
+    const HOST_CONTAINER_MODULES: [&str; 2] = ["default_scalars.rs", "erased_host.rs"];
     // A host-only exception has to stay host-only, so the excluded modules are
     // also required to contain no backend/device vocabulary: the identifiers a
     // context-free materialization could hide behind, including under a new name.

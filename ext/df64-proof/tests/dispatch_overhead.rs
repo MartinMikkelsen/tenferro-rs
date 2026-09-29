@@ -28,7 +28,7 @@ use tenferro_df64_proof::{Df64, Df64Add};
 use tenferro_runtime::extension::apply;
 use tenferro_runtime::{GraphCompiler, Runtime, TracedTensor};
 use tenferro_tensor::{DType, Tensor};
-use tenferro_tensor::{ErasedHostTensor, HostTensor};
+use tenferro_tensor::{DynRank, ErasedHostTensor, Host, TypedTensor};
 
 /// Counts every allocation the test process makes.
 struct Counting;
@@ -81,7 +81,8 @@ fn runtime() -> (Runtime, usize) {
 
 fn external(values: Vec<Df64>, shape: Vec<usize>) -> Tensor {
     Tensor::external(ErasedHostTensor::new(
-        HostTensor::from_vec_col_major(shape, values).expect("shape matches data"),
+        TypedTensor::<_, DynRank, Host>::from_host_vec_col_major(shape, values)
+            .expect("shape matches data"),
     ))
 }
 
@@ -139,7 +140,8 @@ fn report_session_and_dispatch_overhead_for_a_contribution_operation() {
         .expect("prepared contribution program");
 
     // (c) The contribution's body, with neither session nor dispatch in the way.
-    let stored = HostTensor::from_vec_col_major(vec![2], values).expect("shape matches data");
+    let stored = TypedTensor::<_, DynRank, Host>::from_host_vec_col_major(vec![2], values)
+        .expect("shape matches data");
 
     // Preparation is one-shot per program, so it is measured once rather than averaged.
     let ordinary_prepare = {

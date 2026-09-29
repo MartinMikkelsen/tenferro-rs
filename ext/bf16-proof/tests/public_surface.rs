@@ -7,12 +7,12 @@
 use tenferro_bf16_proof::reduction::product_in_f32_accumulation;
 use tenferro_bf16_proof::{bf16, Bf16, Bf16Add, Bf16Mul, Bf16Set, Bf16Sub, Bf16Tag};
 use tenferro_cpu::BinaryScalarOp;
-use tenferro_tensor::HostTensor;
 use tenferro_tensor::ScalarSet;
+use tenferro_tensor::{DynRank, Host, TypedTensor};
 use tenferro_tensor_core::{Scalar, ScalarArithmetic, ScalarDomain};
 
-fn tensor(values: &[f32]) -> HostTensor<Bf16> {
-    HostTensor::from_vec_col_major(
+fn tensor(values: &[f32]) -> TypedTensor<Bf16, DynRank, Host> {
+    TypedTensor::<_, DynRank, Host>::from_host_vec_col_major(
         vec![values.len()],
         values.iter().copied().map(Bf16::from_f32).collect(),
     )
@@ -74,7 +74,8 @@ fn the_operation_types_apply_through_the_shared_trait() {
 fn the_set_carries_both_members_and_reports_their_tags() {
     let narrow = Bf16Set::Bf16(tensor(&[1.0, 2.0]));
     let wide = Bf16Set::F32(
-        HostTensor::from_vec_col_major(vec![2], vec![1.0_f32, 2.0]).expect("shape matches data"),
+        TypedTensor::<_, DynRank, Host>::from_host_vec_col_major(vec![2], vec![1.0_f32, 2.0])
+            .expect("shape matches data"),
     );
 
     assert_eq!(narrow.tag(), Bf16Tag::Bf16);

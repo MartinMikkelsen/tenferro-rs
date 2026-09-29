@@ -14,7 +14,7 @@ use tenferro_tensor::{
     BackendSessionHost, MemoryKind, Placement, Tensor, TensorRead, TensorView, TypedTensor,
     TypedTensorView,
 };
-use tenferro_tensor::{ErasedHostTensor, HostTensor};
+use tenferro_tensor::{DynRank, ErasedHostTensor, Host};
 
 use super::super::EagerTensor;
 
@@ -917,7 +917,8 @@ fn host_leaf_materialization_matches_the_cpu_backend_acceptance() -> Result<(), 
 
     // Declined: a caller-owned external scalar keeps the session path.
     let payload =
-        HostTensor::from_vec_col_major(vec![1], vec![7.0_f64]).expect("valid host tensor");
+        TypedTensor::<f64, DynRank, Host>::from_host_vec_col_major(vec![1], vec![7.0_f64])
+            .expect("valid host tensor");
     let external = Tensor::external(ErasedHostTensor::new(payload));
     assert!(backend
         .to_contiguous_host_read(&TensorRead::from_tensor(&external))

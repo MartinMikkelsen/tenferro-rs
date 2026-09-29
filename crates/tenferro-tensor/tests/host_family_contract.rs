@@ -1,11 +1,21 @@
 use num_complex::{Complex32, Complex64};
 use tenferro_tensor::{
-    DefaultScalars, DefaultScalarsRef, HostTensor, HostTensorView, TensorScalar,
+    DefaultScalars, DefaultScalarsRef, Error, Host, StridedSliceSpec, TensorScalar, TypedTensor,
+    TypedTensorView,
 };
+
 use tenferro_tensor_core::{
     col_major_strides, DType, DynRank, ErrorKind, IntoRankShape, Rank, ShapeMismatch, ShapeVec,
     SliceSpec, TensorLayout, TensorRank, ValidationError, ValidationKind,
 };
+
+/// Unwrap the validation source of a tensor error for exact-payload matches.
+fn validation(err: Error) -> ValidationError {
+    match err {
+        Error::Validation { source, .. } => source,
+        other => panic!("expected a validation error, got {other:?}"),
+    }
+}
 
 #[test]
 fn shape_mismatch_keeps_machine_readable_payload() {
@@ -33,14 +43,6 @@ fn public_error_kind_can_classify_validation() {
         ErrorKind::Validation(ValidationKind::RankMismatch),
         ErrorKind::Validation(ValidationKind::RankMismatch)
     );
-}
-
-#[test]
-fn host_tensor_uses_host_specific_public_name() {
-    let tensor = HostTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
-    let view: HostTensorView<'_, f64> = tensor.as_view();
-    assert_eq!(view.shape(), &[2]);
-    assert_eq!(view.as_slice().unwrap(), &[1.0, 2.0]);
 }
 
 #[test]
@@ -340,25 +342,6 @@ fn layout_rejects_non_empty_broadcast_shape_product_overflow() {
 }
 
 #[test]
-fn compact_host_tensor_view_reuses_checked_col_major_stride_helper() {
-    let source = include_str!("../src/host_container.rs");
-    let helper = source
-        .split("fn compact_col_major_strides")
-        .nth(1)
-        .and_then(|rest| rest.split("/// Return compact column-major strides").next())
-        .expect("compact_col_major_strides helper should exist");
-
-    assert!(
-        helper.contains("col_major_strides(shape)"),
-        "compact host view strides must not duplicate unchecked stride arithmetic"
-    );
-    assert!(
-        !helper.contains("stride *= extent as isize"),
-        "compact host view strides must avoid unchecked stride multiplication"
-    );
-}
-
-#[test]
 fn layout_from_parts_preserves_offset() {
     let layout =
         TensorLayout::<DynRank>::from_parts(vec![3].into(), vec![1].into(), 7, 10).unwrap();
@@ -476,13 +459,18 @@ fn layout_rejects_huge_non_empty_zero_stride_before_product_overflow() {
 
 #[test]
 fn constructs_contiguous_col_major_and_validates_count() {
-    let tensor = HostTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap();
+    let tensor = TypedTensor::<_, DynRank, Host>::from_host_vec_col_major(
+        vec![2, 2],
+        vec![1.0_f64, 2.0, 3.0, 4.0],
+    )
+    .unwrap();
     assert_eq!(tensor.shape(), &[2, 2]);
     assert_eq!(tensor.as_slice(), &[1.0, 2.0, 3.0, 4.0]);
 
-    let err = HostTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64]).unwrap_err();
+    let err = TypedTensor::<_, DynRank, Host>::from_host_vec_col_major(vec![2, 2], vec![1.0_f64])
+        .unwrap_err();
     assert!(matches!(
-        err,
+        validation(err),
         ValidationError::ShapeDataLengthMismatch {
             expected: 4,
             actual: 1
@@ -492,38 +480,47 @@ fn constructs_contiguous_col_major_and_validates_count() {
 
 #[test]
 fn owned_view_has_expected_shape_stride_offset() {
-    let tensor = HostTensor::from_vec_col_major(vec![2, 3], vec![0_i64; 6]).unwrap();
+    let tensor =
+        TypedTensor::<_, DynRank, Host>::from_host_vec_col_major(vec![2, 3], vec![0_i64; 6])
+            .unwrap();
     let view = tensor.as_view();
     assert_eq!(view.shape(), &[2, 3]);
     assert_eq!(view.strides(), &[1, 2]);
     assert_eq!(view.offset(), 0);
-    assert!(view.is_compact_col_major().unwrap());
-    assert!(view.is_zero_offset_col_major().unwrap());
+    assert!(view.layout().is_compact_col_major().unwrap());
 }
 
 #[test]
 fn reshape_view_requires_compact_col_major_but_allows_nonzero_offset() {
     let data = [10_i32, 11, 12, 13, 14, 15];
-    let compact_nonzero = HostTensorView::from_slice(vec![4], vec![1], 1, &data).unwrap();
-    let reshaped = compact_nonzero.reshape_view(vec![2, 2]).unwrap();
+    let compact_nonzero =
+        TypedTensorView::<_, DynRank, Host>::from_host_slice(vec![4], vec![1], 1, &data).unwrap();
+    let reshaped = compact_nonzero.reshape_view(&[2, 2]).unwrap();
     assert_eq!(reshaped.shape(), &[2, 2]);
     assert_eq!(reshaped.offset(), 1);
     assert_eq!(reshaped.as_slice().unwrap(), &[11, 12, 13, 14]);
 
-    let non_contiguous = HostTensorView::from_slice(vec![2, 2], vec![1, 3], 0, &data).unwrap();
-    let err = non_contiguous.reshape_view(vec![4]).unwrap_err();
-    assert!(matches!(err, ValidationError::NonContiguousViewAsSlice));
+    let non_contiguous =
+        TypedTensorView::<_, DynRank, Host>::from_host_slice(vec![2, 2], vec![1, 3], 0, &data)
+            .unwrap();
+    let err = non_contiguous.reshape_view(&[4]).unwrap_err();
+    assert!(matches!(
+        validation(err),
+        ValidationError::NonContiguousViewAsSlice
+    ));
 }
 
 #[test]
 fn transpose_view_only_reorders_metadata() {
-    let tensor = HostTensor::from_vec_col_major(vec![2, 3], vec![0_i64; 6]).unwrap();
-    let view = tensor.as_view().transpose_view(&[1, 0]).unwrap();
+    let tensor =
+        TypedTensor::<_, DynRank, Host>::from_host_vec_col_major(vec![2, 3], vec![0_i64; 6])
+            .unwrap();
+    let view = tensor.as_view().transpose_view([1, 0]).unwrap();
     assert_eq!(view.shape(), &[3, 2]);
     assert_eq!(view.strides(), &[2, 1]);
     assert_eq!(view.offset(), 0);
     assert!(matches!(
-        tensor.as_view().transpose_view(&[0, 0]).unwrap_err(),
+        validation(tensor.as_view().transpose_view([0, 0]).unwrap_err()),
         ValidationError::DuplicateAxis {
             axis: 0,
             role: "permutation",
@@ -533,14 +530,12 @@ fn transpose_view_only_reorders_metadata() {
 
 #[test]
 fn slice_view_positive_step_and_empty_slice() {
-    let tensor = HostTensor::from_vec_col_major(vec![5], vec![1_i64, 2, 3, 4, 5]).unwrap();
+    let tensor =
+        TypedTensor::<_, DynRank, Host>::from_host_vec_col_major(vec![5], vec![1_i64, 2, 3, 4, 5])
+            .unwrap();
     let view = tensor
         .as_view()
-        .slice_view(&[SliceSpec {
-            start: 1,
-            end: 5,
-            step: 2,
-        }])
+        .slice_view(&[StridedSliceSpec::new(1, Some(5), 2)])
         .unwrap();
     assert_eq!(view.shape(), &[2]);
     assert_eq!(view.strides(), &[2]);
@@ -548,39 +543,35 @@ fn slice_view_positive_step_and_empty_slice() {
 
     let empty = tensor
         .as_view()
-        .slice_view(&[SliceSpec {
-            start: 4,
-            end: 2,
-            step: 1,
-        }])
+        .slice_view(&[StridedSliceSpec::new(4, Some(2), 1)])
         .unwrap();
-    assert!(empty.is_empty());
+    assert!(empty.shape().contains(&0));
     assert_eq!(empty.as_slice().unwrap(), &[] as &[i64]);
 }
 
 #[test]
 fn invalid_slice_steps_and_negative_bounds_are_rejected() {
-    let tensor = HostTensor::from_vec_col_major(vec![3], vec![1_i64, 2, 3]).unwrap();
+    let tensor =
+        TypedTensor::<_, DynRank, Host>::from_host_vec_col_major(vec![3], vec![1_i64, 2, 3])
+            .unwrap();
     assert!(matches!(
-        tensor
-            .as_view()
-            .slice_view(&[SliceSpec {
-                start: 0,
-                end: 2,
-                step: 0
-            }])
-            .unwrap_err(),
+        validation(
+            tensor
+                .as_view()
+                .slice_view(&[StridedSliceSpec::new(0, Some(2), 0)])
+                .unwrap_err()
+        ),
         ValidationError::InvalidSliceStep { step: 0 }
     ));
+    // Strided slice bounds count negative values from the axis end, so only a
+    // bound that stays negative after normalization is rejected.
     assert!(matches!(
-        tensor
-            .as_view()
-            .slice_view(&[SliceSpec {
-                start: -1,
-                end: 2,
-                step: 1
-            }])
-            .unwrap_err(),
+        validation(
+            tensor
+                .as_view()
+                .slice_view(&[StridedSliceSpec::new(-4, Some(2), 1)])
+                .unwrap_err()
+        ),
         ValidationError::InvalidSliceBounds { .. }
     ));
 }
@@ -589,20 +580,35 @@ fn invalid_slice_steps_and_negative_bounds_are_rejected() {
 fn view_bounds_are_validated_eagerly_with_checked_arithmetic() {
     let data = [1_i32, 2, 3];
     assert!(matches!(
-        HostTensorView::from_slice(vec![4], vec![1], 0, &data).unwrap_err(),
+        validation(
+            TypedTensorView::<_, DynRank, Host>::from_host_slice(vec![4], vec![1], 0, &data)
+                .unwrap_err()
+        ),
         ValidationError::ViewOutOfBounds
     ));
     assert!(matches!(
-        HostTensorView::from_slice(vec![usize::MAX, 2], vec![1, 2], 0, &data).unwrap_err(),
+        validation(
+            TypedTensorView::<_, DynRank, Host>::from_host_slice(
+                vec![usize::MAX, 2],
+                vec![1, 2],
+                0,
+                &data
+            )
+            .unwrap_err()
+        ),
         ValidationError::IntegerOverflow
     ));
 
-    let reversed = HostTensorView::from_slice(vec![3], vec![-1], 2, &data).unwrap();
+    let reversed =
+        TypedTensorView::<_, DynRank, Host>::from_host_slice(vec![3], vec![-1], 2, &data).unwrap();
     assert_eq!(reversed.shape(), &[3]);
     assert_eq!(reversed.strides(), &[-1]);
     assert_eq!(reversed.offset(), 2);
     assert!(matches!(
-        HostTensorView::from_slice(vec![3], vec![-1], 1, &data).unwrap_err(),
+        validation(
+            TypedTensorView::<_, DynRank, Host>::from_host_slice(vec![3], vec![-1], 1, &data)
+                .unwrap_err()
+        ),
         ValidationError::ViewOutOfBounds
     ));
 }
@@ -610,12 +616,16 @@ fn view_bounds_are_validated_eagerly_with_checked_arithmetic() {
 #[test]
 fn empty_view_offsets_may_point_one_past_the_borrowed_slice() {
     let data = [1_i32, 2, 3];
-    let empty = HostTensorView::from_slice(vec![0], vec![-1], 3, &data).unwrap();
-    assert!(empty.is_empty());
+    let empty =
+        TypedTensorView::<_, DynRank, Host>::from_host_slice(vec![0], vec![-1], 3, &data).unwrap();
+    assert!(empty.shape().contains(&0));
     assert_eq!(empty.as_slice().unwrap(), &[] as &[i32]);
 
     assert!(matches!(
-        HostTensorView::from_slice(vec![0], vec![1], 4, &data).unwrap_err(),
+        validation(
+            TypedTensorView::<_, DynRank, Host>::from_host_slice(vec![0], vec![1], 4, &data)
+                .unwrap_err()
+        ),
         ValidationError::ViewOutOfBounds
     ));
 }
@@ -623,10 +633,12 @@ fn empty_view_offsets_may_point_one_past_the_borrowed_slice() {
 #[test]
 fn empty_views_are_contiguous_even_with_degenerate_strides() {
     let data = [1_i32, 2, 3];
-    let empty = HostTensorView::from_slice(vec![0, 3], vec![1, 0], 3, &data).unwrap();
-    assert!(empty.is_empty());
+    let empty =
+        TypedTensorView::<_, DynRank, Host>::from_host_slice(vec![0, 3], vec![1, 0], 3, &data)
+            .unwrap();
+    assert!(empty.shape().contains(&0));
     assert_eq!(empty.as_slice().unwrap(), &[] as &[i32]);
-    assert_eq!(empty.reshape_view(vec![0]).unwrap().shape(), &[0]);
+    assert_eq!(empty.reshape_view(&[0]).unwrap().shape(), &[0]);
 
     let layout =
         TensorLayout::<DynRank>::from_parts(vec![0, 3].into(), vec![99, -7].into(), 3, data.len())
@@ -662,13 +674,16 @@ fn empty_axis_allows_negative_step_slices() {
 #[test]
 fn as_slice_accepts_nonzero_offset_and_rejects_non_contiguous_views() {
     let data = [1_i32, 2, 3, 4, 5];
-    let contiguous = HostTensorView::from_slice(vec![3], vec![1], 1, &data).unwrap();
+    let contiguous =
+        TypedTensorView::<_, DynRank, Host>::from_host_slice(vec![3], vec![1], 1, &data).unwrap();
     assert_eq!(contiguous.as_slice().unwrap(), &[2, 3, 4]);
 
-    let non_contiguous = HostTensorView::from_slice(vec![2], vec![2], 0, &data).unwrap();
+    let non_contiguous =
+        TypedTensorView::<_, DynRank, Host>::from_host_slice(vec![2], vec![2], 0, &data).unwrap();
+    // The canonical view reports a non-contiguous layout as an invalid argument.
     assert!(matches!(
-        non_contiguous.as_slice().unwrap_err(),
-        ValidationError::NonContiguousViewAsSlice
+        validation(non_contiguous.as_slice().unwrap_err()),
+        ValidationError::InvalidArgument { .. }
     ));
 }
 
@@ -678,25 +693,24 @@ fn dynamic_tensor_and_view_report_dtype_mismatch() {
     assert_eq!(tensor.dtype(), DType::F64);
     assert_eq!(tensor.as_slice::<f64>().unwrap(), &[1.0, 2.0]);
     assert!(matches!(
-        tensor.as_slice::<f32>().unwrap_err(),
+        validation(tensor.as_slice::<f32>().unwrap_err()),
         ValidationError::DTypeMismatch {
             expected: DType::F32,
             actual: DType::F64
         }
     ));
     assert_eq!(
-        tensor.as_view().reshape_view(vec![1, 2]).unwrap().shape(),
+        tensor.as_view().reshape_view([1, 2]).unwrap().shape(),
         &[1, 2]
     );
 }
 
 #[test]
 fn tensor_scalar_into_tensor_rejects_shape_data_length_mismatch() {
-    let err =
-        <f64 as TensorScalar>::into_default_scalars(vec![2, 3].into(), vec![1.0, 2.0]).unwrap_err();
+    let err = <f64 as TensorScalar>::into_default_scalars(vec![2, 3], vec![1.0, 2.0]).unwrap_err();
 
     assert!(matches!(
-        err,
+        validation(err),
         ValidationError::ShapeDataLengthMismatch {
             expected: 6,
             actual: 2
@@ -707,43 +721,62 @@ fn tensor_scalar_into_tensor_rejects_shape_data_length_mismatch() {
 #[test]
 fn layout_helpers_and_col_major_roundtrip() {
     assert_eq!(col_major_strides(&[2, 3]).unwrap().as_slice(), &[1, 2]);
-    let tensor = HostTensor::from_vec_col_major(vec![2, 2], vec![1_i64, 3, 2, 4]).unwrap();
+    let tensor =
+        TypedTensor::<_, DynRank, Host>::from_host_vec_col_major(vec![2, 2], vec![1_i64, 3, 2, 4])
+            .unwrap();
     assert_eq!(tensor.as_slice(), &[1, 3, 2, 4]);
     assert_eq!(tensor.into_vec_col_major().1, vec![1, 3, 2, 4]);
 }
 
 #[test]
 fn typed_owned_accessors_and_exports_cover_success_and_errors() {
-    let mut tensor = HostTensor::from_vec_col_major(vec![2], vec![1_i32, 2]).unwrap();
+    let mut tensor =
+        TypedTensor::<_, DynRank, Host>::from_host_vec_col_major(vec![2], vec![1_i32, 2]).unwrap();
     assert_eq!(tensor.rank(), 1);
-    assert!(!tensor.is_empty());
-    tensor.as_mut_slice()[1] = 3;
+    assert!(!tensor.shape().contains(&0));
+    tensor.host_data_mut()[1] = 3;
     assert_eq!(tensor.as_slice(), &[1, 3]);
 
-    let reshaped = tensor.clone().into_reshaped(vec![1, 2]).unwrap();
+    // An owned reshape rebuilds the tensor from its column-major buffer.
+    let reshaped = TypedTensor::<_, DynRank, Host>::from_host_vec_col_major(
+        vec![1, 2],
+        tensor.clone().into_host_vec(),
+    )
+    .unwrap();
     assert_eq!(reshaped.shape(), &[1, 2]);
     assert!(matches!(
-        tensor.into_reshaped(vec![3]).unwrap_err(),
-        ValidationError::ShapeMismatch(ref mismatch)
-            if matches!(mismatch.as_ref(), ShapeMismatch::ReshapeElementCount { from: 2, to: 3 })
+        validation(
+            TypedTensor::<_, DynRank, Host>::from_host_vec_col_major(
+                vec![3],
+                tensor.into_host_vec()
+            )
+            .unwrap_err()
+        ),
+        ValidationError::ShapeDataLengthMismatch {
+            expected: 3,
+            actual: 2
+        }
     ));
 
     let (shape, data) = reshaped.into_vec_col_major();
     assert_eq!(shape.as_slice(), &[1, 2]);
     assert_eq!(data, vec![1, 3]);
 
-    let empty = HostTensor::<f64>::from_vec_col_major(vec![0], vec![]).unwrap();
-    assert!(empty.is_empty());
+    let empty =
+        TypedTensor::<f64, DynRank, Host>::from_host_vec_col_major(vec![0], vec![]).unwrap();
+    assert!(empty.shape().contains(&0));
 }
 
 #[test]
 fn scalar_col_major_helpers_cover_scalar_and_empty_shapes() {
-    let scalar = HostTensor::from_vec_col_major(vec![], vec![7_i64]).unwrap();
+    let scalar =
+        TypedTensor::<_, DynRank, Host>::from_host_vec_col_major(vec![], vec![7_i64]).unwrap();
     assert_eq!(scalar.shape(), &[] as &[usize]);
     assert_eq!(scalar.into_vec_col_major().1, vec![7]);
 
-    let empty = HostTensor::<i64>::from_vec_col_major(vec![0, 3], vec![]).unwrap();
-    assert!(empty.is_empty());
+    let empty =
+        TypedTensor::<i64, DynRank, Host>::from_host_vec_col_major(vec![0, 3], vec![]).unwrap();
+    assert!(empty.shape().contains(&0));
     assert_eq!(empty.into_vec_col_major().1, Vec::<i64>::new());
 }
 
@@ -792,7 +825,7 @@ fn dynamic_tensor_mutation_and_owned_exports_validate_dtype() {
     tensor.as_mut_slice::<f64>().unwrap()[0] = 5.0;
     assert_eq!(tensor.as_slice::<f64>().unwrap(), &[5.0, 2.0]);
     assert!(matches!(
-        tensor.as_mut_slice::<f32>().unwrap_err(),
+        validation(tensor.as_mut_slice::<f32>().unwrap_err()),
         ValidationError::DTypeMismatch {
             expected: DType::F32,
             actual: DType::F64
@@ -805,7 +838,7 @@ fn dynamic_tensor_mutation_and_owned_exports_validate_dtype() {
 
     let tensor = DefaultScalars::from_vec_col_major(vec![1], vec![1_i32]).unwrap();
     assert!(matches!(
-        tensor.into_vec_col_major::<i64>().unwrap_err(),
+        validation(tensor.into_vec_col_major::<i64>().unwrap_err()),
         ValidationError::DTypeMismatch {
             expected: DType::I64,
             actual: DType::I32
@@ -825,16 +858,8 @@ fn dynamic_col_major_and_view_metadata_ops_cover_all_variants() {
     let sliced = tensor
         .as_view()
         .slice_view(&[
-            SliceSpec {
-                start: 0,
-                end: 1,
-                step: 1,
-            },
-            SliceSpec {
-                start: 1,
-                end: 2,
-                step: 1,
-            },
+            StridedSliceSpec::new(0, Some(1), 1),
+            StridedSliceSpec::new(1, Some(2), 1),
         ])
         .unwrap();
     assert_eq!(sliced.shape(), &[1, 1]);
@@ -844,58 +869,55 @@ fn dynamic_col_major_and_view_metadata_ops_cover_all_variants() {
 fn view_validation_reports_rank_permutation_and_slice_errors() {
     let data = [1_i32, 2, 3, 4];
     assert!(matches!(
-        HostTensorView::from_slice(vec![2], vec![1, 2], 0, &data).unwrap_err(),
+        validation(
+            TypedTensorView::<_, DynRank, Host>::from_host_slice(vec![2], vec![1, 2], 0, &data)
+                .unwrap_err()
+        ),
         ValidationError::RankMismatch {
             expected: 1,
             actual: 2
         }
     ));
 
-    let tensor = HostTensor::from_vec_col_major(vec![2, 2], vec![1_i32, 2, 3, 4]).unwrap();
+    let tensor =
+        TypedTensor::<_, DynRank, Host>::from_host_vec_col_major(vec![2, 2], vec![1_i32, 2, 3, 4])
+            .unwrap();
     let view = tensor.as_view();
-    assert!(view.is_compact_col_major().unwrap());
+    assert!(view.layout().is_compact_col_major().unwrap());
     assert!(matches!(
-        view.transpose_view(&[0]).unwrap_err(),
+        validation(view.transpose_view([0]).unwrap_err()),
         ValidationError::InvalidPermutationLength {
             expected: 2,
             actual: 1
         }
     ));
     assert!(matches!(
-        view.transpose_view(&[0, 2]).unwrap_err(),
+        validation(view.transpose_view([0, 2]).unwrap_err()),
         ValidationError::AxisOutOfBounds { axis: 2, rank: 2 }
     ));
     assert!(matches!(
-        view.reshape_view(vec![3]).unwrap_err(),
+        validation(view.reshape_view(&[3]).unwrap_err()),
         ValidationError::ShapeMismatch(ref mismatch)
             if matches!(mismatch.as_ref(), ShapeMismatch::ReshapeElementCount { from: 4, to: 3 })
     ));
     assert!(matches!(
-        view.slice_view(&[SliceSpec {
-            start: 0,
-            end: 1,
-            step: 1
-        }])
-        .unwrap_err(),
+        validation(
+            view.slice_view(&[StridedSliceSpec::new(0, Some(1), 1)])
+                .unwrap_err()
+        ),
         ValidationError::RankMismatch {
             expected: 2,
             actual: 1
         }
     ));
     assert!(matches!(
-        view.slice_view(&[
-            SliceSpec {
-                start: 0,
-                end: 3,
-                step: 1,
-            },
-            SliceSpec {
-                start: 0,
-                end: 1,
-                step: 1,
-            },
-        ])
-        .unwrap_err(),
+        validation(
+            view.slice_view(&[
+                StridedSliceSpec::new(0, Some(3), 1),
+                StridedSliceSpec::new(0, Some(1), 1),
+            ])
+            .unwrap_err()
+        ),
         ValidationError::InvalidSliceBounds {
             start: 0,
             end: 3,

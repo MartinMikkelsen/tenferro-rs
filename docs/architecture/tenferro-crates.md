@@ -192,15 +192,17 @@ Rules:
   GPU, BLAS/LAPACK provider crates, backend buffers, runtime caches, or AD.
 - `tenferro-tensor-core` must not expose public `TypedTensor` aliases.
   Backend-capable typed tensors are owned by `tenferro-tensor`.
-- `tenferro-tensor-core` must not own a tensor-storage family. The host
-  container (`HostTensor`, `HostTensorView`), the default scalar set
-  (`DefaultScalars`), the scalar-set trait and its declaration macro, and the
-  dtype-erased external value (`ErasedHostTensor`, its erased views) belong to
-  `tenferro-tensor` beside the canonical owner and views. Core keeps the scalar
+- `tenferro-tensor-core` must not own a tensor-storage family. There is one
+  public tensor family, in `tenferro-tensor`: host data is the canonical
+  `TypedTensor<T, R, Host>` / `TypedTensorView<'a, T, R, Host>`, and the
+  default scalar set (`DefaultScalars`), the scalar-set trait and its
+  declaration macro, and the dtype-erased external value (`ErasedHostTensor`)
+  are built on it rather than on a second host container (#1946 F8). Core keeps the scalar
   tags and their promotion facts (`DType`, `TensorScalar`, `define_scalar_tag!`,
   `MemberKind`, `MemberSpec`, `promote_specs`, `promote_in_set`) and the
   rank/layout metadata and validation.
-- `define_scalar_set!` expands `$crate::HostTensor` from `tenferro-tensor`, so a
+- `define_scalar_set!` expands `$crate::TypedTensor<_, $crate::DynRank, $crate::Host>`
+  from `tenferro-tensor`, so a
   crate that declares its own scalar set depends on `tenferro-tensor` (not only
   `tenferro-tensor-core`).
 - `tenferro-tensor` owns concrete runtime tensor values, arbitrary-stride typed

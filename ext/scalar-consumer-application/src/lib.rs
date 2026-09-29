@@ -41,13 +41,13 @@ tenferro_tensor::define_scalar_set! {
     /// ```rust
     /// use tenferro_df64_proof::Df64;
     /// use tenferro_scalar_consumer_application::{ApplicationSet, ApplicationTag};
-    /// use tenferro_tensor::{HostTensor, ScalarSet};
+    /// use tenferro_tensor::{DynRank, Host, ScalarSet, TypedTensor};
     ///
     /// let value = ApplicationSet::Df64(
-    ///     HostTensor::from_vec_col_major(vec![1], vec![Df64::from_f64(2.0)])?,
+    ///     TypedTensor::<_, DynRank, Host>::from_host_vec_col_major(vec![1], vec![Df64::from_f64(2.0)])?,
     /// );
     /// assert_eq!(value.tag(), ApplicationTag::Df64);
-    /// # Ok::<(), tenferro_tensor_core::ValidationError>(())
+    /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
     pub enum ApplicationSet;
 }
