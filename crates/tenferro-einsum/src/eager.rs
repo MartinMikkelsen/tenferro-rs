@@ -942,20 +942,6 @@ fn eager_einsum_exec_values_with_output<'a, 'o>(
     ))
 }
 
-/// Run a whole einsum contraction tree in one backend session.
-///
-/// Unlike [`eager_einsum_subscripts_on_session`], the caller supplies the
-/// contraction `tree`, so a known-good external path (e.g. cotengra
-/// `opt_flops`) can be executed whole-program without re-planning.
-#[cfg(all(feature = "autodiff", test))]
-pub(crate) fn eager_einsum_with_tree(
-    exec: &mut dyn BackendSession,
-    inputs: &[&Tensor],
-    tree: &ContractionTree,
-) -> Result<Tensor> {
-    eager_einsum_exec(exec, inputs, tree)
-}
-
 pub(crate) fn eager_einsum_exec(
     exec: &mut dyn BackendSession,
     inputs: &[&Tensor],
@@ -1295,17 +1281,6 @@ pub(crate) fn eager_einsum_subscripts_on_session(
     let plan = ConcreteEinsumPlan::prepare_subscripts(inputs, &EinsumSubscripts::from(subscripts))
         .map_err(into_tensor_error)?;
     plan.execute(inputs, session).map_err(into_tensor_error)
-}
-
-#[cfg(feature = "autodiff")]
-pub(crate) fn eager_einsum_subscripts_with_session(
-    exec: &mut dyn BackendSession,
-    inputs: &[&Tensor],
-    subscripts: &Subscripts,
-) -> Result<Tensor> {
-    let shapes: Vec<&[usize]> = inputs.iter().map(|tensor| tensor.shape()).collect();
-    let tree = plan_subscripts(subscripts, &shapes)?;
-    eager_einsum_exec(exec, inputs, &tree)
 }
 
 /// Eager N-ary einsum on read-only tensor inputs.

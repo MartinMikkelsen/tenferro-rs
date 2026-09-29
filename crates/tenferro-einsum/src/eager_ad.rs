@@ -25,7 +25,7 @@ use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::input_key::TensorInputKey;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_runtime::{ErrorPhase, ExtensionCacheKey, ExtensionModule};
-use tenferro_tensor::{ErrorKind, ShapeMismatch, Tensor, ValidationError, ValidationKind};
+use tenferro_tensor::{ErrorKind, ShapeMismatch, ValidationError, ValidationKind};
 
 use crate::binary_dot::{try_build_exact_output_binary_dot_plan, BinaryDotOperandOrder};
 use crate::builder::build_einsum_graph;
@@ -265,10 +265,6 @@ fn einsum_subscripts_with_broadcast(
         return result;
     }
 
-    if let Some(result) = try_whole_program_untracked(inputs, subscripts)? {
-        return Ok(result);
-    }
-
     let output_shape_hint = infer_eager_output_shape(subscripts, inputs)?;
     if !requires_broadcast(inputs, subscripts) {
         if let Some(result) = try_expand_eager_einsum(inputs, subscripts)? {
@@ -359,129 +355,6 @@ fn exact_dot_shapes(
             .iter()
             .zip(&config.rhs_batch_dims)
             .all(|(&lhs, &rhs)| lhs_shape[lhs] == rhs_shape[rhs])
-}
-
-/// Whether the untracked whole-program eager einsum executor is enabled.
-///
-/// Prototype gate (issue #1060 follow-up): when set, untracked N-ary eager
-/// einsum runs the whole contraction in one backend session via
-/// [`crate::eager::eager_einsum_subscripts_on_session`] instead of executing
-/// the expanded program one standard op at a time. Tracked (`requires_grad`)
-/// inputs keep the existing per-op path so eager AD recording semantics are
-/// unchanged.
-fn whole_program_untracked_enabled() -> bool {
-    std::env::var_os("TENFERRO_EAGER_WHOLE_PROGRAM").is_some()
-}
-
-/// Run an untracked eager einsum as a single backend-session program.
-///
-/// Returns `None` (so the caller falls back to the per-op expanded path) when
-/// the gate is off, there are no inputs, any input tracks gradients, or the
-/// inputs do not all share one runtime.
-fn try_whole_program_untracked(
-    inputs: &[&EagerTensor],
-    subscripts: &EinsumSubscripts,
-) -> Result<Option<EagerTensor>> {
-    if !whole_program_untracked_enabled() {
-        return Ok(None);
-    }
-    let Some(first) = inputs.first() else {
-        return Ok(None);
-    };
-    if inputs.iter().any(|tensor| tensor.tracks_grad()) {
-        return Ok(None);
-    }
-    let runtime = first.runtime();
-    if inputs
-        .iter()
-        .any(|tensor| !Arc::ptr_eq(tensor.runtime(), runtime))
-    {
-        return Ok(None);
-    }
-
-    let subs = Subscripts::from(subscripts);
-    let tensor_owners = inputs
-        .iter()
-        .map(|tensor| tensor.to_tensor().map_err(Error::Runtime))
-        .collect::<Result<Vec<Tensor>>>()?;
-    let tensors: Vec<_> = tensor_owners.iter().collect();
-    let result = runtime.with_execution_session(|backend| {
-        crate::eager::eager_einsum_subscripts_with_session(backend, &tensors, &subs)
-    })??;
-    Ok(Some(EagerTensor::from_tensor_in(result, runtime.clone())?))
-}
-
-/// Run an untracked whole-program eager einsum on an explicit contraction tree.
-///
-/// Prototype/benchmark entry (issue #1060 follow-up). Executes the whole
-/// contraction in one backend session on the caller-provided path (e.g. an
-/// externally optimized `opt_flops` order via [`crate::ContractionTree::from_pairs`]),
-/// instead of one eager op per expanded step. All inputs must be untracked and
-/// share one runtime; tracked inputs should use the per-op path to keep eager
-/// AD semantics.
-///
-/// # Examples
-///
-/// ```
-/// use tenferro_ad::{EagerRuntime, EagerTensor};
-/// use tenferro_cpu::CpuBackend;
-/// use tenferro_einsum::{ContractionTree, Subscripts};
-/// use tenferro_tensor::Tensor;
-///
-/// let runtime = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
-/// let a = EagerTensor::from_tensor_in(
-///     Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]).unwrap(),
-///     runtime.clone(),
-/// ).unwrap();
-/// let b = EagerTensor::from_tensor_in(
-///     Tensor::from_vec_col_major(vec![3, 4], vec![1.0_f64; 12]).unwrap(),
-///     runtime,
-/// ).unwrap();
-/// let subs = Subscripts::parse("ij,jk->ik").unwrap();
-/// let tree = ContractionTree::from_pairs(&subs, &[&[2, 3], &[3, 4]], &[(0, 1)]).unwrap();
-/// let out = einsum_whole_program_untracked(&[&a, &b], &tree)?;
-/// assert_eq!(out.shape(), &[2, 4]);
-/// # Ok::<(), tenferro_ad::error::Error>(())
-/// ```
-#[cfg(test)]
-fn einsum_whole_program_untracked(
-    inputs: &[&EagerTensor],
-    tree: &crate::ContractionTree,
-) -> Result<EagerTensor> {
-    let first = inputs.first().ok_or_else(|| {
-        Error::invalid_argument(
-            "einsum",
-            "inputs",
-            "einsum requires at least one input tensor",
-        )
-    })?;
-    if inputs.iter().any(|tensor| tensor.tracks_grad()) {
-        return Err(Error::invalid_argument(
-            "einsum",
-            "inputs",
-            "whole-program eager einsum requires untracked inputs",
-        ));
-    }
-    let runtime = first.runtime();
-    if inputs
-        .iter()
-        .any(|tensor| !Arc::ptr_eq(tensor.runtime(), runtime))
-    {
-        return Err(Error::invalid_argument(
-            "einsum",
-            "inputs",
-            "whole-program eager einsum requires inputs from one runtime",
-        ));
-    }
-    let tensor_owners = inputs
-        .iter()
-        .map(|tensor| tensor.to_tensor().map_err(Error::Runtime))
-        .collect::<Result<Vec<Tensor>>>()?;
-    let tensors: Vec<_> = tensor_owners.iter().collect();
-    let result = runtime.with_execution_session(|backend| {
-        crate::eager::eager_einsum_with_tree(backend, &tensors, tree)
-    })??;
-    EagerTensor::from_tensor_in(result, runtime.clone()).map_err(Error::Runtime)
 }
 
 fn try_expand_eager_einsum(
