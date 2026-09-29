@@ -505,6 +505,7 @@ host	tenferro-gpu	cubecl::dispatch::tests::owned_capability_rejection_preserves_
 host	tenferro-gpu	cubecl::error::tests::provider_status_preserves_classification_and_source
 host	tenferro-gpu	cubecl::error::tests::unsupported_dtype_preserves_classification_and_source
 host	tenferro-gpu	cubecl::error::tests::workspace_overflow_preserves_classification_and_source
+gpu	tenferro-gpu	cubecl::ffi::cutensor::tests::cutensor_library_is_loaded_once_per_process
 host	tenferro-gpu	cubecl::ffi::cutensor::tests::cutensor_loader_missing_library_is_typed_io_error
 host	tenferro-gpu	cubecl::ffi::cutensor::tests::cutensor_sm70_guard_uses_reproduced_version_boundary
 host	tenferro-gpu	cubecl::tests::shared_workspace_tests::default_retention_cap_is_ten_gib
@@ -1009,6 +1010,7 @@ host	tenferro-linalg	cpu::tests::single_entry::triangular_solve_read_two_noncomp
 host	tenferro-linalg	error::tests::provider_status_keeps_typed_backend_source
 host	tenferro-linalg	extension::cuda_tests::session_support_admits_cuda_full_svd_and_still_rejects_the_missing_kernels
 host	tenferro-linalg	gpu::ffi::tests::cusolver_cuda_data_type_has_c_abi_integer_layout
+gpu	tenferro-linalg	gpu::ffi::tests::vendor_libraries_are_loaded_once_per_process
 host	tenferro-linalg	gpu::linalg::tests::auto_driver_keeps_jax_compatible_threshold
 host	tenferro-linalg	gpu::linalg::tests::eigh_batches_take_a_batched_routine_at_every_order
 host	tenferro-linalg	gpu::linalg::tests::eigh_single_matrices_keep_the_per_matrix_entry_points

@@ -144,3 +144,13 @@ fn vendor_status_and_interop_failures_are_backend_errors_with_typed_sources() {
         assert!(tensor_error.source().is_some());
     }
 }
+
+#[test]
+#[ignore = "requires the cuFFT runtime library"]
+fn cufft_library_is_loaded_once_per_process() {
+    // Every plan owner shares one loaded library, so dropping backends never
+    // unloads and reloads cuFFT (#1924).
+    let first = CufftLibrary::load().unwrap();
+    let second = CufftLibrary::load().unwrap();
+    assert!(std::sync::Arc::ptr_eq(&first, &second));
+}

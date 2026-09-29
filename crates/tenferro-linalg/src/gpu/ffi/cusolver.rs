@@ -1461,7 +1461,7 @@ unsafe fn load_symbol<T: Copy>(
 
 type GetVersionFn = unsafe extern "C" fn(*mut i32) -> CusolverStatus;
 
-struct CusolverLibrary {
+pub(super) struct CusolverLibrary {
     _lib: Library,
     vtable: CusolverVtable,
     /// cuSOLVER library version (e.g. 11403 for 11.4.3).
@@ -1476,7 +1476,22 @@ unsafe impl Send for CusolverLibrary {}
 unsafe impl Sync for CusolverLibrary {}
 
 impl CusolverLibrary {
-    fn load() -> Result<Arc<Self>> {
+    /// The process-wide cuSOLVER library, loaded on first success.
+    ///
+    /// Handles share one loaded library and never unload it, so creating and
+    /// dropping backends does not reload the vendor library each cycle
+    /// (#1924). A failed load is not cached, and `TENFERRO_CUSOLVER_PATH` is read until the
+    /// first success.
+    pub(super) fn load() -> Result<Arc<Self>> {
+        static LOADED: std::sync::OnceLock<Arc<CusolverLibrary>> = std::sync::OnceLock::new();
+        if let Some(library) = LOADED.get() {
+            return Ok(Arc::clone(library));
+        }
+        let library = Self::load_uncached()?;
+        Ok(Arc::clone(LOADED.get_or_init(|| library)))
+    }
+
+    fn load_uncached() -> Result<Arc<Self>> {
         let paths = library_search_paths("TENFERRO_CUSOLVER_PATH", CUSOLVER_DEFAULT_PATHS);
         let mut errors = Vec::new();
         let mut last_source = None;
@@ -1542,7 +1557,7 @@ impl CusolverLibrary {
     }
 }
 
-struct CublasLibrary {
+pub(super) struct CublasLibrary {
     _lib: Library,
     vtable: CublasVtable,
 }
@@ -1555,7 +1570,22 @@ unsafe impl Send for CublasLibrary {}
 unsafe impl Sync for CublasLibrary {}
 
 impl CublasLibrary {
-    fn load() -> Result<Arc<Self>> {
+    /// The process-wide cuBLAS library, loaded on first success.
+    ///
+    /// Handles share one loaded library and never unload it, so creating and
+    /// dropping backends does not reload the vendor library each cycle
+    /// (#1924). A failed load is not cached, and `TENFERRO_CUBLAS_PATH` is read until the
+    /// first success.
+    pub(super) fn load() -> Result<Arc<Self>> {
+        static LOADED: std::sync::OnceLock<Arc<CublasLibrary>> = std::sync::OnceLock::new();
+        if let Some(library) = LOADED.get() {
+            return Ok(Arc::clone(library));
+        }
+        let library = Self::load_uncached()?;
+        Ok(Arc::clone(LOADED.get_or_init(|| library)))
+    }
+
+    fn load_uncached() -> Result<Arc<Self>> {
         let paths = library_search_paths("TENFERRO_CUBLAS_PATH", CUBLAS_DEFAULT_PATHS);
         let mut errors = Vec::new();
         let mut last_source = None;
