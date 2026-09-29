@@ -1,4 +1,4 @@
-# CPU performance follow-ups on the #1938 session redesign
+# CPU and GPU follow-ups on the #1938 session redesign
 
 Covers #1897, #1898, #1899, #1904 (in-session costs only) and #1884, stacked
 on the #1944 session phase. The durable `Auto` rules live in D9 of
@@ -49,6 +49,19 @@ on the #1944 session phase. The durable `Auto` rules live in D9 of
   half, provider-threaded `?getrf` per small matrix, still needs an engine-level
   scheduling decision.
 
+- **GPU (#1923, #1924, #1925).**
+  - `cusolverDnXsyevBatched` now takes computeType equal to the type of A.
+  - Each CUDA vendor library (cuTENSOR, cuSOLVER, cuBLAS, cuFFT) is loaded
+    once per process. A failed load is not cached.
+  - Borrowed read views reuse the buffer's memoized device address, as owned
+    operands already did.
+  - Borrowed destinations keep the blocking `get_resource`. It orders the
+    vendor write after CubeCL work that is still queued and may read the
+    destination. The owned-destination fast path skips that ordering: a vendor
+    write through a memoized address could overtake a queued CubeCL read of
+    the same buffer. That write-after-read window predates this change and is
+    left for a separate decision.
+
 ## Verification conclusions and constraints
 
 - Value tests cover:
@@ -71,3 +84,12 @@ on the #1944 session phase. The durable `Auto` rules live in D9 of
 - BLAS batched-LU timings were not re-measured. No local OpenBLAS here provides
   both LAPACK and `cblas_?gemm_batch` for a release probe.
 - Regression cases for these fixes are added to tenferro-benchmark separately.
+- GPU measurements come from a local A100:
+  - Vendor-library churn: before, RSS grew 410 → 3114 MB in 50 create/drop
+    cycles; after, it stays flat at about 662 MB over 300 cycles.
+  - In-session view-operand GEMMs: 36.6 → 19.7 µs at 8×8, against 18.5 µs for
+    owned operands.
+  - The local GPU suites pass, apart from two things. One source-contract
+    needle was updated for the refactor. Nine tenferro-linalg doctests
+    (`shape() == &[]`) fail to infer types under `--features cuda`; they are
+    untouched by this branch, and hosted CI does not run cuda doctests.
