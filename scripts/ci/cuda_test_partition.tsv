@@ -655,6 +655,7 @@ host	tenferro-gpu	cubecl::tests::memoized_addr_tests::every_in_place_launch_help
 host	tenferro-gpu	cubecl::tests::memoized_addr_tests::every_write_binding_helper_invalidates_the_memoized_address
 gpu	tenferro-gpu	cubecl::tests::memoized_addr_tests::queued_cubecl_write_drops_the_memoized_device_address
 gpu	tenferro-gpu	cubecl::tests::memoized_addr_tests::queued_scale_write_drops_the_memoized_device_address
+gpu	tenferro-gpu	cubecl::tests::memoized_addr_tests::view_reads_share_the_root_memo_and_observe_queued_writes
 host	tenferro-gpu	cubecl::tests::metadata_tests::cubecl_buffers_keep_domain_and_distinguish_allocations
 host	tenferro-gpu	cubecl::tests::metadata_tests::cubecl_metadata_uses_dense_column_major_strides
 host	tenferro-gpu	cubecl::tests::metadata_tests::cuda_backend_exposes_extension_cache_retained_byte_controls

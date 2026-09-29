@@ -1245,8 +1245,9 @@ fn cubecl_raw_device_pointer_paths_are_not_public() {
         &[
             "ensure_resident_on_runtime(rt, tensor, op)?;",
             "let prepared = prepared_tensor_access(tensor, op)?;",
-            "let handle = prepared.into_handle();",
-            ".get_resource(handle)",
+            "memoized_device_addr(rt, buffer, prepared, op)?;",
+            "fn memoized_device_addr(",
+            ".get_resource(prepared.into_handle())",
         ],
     );
 }

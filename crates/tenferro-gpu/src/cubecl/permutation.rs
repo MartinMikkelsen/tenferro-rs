@@ -11,9 +11,9 @@ use tenferro_tensor::{
 };
 
 use super::dispatch::{
-    ensure_resident_on_runtime, ensure_view_mut_resident_on_runtime,
+    cubecl_view_buffer, ensure_resident_on_runtime, ensure_view_mut_resident_on_runtime,
     ensure_view_resident_on_runtime, prepared_tensor_access, prepared_view_access,
-    prepared_view_mut_access, CubeclPreparedAccess,
+    prepared_view_mut_access,
 };
 use super::ffi::cutensor::{
     CudaDataType, CutensorComputeDescriptor, CutensorCudaStream, CutensorHandle, CutensorOperator,
@@ -575,14 +575,12 @@ where
     let (output_extents, output_strides, output_modes) =
         real_view_operand::<T>(op, &output_extents, &output_strides, &output_modes)?;
     let input_res = resolve_prepared_device_region::<T>(
-        backend.runtime(),
-        prepared_view_access(src, op)?,
+        view_read_base_addr(backend.runtime(), src, op)?,
         src.offset(),
         op,
     )?;
     let output_res = resolve_prepared_device_region::<T>(
-        backend.runtime(),
-        prepared_view_mut_access(dst, op)?,
+        view_write_base_addr(backend.runtime(), dst, op)?,
         dst.offset(),
         op,
     )?;
@@ -816,7 +814,44 @@ where
     R: TensorRank,
 {
     ensure_view_resident_on_runtime(rt, view, op)?;
-    resolve_prepared_device_region::<T>(rt, prepared_view_access(view, op)?, view.offset(), op)
+    resolve_prepared_device_region::<T>(view_read_base_addr(rt, view, op)?, view.offset(), op)
+}
+
+/// The root base address for a borrowed read: shares the buffer's memoized
+/// address instead of a blocking round trip per view (#1925).
+fn view_read_base_addr<T, R>(
+    rt: &CudaRuntime,
+    view: &TypedTensorView<'_, T, R>,
+    op: &'static str,
+) -> crate::Result<u64>
+where
+    T: TensorScalar + 'static,
+    R: TensorRank,
+{
+    super::gemm::memoized_device_addr(
+        rt,
+        cubecl_view_buffer(view, op)?,
+        prepared_view_access(view, op)?,
+        op,
+    )
+}
+
+/// The root base address for a borrowed destination. The blocking round trip
+/// orders the vendor write after queued CubeCL work on the stream.
+fn view_write_base_addr<T, R>(
+    rt: &CudaRuntime,
+    view: &mut TypedTensorViewMut<'_, T, R>,
+    op: &'static str,
+) -> crate::Result<u64>
+where
+    T: TensorScalar + 'static,
+    R: TensorRank,
+{
+    let resource = rt
+        .client()
+        .get_resource(prepared_view_mut_access(view, op)?.into_handle())
+        .map_err(|err| Error::backend_source(op, err))?;
+    Ok(resource.resource().ptr)
 }
 
 fn typed_device_ptr<T, R>(
@@ -837,8 +872,7 @@ where
 }
 
 fn resolve_prepared_device_region<T: TensorScalar + 'static>(
-    rt: &CudaRuntime,
-    prepared: CubeclPreparedAccess,
+    base_addr: u64,
     offset: isize,
     op: &'static str,
 ) -> crate::Result<ResolvedPermutationOperand> {
@@ -849,20 +883,12 @@ fn resolve_prepared_device_region<T: TensorScalar + 'static>(
             format!("view offset {offset} must be nonnegative for cuTENSOR permutation"),
         )
     })?;
-    let resource = rt
-        .client()
-        .get_resource(prepared.into_handle())
-        .map_err(|err| Error::backend_source(op, err))?;
     let offset_bytes = (offset as u64)
         .checked_mul(std::mem::size_of::<T>() as u64)
         .ok_or_else(|| Error::invalid_argument(op, "layout", "view byte offset overflows u64"))?;
-    let addr = resource
-        .resource()
-        .ptr
-        .checked_add(offset_bytes)
-        .ok_or_else(|| {
-            Error::invalid_argument(op, "layout", "view device address overflows u64")
-        })?;
+    let addr = base_addr.checked_add(offset_bytes).ok_or_else(|| {
+        Error::invalid_argument(op, "layout", "view device address overflows u64")
+    })?;
     Ok(resolved_operand(cuda_device_ptr_from_addr(addr, op)?))
 }
 

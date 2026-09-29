@@ -24,7 +24,7 @@ use super::plan_cache::LruPlanCache;
 use super::{CudaBackend, CudaRuntime};
 use crate::config::DotGeneralConfig;
 use crate::kernels::structural;
-use crate::{col_major_strides, Error, Tensor, TypedTensor};
+use crate::{col_major_strides, CubeclBuffer, Error, Tensor, TypedTensor};
 use tenferro_tensor::{
     CacheStats, ContractionScalar, DType, DotGeneralAccumulation, TensorRead, TensorScalar,
     TensorView, TensorViewMut, TensorWrite, TypedTensorView, TypedTensorViewMut,
@@ -1022,7 +1022,10 @@ where
         ReadOperand::View(view) => {
             ensure_view_resident_on_runtime(rt, view, OP)?;
             let prepared = prepared_view_access(view, OP)?;
-            resolve_prepared_device_region::<T>(rt, prepared, view.strides(), view.offset())
+            // A read shares the root buffer's memoized address, like an
+            // owned operand, instead of a blocking round trip per view (#1925).
+            let base = memoized_device_addr(rt, cubecl_view_buffer(view, OP)?, prepared, OP)?;
+            resolve_prepared_device_region::<T>(base, view.strides(), view.offset())
         }
     }
 }
@@ -1044,7 +1047,15 @@ where
         WriteOperand::View(view) => {
             ensure_view_mut_resident_on_runtime(rt, view, OP)?;
             let prepared = prepared_view_mut_access(view, OP)?;
-            resolve_prepared_device_region::<T>(rt, prepared, view.strides(), view.offset())
+            // A borrowed destination keeps the blocking round trip, which
+            // orders the vendor write after queued CubeCL work on the stream.
+            let base = rt
+                .client()
+                .get_resource(prepared.into_handle())
+                .map_err(|err| Error::backend_source(OP, err))?
+                .resource()
+                .ptr;
+            resolve_prepared_device_region::<T>(base, view.strides(), view.offset())
         }
     }
 }
@@ -1054,8 +1065,7 @@ where
 /// element strides, and the alignment actually guaranteed by the effective
 /// byte address.
 fn resolve_prepared_device_region<T: CutensorScalar + 'static>(
-    rt: &CudaRuntime,
-    prepared: CubeclPreparedAccess,
+    base_addr: u64,
     strides: &[isize],
     offset: isize,
 ) -> crate::Result<ResolvedOperand<'static>> {
@@ -1074,17 +1084,10 @@ fn resolve_prepared_device_region<T: CutensorScalar + 'static>(
     }
     let offset = usize::try_from(offset)
         .map_err(|_| Error::invalid_argument(OP, "layout", "view offset must be nonnegative"))?;
-    let handle = prepared.into_handle();
-    let resource = rt
-        .client()
-        .get_resource(handle)
-        .map_err(|err| Error::backend_source(OP, err))?;
     let offset_bytes = offset
         .checked_mul(std::mem::size_of::<T>())
         .ok_or_else(|| Error::invalid_argument(OP, "layout", "view byte offset overflows"))?;
-    let addr = resource
-        .resource()
-        .ptr
+    let addr = base_addr
         .checked_add(offset_bytes as u64)
         .ok_or_else(|| Error::invalid_argument(OP, "layout", "view device address overflows"))?;
     // INVARIANT: CubeCL root allocations are at least 256-byte aligned, and
@@ -1525,30 +1528,42 @@ pub(super) fn typed_device_ptr<T: TensorScalar + 'static>(
     ensure_resident_on_runtime(rt, tensor, op)?;
     let prepared = prepared_tensor_access(tensor, op)?;
     let buffer = cubecl_buffer(tensor, op)?;
-    // Fast path: reuse the buffer's memoized device address when executing on
-    // the stream that created the allocation. In that case `get_resource` is
-    // only a pointer lookup — CubeCL's cross-stream alignment pass skips
-    // bindings whose creation stream equals the current stream — so no
-    // synchronization is lost. Any other stream takes the full `get_resource`
-    // round trip below, preserving CubeCL's cross-stream alignment.
+    let addr = memoized_device_addr(rt, buffer, prepared, op)?;
+    // The residency check above ties this raw FFI pointer to the caller's runtime/device.
+    cuda_device_ptr_from_addr(addr, op)
+}
+
+/// The device base address of `buffer` for a raw vendor call, without a
+/// blocking server round trip when it is already known.
+///
+/// Fast path: reuse the buffer's memoized device address when executing on
+/// the stream that created the allocation. In that case `get_resource` is
+/// only a pointer lookup — CubeCL's cross-stream alignment pass skips
+/// bindings whose creation stream equals the current stream — so no
+/// synchronization is lost. Any other stream takes the full `get_resource`
+/// round trip, preserving CubeCL's cross-stream alignment. A queued CubeCL
+/// write drops the memoized address (#1868), so a raw call never reads ahead
+/// of it. Borrowed views share their root buffer's memo (#1925).
+pub(super) fn memoized_device_addr(
+    rt: &CudaRuntime,
+    buffer: &CubeclBuffer,
+    prepared: CubeclPreparedAccess,
+    op: &'static str,
+) -> crate::Result<u64> {
     let same_stream = StreamId::current() == buffer.handle().stream;
     if same_stream {
         if let Some(addr) = buffer.cached_device_addr() {
-            // The residency check above ties this raw FFI pointer to the
-            // caller's runtime/device.
-            return cuda_device_ptr_from_addr(addr, op);
+            return Ok(addr);
         }
     }
-    let handle = prepared.into_handle();
     let resource = rt
         .client()
-        .get_resource(handle)
+        .get_resource(prepared.into_handle())
         .map_err(|err| crate::Error::backend_source(op, err))?;
     let addr = resource.resource().ptr;
     // See `CubeclBuffer::device_addr` for the address-stability invariant.
     buffer.memoize_device_addr(addr);
-    // The residency check above ties this raw FFI pointer to the caller's runtime/device.
-    cuda_device_ptr_from_addr(addr, op)
+    Ok(addr)
 }
 
 fn build_layout(

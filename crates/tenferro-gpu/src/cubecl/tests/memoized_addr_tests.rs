@@ -210,3 +210,92 @@ fn every_write_binding_helper_invalidates_the_memoized_address() {
         "expected the mutable CubeCL binding helpers to be found, saw {checked}"
     );
 }
+
+/// Issue #1925: a borrowed read view shares its root buffer's memoized
+/// address instead of a blocking `get_resource` per operand, and still sees a
+/// CubeCL write queued before it.
+#[test]
+#[ignore = "requires CUDA"]
+fn view_reads_share_the_root_memo_and_observe_queued_writes() {
+    use tenferro_tensor::{BackendSessionHost, TensorDot as _, TensorRead, TensorView};
+
+    assert!(gpu_available(), "requires a CUDA device");
+    let mut backend = CudaBackend::new(CudaDeviceId::from_ordinal(0)).unwrap();
+    let rt = backend.runtime().clone();
+    let values: Vec<f64> = (0..32).map(|i| i as f64 * 0.25 - 3.0).collect();
+    let mut x = upload_tensor(
+        &rt,
+        &Tensor::from_vec_col_major(vec![32_usize], values.clone()).unwrap(),
+    )
+    .unwrap();
+    let rhs_values: Vec<f64> = (0..6).map(|i| 1.0 + i as f64).collect();
+    let rhs = upload_tensor(
+        &rt,
+        &Tensor::from_vec_col_major(vec![3, 2], rhs_values.clone()).unwrap(),
+    )
+    .unwrap();
+    let config = crate::DotGeneralConfig {
+        lhs_contracting_dims: [1].as_slice().into(),
+        rhs_contracting_dims: [0].as_slice().into(),
+        lhs_batch_dims: [].as_slice().into(),
+        rhs_batch_dims: [].as_slice().into(),
+    };
+
+    // Queue a CubeCL write of x (x *= 2) right before the view read.
+    scale_typed_tensor(
+        &rt,
+        x.as_typed_mut::<f64>().unwrap(),
+        2.0_f64,
+        |client, count, dim, out, factor| {
+            // SAFETY: the scaling bridge validates residency, buffer length, and
+            // the one-dimensional launch domain before this unchecked launch.
+            unsafe {
+                structural::scale_in_place_float_kernel::launch_unchecked::<f64, CubeclCudaRuntime>(
+                    client, count, dim, out, factor,
+                );
+            }
+        },
+    )
+    .unwrap();
+
+    // lhs is the [2, 3] region at offset 5 with leading dimension 4.
+    let expected: Vec<f64> = (0..4)
+        .map(|index| {
+            let (i, j) = (index % 2, index / 2);
+            (0..3)
+                .map(|k| 2.0 * values[5 + i + 4 * k] * rhs_values[k + 3 * j])
+                .sum()
+        })
+        .collect();
+    for pass in 0..2 {
+        let typed = x.as_typed::<f64>().unwrap();
+        let lhs = typed
+            .backend_region_view(vec![2, 3], vec![1, 4], 5)
+            .unwrap();
+        let product = backend
+            .with_backend_session(|session| {
+                session.dot_general_read(
+                    TensorRead::from_view(TensorView::F64(lhs)),
+                    TensorRead::from_tensor(&rhs),
+                    &config,
+                )
+            })
+            .unwrap()
+            .unwrap();
+        let product = download_tensor(&rt, &product).unwrap();
+        assert_eq!(
+            product.as_slice::<f64>().unwrap(),
+            expected.as_slice(),
+            "pass {pass}"
+        );
+        // The view read memoized the root address, so the next pass skips the
+        // round trip.
+        assert!(
+            cubecl_buffer::<f64>(x.as_typed::<f64>().unwrap(), "test")
+                .unwrap()
+                .cached_device_addr()
+                .is_some(),
+            "pass {pass}: a view read must memoize its root buffer's address"
+        );
+    }
+}
