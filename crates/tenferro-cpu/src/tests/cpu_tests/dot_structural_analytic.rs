@@ -1579,7 +1579,6 @@ fn auto_batched_gemm_on_lanes_matches_reference_with_padded_batches() {
     let rhs_data: Vec<f64> = (0..m * m * batch).map(|i| (i % 7) as f64 * 0.5).collect();
     let lhs = Tensor::from_vec_col_major(vec![m, m, batch], lhs_data.clone()).unwrap();
     let rhs = Tensor::from_vec_col_major(vec![m, m, batch], rhs_data.clone()).unwrap();
-    let mut out_storage = vec![-7.0_f64; pitch * batch];
     let config = DotGeneralConfig {
         lhs_contracting_dims: [1].as_slice().into(),
         rhs_contracting_dims: [0].as_slice().into(),
@@ -1587,47 +1586,51 @@ fn auto_batched_gemm_on_lanes_matches_reference_with_padded_batches() {
         rhs_batch_dims: [2].as_slice().into(),
     };
 
-    let mut backend = CpuBackend::with_threads(4).unwrap();
-    {
-        let out = TypedTensorViewMut::from_slice(
-            [m, m, batch],
-            [1, m as isize, pitch as isize],
-            0,
-            &mut out_storage,
-        )
-        .unwrap();
-        backend
-            .with_backend_session(|session| {
-                session.dot_general_read_into(
-                    TensorRead::from_tensor(&lhs),
-                    TensorRead::from_tensor(&rhs),
-                    &config,
-                    TensorWrite::from_view(TensorViewMut::F64(out)),
-                )
-            })
-            .unwrap()
+    // A nonzero view offset shifts every lane's chunk split.
+    for offset in [0_usize, 3] {
+        let mut out_storage = vec![-7.0_f64; offset + pitch * batch];
+        let mut backend = CpuBackend::with_threads(4).unwrap();
+        {
+            let out = TypedTensorViewMut::from_slice(
+                [m, m, batch],
+                [1, m as isize, pitch as isize],
+                offset as isize,
+                &mut out_storage,
+            )
             .unwrap();
-    }
+            backend
+                .with_backend_session(|session| {
+                    session.dot_general_read_into(
+                        TensorRead::from_tensor(&lhs),
+                        TensorRead::from_tensor(&rhs),
+                        &config,
+                        TensorWrite::from_view(TensorViewMut::F64(out)),
+                    )
+                })
+                .unwrap()
+                .unwrap();
+        }
 
-    for b in 0..batch {
-        for j in 0..m {
-            for i in 0..m {
-                let expected: f64 = (0..m)
-                    .map(|k| lhs_data[i + m * k + m * m * b] * rhs_data[k + m * j + m * m * b])
-                    .sum();
-                assert_eq!(
-                    out_storage[i + m * j + pitch * b],
-                    expected,
-                    "({i}, {j}, {b})"
-                );
+        for b in 0..batch {
+            for j in 0..m {
+                for i in 0..m {
+                    let expected: f64 = (0..m)
+                        .map(|k| lhs_data[i + m * k + m * m * b] * rhs_data[k + m * j + m * m * b])
+                        .sum();
+                    assert_eq!(
+                        out_storage[offset + i + m * j + pitch * b],
+                        expected,
+                        "offset {offset}: ({i}, {j}, {b})"
+                    );
+                }
             }
         }
+        assert!(out_storage
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| *index < offset || (index - offset) % pitch >= m * m)
+            .all(|(_, &value)| value == -7.0));
     }
-    assert!(out_storage
-        .iter()
-        .enumerate()
-        .filter(|(index, _)| index % pitch >= m * m)
-        .all(|(_, &value)| value == -7.0));
 }
 
 #[test]
