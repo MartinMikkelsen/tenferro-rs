@@ -199,6 +199,8 @@ fn standard_grouped_scheduling(kind: CpuBackendKind) -> GroupedGemmScheduling {
 #[derive(Debug)]
 pub(crate) struct CpuProviderBundleInner {
     pub(crate) dot_general: DotGeneralRuntime,
+    /// Typed slots of operation-family crates, at most one per type.
+    pub(crate) extensions: crate::provider_extensions::ProviderExtensions,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -249,6 +251,7 @@ impl CpuProviderBundle {
                         ProviderCapabilityPolicy::Strict
                     },
                 },
+                extensions: crate::provider_extensions::ProviderExtensions::default(),
             }),
         }
     }
@@ -262,6 +265,7 @@ impl CpuProviderBundle {
             general_policy: GeneralContractionPolicy::Preferred,
             grouped_scheduling: standard_grouped_scheduling(kind),
             capability_policy: ProviderCapabilityPolicy::Strict,
+            extensions: crate::provider_extensions::ProviderExtensions::default(),
         }
     }
 
@@ -274,7 +278,28 @@ impl CpuProviderBundle {
             general_policy: GeneralContractionPolicy::Preferred,
             grouped_scheduling: GroupedGemmScheduling::ProviderOwned,
             capability_policy: ProviderCapabilityPolicy::Strict,
+            extensions: crate::provider_extensions::ProviderExtensions::default(),
         }
+    }
+
+    /// The extension of type `E` installed with
+    /// [`CpuProviderBundleBuilder::extension`], if any.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use tenferro_cpu::{CpuBackendKind, CpuProviderBundle};
+    /// #[derive(Debug)]
+    /// struct MyKernels;
+    /// let bundle = CpuProviderBundle::builder(CpuBackendKind::default_compiled())
+    ///     .extension(Arc::new(MyKernels))
+    ///     .build()?;
+    /// assert!(bundle.extension::<MyKernels>().is_some());
+    /// # Ok::<(), tenferro_cpu::CpuProviderBundleBuildError>(())
+    /// ```
+    pub fn extension<E: std::any::Any + Send + Sync>(&self) -> Option<Arc<E>> {
+        self.inner.extensions.get::<E>()
     }
 
     /// Return whether two handles share one immutable provider identity.
@@ -2299,6 +2324,7 @@ pub struct CpuProviderBundleBuilder {
     general_policy: GeneralContractionPolicy,
     grouped_scheduling: GroupedGemmScheduling,
     capability_policy: ProviderCapabilityPolicy,
+    extensions: crate::provider_extensions::ProviderExtensions,
 }
 
 impl CpuProviderBundleBuilder {
@@ -2355,6 +2381,31 @@ impl CpuProviderBundleBuilder {
         self
     }
 
+    /// Install a provider object of an operation-family crate, keyed by its
+    /// type `E`; a later install of the same type replaces the earlier one.
+    ///
+    /// tenferro-cpu does not interpret extensions. The crate that defines `E`
+    /// looks it up through [`CpuProviderBundle::extension`] (or
+    /// [`crate::CpuExecSession::provider_extension`] inside a session) and
+    /// owns its contract, including how it uses the provider's
+    /// [`crate::CpuExecutionContext`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use tenferro_cpu::{CpuBackendKind, CpuProviderBundle};
+    /// let bundle = CpuProviderBundle::builder(CpuBackendKind::default_compiled())
+    ///     .extension(Arc::new(42_u32))
+    ///     .build()?;
+    /// assert_eq!(bundle.extension::<u32>().as_deref(), Some(&42));
+    /// # Ok::<(), tenferro_cpu::CpuProviderBundleBuildError>(())
+    /// ```
+    pub fn extension<E: std::any::Any + Send + Sync>(mut self, extension: Arc<E>) -> Self {
+        self.extensions.insert(extension);
+        self
+    }
+
     /// Validate the mandatory slots and freeze the bundle identity.
     ///
     /// # Errors
@@ -2387,6 +2438,7 @@ impl CpuProviderBundleBuilder {
                     grouped_scheduling: self.grouped_scheduling,
                     capability_policy: self.capability_policy,
                 },
+                extensions: self.extensions,
             }),
         })
     }
