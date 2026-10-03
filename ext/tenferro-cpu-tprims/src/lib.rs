@@ -1,7 +1,6 @@
 #![deny(missing_docs)]
 
-//! Optional tprims-backed GEMM, `dot_general` and linear-algebra providers
-//! for `tenferro-cpu`.
+//! Optional tprims-backed GEMM and `dot_general` providers for `tenferro-cpu`.
 //!
 //! [tprims](https://github.com/tensor4all/tprims-rs) takes an explicit
 //! execution context that borrows a Rayon pool. [`TprimsProvider`] builds one
@@ -9,7 +8,9 @@
 //! region ([`CpuExecutionContext::rayon_pool`]) with the context's thread
 //! budget, or serial execution otherwise. Everything it does not handle is
 //! reported as unsupported before any output is written, so the selected
-//! `tenferro-cpu` backend runs it.
+//! `tenferro-cpu` backend runs it. That includes all linear algebra: tprims no
+//! longer provides Cholesky, QR, SVD, eigh, solve or `trsm`, so
+//! `tenferro-linalg`'s built-in kernels run them.
 //!
 //! # Examples
 //!
@@ -21,16 +22,14 @@
 //! let builder = CpuProviderBundle::builder(CpuBackendKind::default_compiled())
 //!     .gemm_provider(Arc::new(TprimsProvider::new()))
 //!     .prefer_general_contraction_provider(Arc::new(TprimsProvider::new()));
-//! // Linear algebra (tenferro_linalg::cpu_kernels): Cholesky, solves, SVD, QR, eigh.
-//! let bundle =
-//!     tenferro_linalg::cpu_kernels::install_linalg_kernels(builder, Arc::new(TprimsProvider::new()))
-//!         .build()?;
-//! let backend = CpuBackend::new().with_provider_bundle(bundle)?;
+//! let backend = CpuBackend::new().with_provider_bundle(builder.build()?)?;
 //! # let _ = backend;
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
 
 use num_complex::{Complex32, Complex64};
+use std::collections::HashMap;
+
 use strided_view::{StridedView, StridedViewMut};
 use tenferro_cpu::provider::{
     CpuBatchedMatrixLayout, CpuDotGeneralRequest, CpuExecutionContext, CpuGemmProvider,
@@ -42,11 +41,11 @@ use tenferro_tensor::{
     col_major_strides, ContractionScalar, DType, Error, Result, TensorRead, TensorScalar,
     TensorView, TensorViewMut, TensorWrite, TypedTensorView, TypedTensorViewMut,
 };
-use tprims_blas::{BatchIn, BatchStrategy, Conj, GroupedJob, MatIn};
-use tprims_contract::{ContractPlan, DotGeneral, Flags, Strategy};
+use tprims_contract::api::{
+    AccumulationSource, DotGeneral, LayoutSpec, Op, OperandSpec, Problem, Scalar,
+};
+use tprims_contract::{contract_batched, BatchItem, Plan, PlanConfig};
 use tprims_exec::{Exec, Pool};
-
-mod linalg;
 
 /// tprims implementation of `tenferro-cpu`'s GEMM and general-contraction
 /// provider slots.
@@ -96,22 +95,15 @@ fn with_exec<R>(ctx: &CpuExecutionContext<'_>, f: impl FnOnce(&Exec<'_>) -> R) -
             let pool = Pool::borrow(pool);
             let exec = Exec::rayon(&pool)
                 .with_budget(ctx.thread_budget().get())
-                .unwrap_or(Exec::Serial);
+                .unwrap_or(Exec::serial());
             f(&exec)
         }
-        None => f(&Exec::Serial),
+        None => f(&Exec::serial()),
     }
 }
 
 /// The four element types tprims supports, with their tenferro views.
-trait Elem: TensorScalar + tprims_blas::Scalar {
-    /// Complex conjugate (identity for real types).
-    fn conj_elem(self) -> Self;
-    /// A column-major tensor of this type's real counterpart.
-    fn real_tensor(
-        shape: Vec<usize>,
-        data: Vec<<Self as tprims_blas::Scalar>::Re>,
-    ) -> Result<tenferro_tensor::Tensor>;
+trait Elem: TensorScalar + Scalar {
     fn scalar(s: ContractionScalar) -> Option<Self>;
     fn view<'b, 'a>(v: &'b TensorView<'a>) -> Option<&'b TypedTensorView<'a, Self>>;
     fn view_mut<'b, 'a>(
@@ -120,18 +112,8 @@ trait Elem: TensorScalar + tprims_blas::Scalar {
 }
 
 macro_rules! elem {
-    ($t:ty, $v:ident, $conj:expr) => {
+    ($t:ty, $v:ident) => {
         impl Elem for $t {
-            fn conj_elem(self) -> Self {
-                let conj: fn(Self) -> Self = $conj;
-                conj(self)
-            }
-            fn real_tensor(
-                shape: Vec<usize>,
-                data: Vec<<Self as tprims_blas::Scalar>::Re>,
-            ) -> Result<tenferro_tensor::Tensor> {
-                tenferro_tensor::Tensor::from_vec_col_major(shape, data)
-            }
             fn scalar(s: ContractionScalar) -> Option<Self> {
                 match s {
                     ContractionScalar::$v(x) => Some(x),
@@ -155,10 +137,10 @@ macro_rules! elem {
         }
     };
 }
-elem!(f32, F32, |x| x);
-elem!(f64, F64, |x| x);
-elem!(Complex32, C32, |x| x.conj());
-elem!(Complex64, C64, |x| x.conj());
+elem!(f32, F32);
+elem!(f64, F64);
+elem!(Complex32, C32);
+elem!(Complex64, C64);
 
 /// A read operand: its whole backing storage and the layout of the tensor in
 /// it (element strides and offset).
@@ -231,12 +213,32 @@ fn write<'a, T: Elem>(w: &'a mut TensorWrite<'_>) -> Result<Option<Out<'a, T>>> 
     })
 }
 
-fn conj(c: bool) -> Conj {
-    if c {
-        Conj::Yes
+/// The operand's layout with its conjugation. Conjugating a real operand is
+/// the identity, so it is not requested.
+fn spec<T: Elem>(
+    dims: &[usize],
+    strides: &[isize],
+    offset: isize,
+    conj: bool,
+) -> std::result::Result<OperandSpec, tprims_contract::Error> {
+    let op = if conj && T::STORAGE.is_complex() {
+        Op::Conjugate
     } else {
-        Conj::No
-    }
+        Op::Identity
+    };
+    Ok(OperandSpec::new(LayoutSpec::new(dims, strides, offset)?).with_op(op))
+}
+
+/// The plan of one `dot_general` over the given operand layouts, `D` being
+/// accumulated in place (`C` is `D`).
+fn plan_dot<T: Elem>(
+    dot: &DotGeneral,
+    a: OperandSpec,
+    b: OperandSpec,
+    d: OperandSpec,
+) -> std::result::Result<Plan<T>, tprims_contract::Error> {
+    let problem = Problem::from_dot_general(T::STORAGE, a, b, d, dot)?;
+    Plan::new(&problem, &PlanConfig::default())
 }
 
 fn failure(op: &'static str, e: impl std::fmt::Display) -> Error {
@@ -309,6 +311,7 @@ fn gemm_typed<T: Elem>(
             CpuProviderUnsupported::DType(lhs.dtype()),
         ));
     };
+    // A batch is a batch axis of one contraction: `[m, k, b] x [k, n, b]`.
     let batch = (batched || count != 1).then_some(count);
     let (da, sa) = mat_dims(m, k, batch, la);
     let (db, sb) = mat_dims(k, n, batch, lb);
@@ -320,41 +323,37 @@ fn gemm_typed<T: Elem>(
         return Ok(UNSUPPORTED_LAYOUT_OUT);
     };
     let mut cv = StridedViewMut::new(c.data, &dc, &sc, lc.offset()).map_err(|e| failure(OP, e))?;
-    let (ca, cb) = (conj(acc.lhs_conj), conj(acc.rhs_conj));
-    // tprims validates before writing, so an error leaves the output intact.
-    with_exec(ctx, |exec| match batch {
-        None => {
-            let (ai, bi) = (
-                MatIn {
-                    view: &av,
-                    conj: ca,
-                },
-                MatIn {
-                    view: &bv,
-                    conj: cb,
-                },
-            );
-            tprims_blas::gemm(exec, alpha, ai, bi, beta, &mut cv).map(|_| ())
-        }
-        Some(_) => {
-            let (ai, bi) = (
-                BatchIn {
-                    view: &av,
-                    conj: ca,
-                },
-                BatchIn {
-                    view: &bv,
-                    conj: cb,
-                },
-            );
-            tprims_blas::gemm_batched(exec, alpha, ai, bi, beta, &mut cv, BatchStrategy::Auto)
-                .map(|_| ())
-        }
+    let dot = match batch {
+        None => DotGeneral::new(&[1], &[0], &[], &[]),
+        Some(_) => DotGeneral::new(&[1], &[0], &[2], &[2]),
+    };
+    let plan = spec::<T>(&da, &sa, la.offset(), acc.lhs_conj)
+        .and_then(|a| {
+            let b = spec::<T>(&db, &sb, lb.offset(), acc.rhs_conj)?;
+            let d = spec::<T>(&dc, &sc, lc.offset(), false)?;
+            plan_dot::<T>(&dot, a, b, d)
+        })
+        .map_err(|e| failure(OP, e))?;
+    // The plan validates the views before writing, so an error leaves the
+    // output intact.
+    with_exec(ctx, |exec| {
+        plan.execute_into_accum(
+            exec,
+            alpha,
+            &av,
+            &bv,
+            beta,
+            AccumulationSource::Output,
+            &mut cv,
+        )
     })
     .map_err(|e| failure(OP, e))?;
     Ok(CpuProviderOutcome::Executed)
 }
 
+/// Independent jobs of different sizes over shared buffers: one plan per
+/// distinct `(rows, inner, cols)`, all jobs run as one batch (each item
+/// carries its own plan), so many small jobs spread over the pool.
 fn grouped_typed<T: Elem>(
     ctx: &CpuExecutionContext<'_>,
     mut request: CpuGroupedGemmRequest<'_, '_, '_>,
@@ -375,37 +374,80 @@ fn grouped_typed<T: Elem>(
     // Job offsets are relative to each operand's view offset.
     let base = |o: isize| usize::try_from(o).map_err(|_| failure(OP, "negative operand offset"));
     let (oa, ob) = (base(a.offset)?, base(b.offset)?);
-    let jobs_in: Vec<_> = request.jobs().to_vec();
+    // A job with no output elements touches nothing.
+    let mut jobs: Vec<_> = request
+        .jobs()
+        .iter()
+        .filter(|j| j.rows() > 0 && j.cols() > 0)
+        .copied()
+        .collect();
     let output = request.output();
     let Some(c) = write::<T>(output)? else {
         return Ok(UNSUPPORTED_LAYOUT_OUT);
     };
     let oc = base(c.offset)?;
-    let jobs: Vec<GroupedJob> = jobs_in
-        .iter()
-        .map(|j| GroupedJob {
-            a_offset: oa + j.lhs_offset(),
-            b_offset: ob + j.rhs_offset(),
-            c_offset: oc + j.out_offset(),
-            rows: j.rows(),
-            inner: j.contracted(),
-            cols: j.cols(),
-        })
-        .collect();
-    with_exec(ctx, |exec| {
-        tprims_blas::gemm_grouped(
-            exec,
+    // Output blocks are compact column-major; hand each job its own disjoint
+    // sub-slice of the output, in offset order.
+    jobs.sort_by_key(|j| j.out_offset());
+    let (cs, ca) = (acc.lhs_conj, acc.rhs_conj);
+    let mut plans: HashMap<(usize, usize, usize), Plan<T>> = HashMap::new();
+    for j in &jobs {
+        let key = (j.rows(), j.contracted(), j.cols());
+        if plans.contains_key(&key) {
+            continue;
+        }
+        let (rows, inner, cols) = key;
+        let col = |r: usize, c: usize| (vec![r, c], vec![1, r.max(1) as isize]);
+        let ((da, sa), (db, sb), (dc, sc)) = (col(rows, inner), col(inner, cols), col(rows, cols));
+        let plan = spec::<T>(&da, &sa, 0, cs)
+            .and_then(|a| {
+                let b = spec::<T>(&db, &sb, 0, ca)?;
+                let d = spec::<T>(&dc, &sc, 0, false)?;
+                plan_dot::<T>(&DotGeneral::new(&[1], &[0], &[], &[]), a, b, d)
+            })
+            .map_err(|e| failure(OP, e))?;
+        plans.insert(key, plan);
+    }
+    let mut rest = c.data;
+    let mut pos = 0usize;
+    let mut items = Vec::with_capacity(jobs.len());
+    for j in &jobs {
+        let (rows, inner, cols) = (j.rows(), j.contracted(), j.cols());
+        let start = oc + j.out_offset();
+        let len = rows * cols;
+        if start < pos {
+            return Err(failure(OP, "overlapping output blocks"));
+        }
+        let tail = std::mem::take(&mut rest);
+        if start - pos > tail.len() || len > tail.len() - (start - pos) {
+            return Err(failure(OP, "output block exceeds the buffer"));
+        }
+        let (_, tail) = tail.split_at_mut(start - pos);
+        let (block, tail) = tail.split_at_mut(len);
+        rest = tail;
+        pos = start + len;
+        let (sa, sb, sc) = (
+            [1, rows.max(1) as isize],
+            [1, inner.max(1) as isize],
+            [1, rows.max(1) as isize],
+        );
+        let av = StridedView::new(a.data, &[rows, inner], &sa, (oa + j.lhs_offset()) as isize)
+            .map_err(|e| failure(OP, e))?;
+        let bv = StridedView::new(b.data, &[inner, cols], &sb, (ob + j.rhs_offset()) as isize)
+            .map_err(|e| failure(OP, e))?;
+        let dv = StridedViewMut::new(block, &[rows, cols], &sc, 0).map_err(|e| failure(OP, e))?;
+        items.push(BatchItem {
+            plan: &plans[&(rows, inner, cols)],
             alpha,
-            a.data,
-            conj(acc.lhs_conj),
-            b.data,
-            conj(acc.rhs_conj),
+            a: av,
+            b: bv,
             beta,
-            c.data,
-            &jobs,
-        )
-    })
-    .map_err(|e| failure(OP, e))?;
+            source: Some(AccumulationSource::Output),
+            d: dv,
+        });
+    }
+    // The batch validates every item before writing any.
+    with_exec(ctx, |exec| contract_batched(&mut items, exec)).map_err(|e| failure(OP, e))?;
     Ok(CpuProviderOutcome::Executed)
 }
 
@@ -427,22 +469,18 @@ fn dot_general_typed<T: Elem>(
     };
     let (lc, rc): (Vec<usize>, Vec<usize>) = axes.contracting_pairs().unzip();
     let (lb, rb): (Vec<usize>, Vec<usize>) = axes.batch_pairs().unzip();
-    let cfg = DotGeneral::new(&lc, &rc, &lb, &rb);
+    let dot = DotGeneral::new(&lc, &rc, &lb, &rb);
     let Some(c) = write::<T>(output)? else {
         return Ok(UNSUPPORTED_LAYOUT_OUT);
     };
     // Output order [lhs free, rhs free, batch] is the same in both libraries.
     // A plan the library cannot build is unsupported, not an error: nothing
     // has been written yet.
-    let Ok(plan) = ContractPlan::<T>::new(
-        &cfg,
-        (&a.shape, &a.strides),
-        (&b.shape, &b.strides),
-        (&c.shape, &c.strides),
-        (conj(acc.lhs_conj), conj(acc.rhs_conj)),
-        Strategy::Auto,
-        Flags::default(),
-    ) else {
+    let Ok(plan) = spec::<T>(&a.shape, &a.strides, a.offset, acc.lhs_conj).and_then(|sa| {
+        let sb = spec::<T>(&b.shape, &b.strides, b.offset, acc.rhs_conj)?;
+        let sd = spec::<T>(&c.shape, &c.strides, c.offset, false)?;
+        plan_dot::<T>(&dot, sa, sb, sd)
+    }) else {
         return Ok(UNSUPPORTED_LAYOUT_OUT);
     };
     let av =
@@ -452,7 +490,15 @@ fn dot_general_typed<T: Elem>(
     let mut cv =
         StridedViewMut::new(c.data, &c.shape, &c.strides, c.offset).map_err(|e| failure(OP, e))?;
     with_exec(ctx, |exec| {
-        plan.execute(exec, alpha, &av, &bv, beta, &mut cv)
+        plan.execute_into_accum(
+            exec,
+            alpha,
+            &av,
+            &bv,
+            beta,
+            AccumulationSource::Output,
+            &mut cv,
+        )
     })
     .map_err(|e| failure(OP, e))?;
     Ok(CpuProviderOutcome::Executed)
@@ -463,7 +509,7 @@ impl CpuGemmProvider for TprimsProvider {
         capabilities()
     }
 
-    /// One GEMM through `tprims_blas::gemm`.
+    /// One GEMM through a `tprims_contract::Plan`.
     ///
     /// # Errors
     ///
@@ -477,7 +523,7 @@ impl CpuGemmProvider for TprimsProvider {
         by_dtype!(request.lhs().dtype(), gemm_typed(context, request, false))
     }
 
-    /// A strided batch through `tprims_blas::gemm_batched`.
+    /// A strided batch through a `tprims_contract::Plan` with a batch axis.
     ///
     /// # Errors
     ///
@@ -490,7 +536,7 @@ impl CpuGemmProvider for TprimsProvider {
         by_dtype!(request.lhs().dtype(), gemm_typed(context, request, true))
     }
 
-    /// Variable-size jobs through `tprims_blas::gemm_grouped`.
+    /// Variable-size jobs through `tprims_contract::contract_batched`.
     ///
     /// # Errors
     ///
@@ -509,8 +555,7 @@ impl CpuGeneralContractionProvider for TprimsProvider {
         capabilities()
     }
 
-    /// A binary contraction through a `tprims_contract::ContractPlan`
-    /// (`Strategy::Auto`).
+    /// A binary contraction through a `tprims_contract::Plan`.
     ///
     /// # Errors
     ///
