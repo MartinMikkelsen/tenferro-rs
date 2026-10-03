@@ -1783,11 +1783,15 @@ impl CudaBackend {
     /// Copy through the cuTENSOR permutation executor when the layout supports
     /// it, otherwise through the exact native copy.
     ///
-    /// Only real dtypes use this: for `F32`/`F64` the vendor `alpha = 1`
-    /// multiply is exact, and cuTENSOR is markedly faster than the native
-    /// kernel for a multi-axis permutation destination. Complex dtypes are
-    /// routed to the native copy instead, because for them the same multiply
-    /// turns a finite component into `NaN` (issue #1891).
+    /// Real dtypes use the vendor `alpha = 1` multiply, which is exact and
+    /// markedly faster than the native kernel for a multi-axis permutation
+    /// destination. Complex dtypes also reach this function: they are planned
+    /// through their real view (`[...shape, 2]`, doubled leading strides,
+    /// unit-stride trailing axis), so the vendor multiply is a *real* multiply
+    /// and stays value-exact (issue #1891). The exact native tiled transpose is
+    /// selected only for a transposing destination into a row-major compact
+    /// view, where it is coalesced on both sides; every other complex layout
+    /// keeps the vendor real-view plan.
     fn copy_view_to_view_cutensor_or_cubecl<T, R>(
         &self,
         src: &TypedTensorView<'_, T, R>,
