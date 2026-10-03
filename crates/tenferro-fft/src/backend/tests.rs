@@ -313,18 +313,18 @@ fn trait_default_read_hooks_accept_input_pass_tensors_through_and_canonicalize_v
     assert_eq!(view.spec, spec);
     assert_eq!(view_output.as_slice::<Complex64>().unwrap(), data);
 
-    // The conservative structural default cannot compact a strided view, and
-    // that refusal reaches the caller before execute_fft runs.
-    let error = session
+    // The default structural hook now gathers a strided host view over its
+    // layout, so the transposed read reaches execute_fft as compact storage.
+    let transposed_output = session
         .execute_fft_read(
             transposed(),
             &spec,
             FftExecutionCache::caller_owned(&mut cache),
         )
-        .unwrap_err();
-    assert!(
-        matches!(error, tenferro_tensor::Error::Validation { .. }),
-        "{error:?}"
-    );
-    assert_eq!(session.recorded.len(), 2);
+        .unwrap();
+    assert_eq!(session.recorded.len(), 3);
+    let compact = &session.recorded[2];
+    assert_eq!(compact.shape, [2, 2]);
+    assert_eq!(compact.values, [data[0], data[2], data[1], data[3]]);
+    assert_eq!(transposed_output.as_slice::<Complex64>().unwrap().len(), 4);
 }

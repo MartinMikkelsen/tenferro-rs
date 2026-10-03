@@ -26,6 +26,27 @@ fn validation(op: &'static str, source: ValidationError) -> crate::Error {
     Error::validation(op, source)
 }
 
+/// Gather any host-owned view, including strided or offset layouts, into a compact owner.
+///
+/// This backs the default [`TensorStructural::to_contiguous_read`] for host-owned
+/// views. Backend-owned storage must be rejected by the caller first; the typed
+/// `to_col_major` gather is metadata-driven element copying and never transfers.
+fn default_materialize_host_view(view: TensorView<'_>) -> crate::Result<Tensor> {
+    fn typed<T: TensorScalar>(view: &TypedTensorView<'_, T>) -> crate::Result<Tensor> {
+        view.to_col_major().map(Tensor::from_typed)
+    }
+
+    match view {
+        TensorView::F32(view) => typed(&view),
+        TensorView::F64(view) => typed(&view),
+        TensorView::I32(view) => typed(&view),
+        TensorView::I64(view) => typed(&view),
+        TensorView::Bool(view) => typed(&view),
+        TensorView::C32(view) => typed(&view),
+        TensorView::C64(view) => typed(&view),
+    }
+}
+
 fn invalid_argument(op: &'static str, argument: &'static str, message: impl Into<String>) -> Error {
     Error::invalid_argument(op, argument, message)
 }
@@ -2618,13 +2639,15 @@ pub trait TensorStructural {
     /// The result has the input's shape and dtype, uses compact column-major
     /// layout, and remains in the input's placement. This operation is a
     /// same-placement canonicalization boundary, never an implicit host/device
-    /// transfer. The conservative default accepts only compact host-owned
-    /// tensors and clones them; it rejects views, backend buffers, and device
+    /// transfer. The conservative default accepts host-owned tensors and host
+    /// views; a view is gathered over its layout, so transposed, sliced, and
+    /// negative-stride views materialize. It rejects backend buffers and device
     /// placement because only an owning backend can materialize those safely.
     ///
-    /// Backend overrides may accept strided views. CUDA accepts numeric and
-    /// complex views on its active device, including arbitrary valid strides,
-    /// but currently reports an explicit unsupported-dtype error for `Bool`.
+    /// Backend overrides may also accept backend-owned strided views. CUDA
+    /// accepts numeric and complex views on its active device, including
+    /// arbitrary valid strides, but currently reports an explicit
+    /// unsupported-dtype error for `Bool`.
     ///
     /// # Examples
     ///
@@ -2655,7 +2678,9 @@ pub trait TensorStructural {
     ///
     /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
     /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
-    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
+    /// [`crate::Error::RuntimeState`] for backend-owned or device-placed input,
+    /// which only the owning backend can materialize, or
+    /// [`crate::Error::BackendFailure`] / [`crate::Error::BackendSource`] when
     /// backend execution or storage access cannot provide the requested result.
     fn to_contiguous_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
         match input {
@@ -2685,7 +2710,7 @@ pub trait TensorStructural {
                         "default materialization accepts only host-owned tensors; use the storage's owning backend",
                     ));
                 }
-                view.duplicate()
+                default_materialize_host_view(view)
             }
         }
     }
