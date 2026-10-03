@@ -1075,6 +1075,91 @@ fn semantic_core_maximum_jvp_and_vjp_execute_with_balanced_ties() {
 }
 
 #[test]
+fn semantic_core_extrema_vjp_zeroes_masked_gradient_for_non_finite_cotangent() {
+    // A legitimate non-finite seed (e.g. differentiating through `1/y`) must not
+    // turn the masked-out operand's cotangent into `NaN`.
+    let ad = ad_context();
+    let lhs = Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]).unwrap();
+    let rhs = Tensor::from_vec_col_major(vec![3], vec![2.0_f64, 2.0, 1.0]).unwrap();
+    let output_cotangent =
+        Tensor::from_vec_col_major(vec![3], vec![f64::INFINITY, f64::INFINITY, f64::INFINITY])
+            .unwrap();
+
+    for (op, expected_lhs, expected_rhs) in [
+        (
+            CoreSemanticOp::Maximum,
+            [0.0_f64, f64::INFINITY, f64::INFINITY],
+            [f64::INFINITY, f64::INFINITY, 0.0],
+        ),
+        (
+            CoreSemanticOp::Minimum,
+            [f64::INFINITY, f64::INFINITY, 0.0],
+            [0.0, f64::INFINITY, f64::INFINITY],
+        ),
+    ] {
+        let source = binary_core_program(
+            DType::F64,
+            [DimExpr::Const(3)],
+            DType::F64,
+            [DimExpr::Const(3)],
+            op,
+        );
+        let vjp = ad.vjp_program(&source, &[true, true], &[true]).unwrap();
+        let compiled = GraphCompiler::new()
+            .compile_frozen_program(vjp.frozen())
+            .unwrap();
+        let cotangents = cpu_runtime()
+            .run_compiled(&compiled, &[&lhs, &rhs, &output_cotangent])
+            .unwrap();
+        assert_eq!(cotangents[0].as_slice::<f64>().unwrap(), &expected_lhs);
+        assert_eq!(cotangents[1].as_slice::<f64>().unwrap(), &expected_rhs);
+    }
+}
+
+#[test]
+fn semantic_core_clamp_vjp_zeroes_clamped_gradient_for_non_finite_cotangent() {
+    let mut builder = SemanticProgramBuilder::new();
+    let input = builder
+        .input(ProgramInputSpec::new(DType::F64, [DimExpr::Const(2)]))
+        .unwrap();
+    let lower = builder
+        .input(ProgramInputSpec::new(DType::F64, [DimExpr::Const(2)]))
+        .unwrap();
+    let upper = builder
+        .input(ProgramInputSpec::new(DType::F64, [DimExpr::Const(2)]))
+        .unwrap();
+    let clamped = builder
+        .add_op(CoreSemanticOp::Clamp, &[input, lower, upper])
+        .unwrap()[0];
+    let source = builder.finish(&[clamped]).unwrap();
+
+    let ad = ad_context();
+    let vjp = ad
+        .vjp_program(&source, &[true, true, true], &[true])
+        .unwrap();
+    let compiled = GraphCompiler::new()
+        .compile_frozen_program(vjp.frozen())
+        .unwrap();
+    let input_data = Tensor::from_vec_col_major(vec![2], vec![-1.0_f64, 0.5]).unwrap();
+    let lower_data = Tensor::from_vec_col_major(vec![2], vec![0.0_f64, 0.0]).unwrap();
+    let upper_data = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 1.0]).unwrap();
+    let output_cotangent = Tensor::from_vec_col_major(vec![2], vec![f64::INFINITY, 1.0]).unwrap();
+    let cotangents = cpu_runtime()
+        .run_compiled(
+            &compiled,
+            &[&input_data, &lower_data, &upper_data, &output_cotangent],
+        )
+        .unwrap();
+
+    assert_eq!(cotangents[0].as_slice::<f64>().unwrap(), &[0.0, 1.0]);
+    assert_eq!(
+        cotangents[1].as_slice::<f64>().unwrap(),
+        &[f64::INFINITY, 0.0]
+    );
+    assert_eq!(cotangents[2].as_slice::<f64>().unwrap(), &[0.0, 0.0]);
+}
+
+#[test]
 fn semantic_core_nonlinear_reductions_transform_product_and_balanced_extrema() {
     let ad = ad_context();
     for op in [

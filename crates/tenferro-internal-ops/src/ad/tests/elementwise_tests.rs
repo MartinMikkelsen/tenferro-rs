@@ -292,6 +292,48 @@ fn linearize_extrema_uses_jax_balanced_tie_masks() {
 }
 
 #[test]
+fn linearize_extrema_mask_zero_is_a_dtype_constant_not_a_negated_value() {
+    // A non-finite active value (for example an `Inf` tangent) must not be used to
+    // synthesize the mask zero: `x + (-x)` evaluates to `NaN` there. The mask
+    // seed must be a true dtype-aware `Constant` zero instead.
+    let mut ctx = ShapeGuardContext::default();
+
+    for (op, active_id, lhs_id, rhs_id) in [
+        (StdTensorOp::Maximum, 60_u64, 61_u64, 62_u64),
+        (StdTensorOp::Minimum, 63, 64, 65),
+    ] {
+        let mut builder = GraphBuilder::<StdTensorOp>::new();
+        let active = builder.add_input(tensor_input(active_id));
+        let result = op
+            .jvp_rule(
+                &mut builder,
+                &[input_key(lhs_id), input_key(rhs_id)],
+                &[],
+                &[Some(active), None],
+                &mut ctx,
+            )
+            .unwrap();
+        assert!(result[0].is_some());
+        let graph = builder.build();
+        assert!(
+            !graph
+                .operations()
+                .iter()
+                .any(|op| op.operation == StdTensorOp::Neg),
+            "the mask zero must be a dtype constant, not a negated active value"
+        );
+        assert!(
+            graph.operations().iter().any(|op| matches!(
+                &op.operation,
+                StdTensorOp::Constant { dtype: DType::F64, bytes }
+                    if bytes.iter().all(|byte| *byte == 0)
+            )),
+            "the mask zero must be emitted as a zero `Constant`"
+        );
+    }
+}
+
+#[test]
 fn linearize_clamp_builds_nested_selects_for_active_bounds() {
     let mut builder = GraphBuilder::<StdTensorOp>::new();
     let dx = builder.add_input(tensor_input(30));
@@ -444,4 +486,70 @@ fn transpose_clamp_covers_lower_only_and_inner_paths() {
         )
         .unwrap();
     assert!(result.iter().all(Option::is_some));
+}
+
+#[test]
+fn linearize_select_emits_a_zero_constant_for_a_missing_branch() {
+    // A missing Select branch must be filled with a dtype-aware constant zero,
+    // never with an arithmetic zero derived from the other branch.
+    let mut builder = GraphBuilder::<StdTensorOp>::new();
+    let dx = builder.add_input(tensor_input(70));
+    let mut ctx = ShapeGuardContext::default();
+
+    let result = StdTensorOp::Select
+        .jvp_rule(
+            &mut builder,
+            &[input_key(71), input_key(72), input_key(73)],
+            &[],
+            &[None, Some(dx), None],
+            &mut ctx,
+        )
+        .unwrap();
+
+    assert!(result[0].is_some());
+    let graph = builder.build();
+    assert!(!graph
+        .operations()
+        .iter()
+        .any(|op| op.operation == StdTensorOp::Neg));
+    assert!(graph.operations().iter().any(|op| matches!(
+        &op.operation,
+        StdTensorOp::Constant { bytes, .. } if bytes.iter().all(|byte| *byte == 0)
+    )));
+}
+
+#[test]
+fn transpose_extrema_emit_a_zero_constant_for_the_masked_operand() {
+    for (op, ct_id, lhs_id, rhs_id) in [
+        (StdTensorOp::Maximum, 80_u64, 81_u64, 82_u64),
+        (StdTensorOp::Minimum, 83, 84, 85),
+    ] {
+        let mut builder = GraphBuilder::<StdTensorOp>::new();
+        let ct = builder.add_input(tensor_input(ct_id));
+        let mut ctx = ShapeGuardContext::default();
+        let inputs = vec![
+            ValueRef::External(input_key(lhs_id)),
+            ValueRef::External(input_key(rhs_id)),
+        ];
+
+        let result = op
+            .transpose_rule(
+                &mut builder,
+                &[Some(ct)],
+                &inputs,
+                &OperationRole::Linearized {
+                    active_mask: vec![true, false],
+                },
+                &mut ctx,
+            )
+            .unwrap();
+
+        assert!(result[0].is_some());
+        assert!(result[1].is_none());
+        let graph = builder.build();
+        assert!(graph.operations().iter().any(|op| matches!(
+            &op.operation,
+            StdTensorOp::Constant { bytes, .. } if bytes.iter().all(|byte| *byte == 0)
+        )));
+    }
 }

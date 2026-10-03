@@ -1,7 +1,7 @@
 use crate::ad::context::ShapeGuardContext;
 use crate::ad::support::{
     conjugate_primal_if_any_dtype_complex, convert_fixed_ref_to_dtype, convert_linear_to_dtype,
-    dtype_of_or_real, project_linear_to_dtype, promote_dtype_div_like,
+    dtype_of_or_real, project_linear_to_dtype, promote_dtype, promote_dtype_div_like,
 };
 use crate::ad::transpose_input::{metadata_value_refs, TransposeInputRef};
 use crate::ad::zeros::build_zero_like;
@@ -100,26 +100,6 @@ fn emit_linear_select(
     )[0]
 }
 
-fn emit_zero_from_active(
-    builder: &mut dyn PrimitiveRuleBuilder,
-    active: LocalValueId,
-) -> LocalValueId {
-    let neg = builder.add_operation(
-        StdTensorOp::Neg,
-        vec![ValueRef::Local(active)],
-        OperationRole::Linearized {
-            active_mask: vec![true],
-        },
-    );
-    builder.add_operation(
-        StdTensorOp::Add,
-        vec![ValueRef::Local(active), ValueRef::Local(neg[0])],
-        OperationRole::Linearized {
-            active_mask: vec![true, true],
-        },
-    )[0]
-}
-
 fn emit_scalar_constant(
     builder: &mut dyn PrimitiveRuleBuilder,
     dtype: DType,
@@ -181,8 +161,10 @@ fn mask_active_by_conditions(
     builder: &mut dyn PrimitiveRuleBuilder,
     active: LocalValueId,
     conditions: &[LocalValueId],
+    dtype: DType,
+    rank: usize,
 ) -> LocalValueId {
-    let zero = emit_zero_from_active(builder, active);
+    let zero = build_zero_like(builder, dtype, ValueRef::Local(active), rank);
     let mut value = active;
     for condition in conditions {
         value = emit_linear_select(builder, ValueRef::Local(*condition), value, zero);
@@ -196,8 +178,9 @@ fn balanced_extrema_contribution(
     self_eq_output: LocalValueId,
     other_eq_output: LocalValueId,
     dtype: DType,
+    rank: usize,
 ) -> LocalValueId {
-    let selected = mask_active_by_conditions(builder, active, &[self_eq_output]);
+    let selected = mask_active_by_conditions(builder, active, &[self_eq_output], dtype, rank);
     let two = emit_scalar_constant(builder, dtype, 2.0);
     let half = emit_linear_div_fixed(builder, selected, ValueRef::Local(two));
     emit_linear_select(builder, ValueRef::Local(other_eq_output), half, selected)
@@ -234,15 +217,17 @@ fn select_tangents(
     condition: ValueRef<StdTensorOp>,
     on_true: Option<LocalValueId>,
     on_false: Option<LocalValueId>,
+    dtype: DType,
+    rank: usize,
 ) -> Option<LocalValueId> {
     match (on_true, on_false) {
         (Some(t), Some(f)) => Some(emit_linear_select(builder, condition, t, f)),
         (Some(t), None) => {
-            let zero = emit_zero_from_active(builder, t);
+            let zero = build_zero_like(builder, dtype, ValueRef::Local(t), rank);
             Some(emit_linear_select(builder, condition, t, zero))
         }
         (None, Some(f)) => {
-            let zero = emit_zero_from_active(builder, f);
+            let zero = build_zero_like(builder, dtype, ValueRef::Local(f), rank);
             Some(emit_linear_select(builder, condition, zero, f))
         }
         (None, None) => None,
@@ -255,12 +240,14 @@ fn split_cotangent_by_mask(
     cotangent: LocalValueId,
     true_active: bool,
     false_active: bool,
+    dtype: DType,
+    rank: usize,
 ) -> (Option<LocalValueId>, Option<LocalValueId>) {
     if !true_active && !false_active {
         return (None, None);
     }
 
-    let zero = emit_zero_from_active(builder, cotangent);
+    let zero = build_zero_like(builder, dtype, ValueRef::Local(cotangent), rank);
     let true_ct =
         true_active.then(|| emit_linear_select(builder, condition.clone(), cotangent, zero));
     let false_ct = false_active.then(|| emit_linear_select(builder, condition, zero, cotangent));
@@ -401,11 +388,16 @@ pub fn linearize_sign(
         Some(dx) => {
             let input_ref = ValueRef::External(primal_in[0].clone());
             let input_dtype = dtype_of_or_real(ctx, &input_ref);
+            let input_rank = ctx.rank_of(&input_ref).unwrap_or(0);
             if !is_complex_dtype(input_dtype) {
-                return vec![Some(emit_zero_from_active(builder, dx))];
+                return vec![Some(build_zero_like(
+                    builder,
+                    input_dtype,
+                    ValueRef::Local(dx),
+                    input_rank,
+                ))];
             }
 
-            let input_rank = ctx.rank_of(&input_ref).unwrap_or(0);
             let zero = build_zero_like(builder, input_dtype, input_ref.clone(), input_rank);
             let zero_mask = emit_fixed_compare(
                 builder,
@@ -446,7 +438,12 @@ pub fn linearize_sign(
                     active_mask: vec![true, true],
                 },
             )[0];
-            let zero_derivative = emit_zero_from_active(builder, derivative);
+            let zero_derivative = build_zero_like(
+                builder,
+                input_dtype,
+                ValueRef::Local(derivative),
+                input_rank,
+            );
             vec![Some(emit_linear_select(
                 builder,
                 ValueRef::Local(zero_mask),
@@ -471,6 +468,8 @@ pub fn linearize_maximum(
     let lhs = ValueRef::External(primal_in[0].clone());
     let rhs = ValueRef::External(primal_in[1].clone());
     let dtype = dtype_of_or_real(ctx, &lhs);
+    let lhs_rank = ctx.rank_of(&lhs).unwrap_or(0);
+    let rhs_rank = ctx.rank_of(&rhs).unwrap_or(0);
     let output = emit_fixed_binary(builder, StdTensorOp::Maximum, lhs.clone(), rhs.clone());
     let lhs_eq_output = emit_fixed_compare(
         builder,
@@ -488,6 +487,7 @@ pub fn linearize_maximum(
             lhs_eq_output,
             rhs_eq_output,
             dtype,
+            lhs_rank,
         ));
     }
     if let Some(rhs_tangent) = tangent_in[1] {
@@ -497,6 +497,7 @@ pub fn linearize_maximum(
             rhs_eq_output,
             lhs_eq_output,
             dtype,
+            rhs_rank,
         ));
     }
     vec![sum_linear_terms(builder, &terms)]
@@ -515,6 +516,8 @@ pub fn linearize_minimum(
     let lhs = ValueRef::External(primal_in[0].clone());
     let rhs = ValueRef::External(primal_in[1].clone());
     let dtype = dtype_of_or_real(ctx, &lhs);
+    let lhs_rank = ctx.rank_of(&lhs).unwrap_or(0);
+    let rhs_rank = ctx.rank_of(&rhs).unwrap_or(0);
     let output = emit_fixed_binary(builder, StdTensorOp::Minimum, lhs.clone(), rhs.clone());
     let lhs_eq_output = emit_fixed_compare(
         builder,
@@ -532,6 +535,7 @@ pub fn linearize_minimum(
             lhs_eq_output,
             rhs_eq_output,
             dtype,
+            lhs_rank,
         ));
     }
     if let Some(rhs_tangent) = tangent_in[1] {
@@ -541,6 +545,7 @@ pub fn linearize_minimum(
             rhs_eq_output,
             lhs_eq_output,
             dtype,
+            rhs_rank,
         ));
     }
     vec![sum_linear_terms(builder, &terms)]
@@ -550,12 +555,26 @@ pub fn linearize_select(
     builder: &mut dyn PrimitiveRuleBuilder,
     primal_in: &[ValueKey<StdTensorOp>],
     tangent_in: &[Option<LocalValueId>],
+    ctx: &mut ShapeGuardContext,
 ) -> Vec<Option<LocalValueId>> {
+    if tangent_in[1].is_none() && tangent_in[2].is_none() {
+        return vec![None];
+    }
+    let on_true = ValueRef::External(primal_in[1].clone());
+    let on_false = ValueRef::External(primal_in[2].clone());
+    let dtype = promote_dtype(
+        dtype_of_or_real(ctx, &on_true),
+        dtype_of_or_real(ctx, &on_false),
+    );
+    let condition = ValueRef::External(primal_in[0].clone());
+    let rank = ctx.rank_of(&condition).unwrap_or(0);
     vec![select_tangents(
         builder,
-        ValueRef::External(primal_in[0].clone()),
+        condition,
         tangent_in[1],
         tangent_in[2],
+        dtype,
+        rank,
     )]
 }
 
@@ -563,12 +582,15 @@ pub fn linearize_clamp(
     builder: &mut dyn PrimitiveRuleBuilder,
     primal_in: &[ValueKey<StdTensorOp>],
     tangent_in: &[Option<LocalValueId>],
+    ctx: &mut ShapeGuardContext,
 ) -> Vec<Option<LocalValueId>> {
     if tangent_in.iter().all(Option::is_none) {
         return vec![None];
     }
 
     let input = ValueRef::External(primal_in[0].clone());
+    let input_dtype = dtype_of_or_real(ctx, &input);
+    let input_rank = ctx.rank_of(&input).unwrap_or(0);
     let lower = ValueRef::External(primal_in[1].clone());
     let upper = ValueRef::External(primal_in[2].clone());
     let input_gt_lower = emit_fixed_compare(builder, CompareDir::Gt, input.clone(), lower.clone());
@@ -589,6 +611,8 @@ pub fn linearize_clamp(
             builder,
             d_input,
             &[input_gt_lower, input_lt_upper],
+            input_dtype,
+            input_rank,
         ));
     }
     if let Some(d_lower) = tangent_in[1] {
@@ -596,6 +620,8 @@ pub fn linearize_clamp(
             builder,
             d_lower,
             &[lower_gt_input, lower_lt_upper],
+            input_dtype,
+            input_rank,
         ));
     }
     if let Some(d_upper) = tangent_in[2] {
@@ -603,6 +629,8 @@ pub fn linearize_clamp(
             builder,
             d_upper,
             &[upper_lt_max_input_lower],
+            input_dtype,
+            input_rank,
         ));
     }
 
@@ -707,13 +735,25 @@ pub fn transpose_abs(
 pub fn transpose_sign(
     builder: &mut dyn PrimitiveRuleBuilder,
     cotangent_out: &[Option<LocalValueId>],
+    inputs: &[TransposeInputRef<'_>],
     mode: &OperationRole,
+    ctx: &mut ShapeGuardContext,
 ) -> Vec<Option<LocalValueId>> {
     if !unary_is_active(mode) {
         return vec![None];
     }
     match cotangent_out[0] {
-        Some(ct) => vec![Some(emit_zero_from_active(builder, ct))],
+        Some(ct) => {
+            let metadata = inputs[0].metadata_value();
+            let dtype = dtype_of_or_real(ctx, &metadata);
+            let rank = ctx.rank_of(&metadata).unwrap_or(0);
+            vec![Some(build_zero_like(
+                builder,
+                dtype,
+                ValueRef::Local(ct),
+                rank,
+            ))]
+        }
         None => vec![None],
     }
 }
@@ -733,6 +773,8 @@ pub fn transpose_maximum(
         return vec![None, None];
     }
     let dtype = dtype_of_or_real(ctx, &inputs[0]);
+    let lhs_rank = ctx.rank_of(&inputs[0]).unwrap_or(0);
+    let rhs_rank = ctx.rank_of(&inputs[1]).unwrap_or(0);
     let output = emit_fixed_binary(
         builder,
         StdTensorOp::Maximum,
@@ -753,10 +795,12 @@ pub fn transpose_maximum(
     );
     let lhs_active = active.first().copied().unwrap_or(false);
     let rhs_active = active.get(1).copied().unwrap_or(false);
-    let lhs = lhs_active
-        .then(|| balanced_extrema_contribution(builder, ct, lhs_eq_output, rhs_eq_output, dtype));
-    let rhs = rhs_active
-        .then(|| balanced_extrema_contribution(builder, ct, rhs_eq_output, lhs_eq_output, dtype));
+    let lhs = lhs_active.then(|| {
+        balanced_extrema_contribution(builder, ct, lhs_eq_output, rhs_eq_output, dtype, lhs_rank)
+    });
+    let rhs = rhs_active.then(|| {
+        balanced_extrema_contribution(builder, ct, rhs_eq_output, lhs_eq_output, dtype, rhs_rank)
+    });
     vec![lhs, rhs]
 }
 
@@ -775,6 +819,8 @@ pub fn transpose_minimum(
         return vec![None, None];
     }
     let dtype = dtype_of_or_real(ctx, &inputs[0]);
+    let lhs_rank = ctx.rank_of(&inputs[0]).unwrap_or(0);
+    let rhs_rank = ctx.rank_of(&inputs[1]).unwrap_or(0);
     let output = emit_fixed_binary(
         builder,
         StdTensorOp::Minimum,
@@ -795,10 +841,12 @@ pub fn transpose_minimum(
     );
     let lhs_active = active.first().copied().unwrap_or(false);
     let rhs_active = active.get(1).copied().unwrap_or(false);
-    let lhs = lhs_active
-        .then(|| balanced_extrema_contribution(builder, ct, lhs_eq_output, rhs_eq_output, dtype));
-    let rhs = rhs_active
-        .then(|| balanced_extrema_contribution(builder, ct, rhs_eq_output, lhs_eq_output, dtype));
+    let lhs = lhs_active.then(|| {
+        balanced_extrema_contribution(builder, ct, lhs_eq_output, rhs_eq_output, dtype, lhs_rank)
+    });
+    let rhs = rhs_active.then(|| {
+        balanced_extrema_contribution(builder, ct, rhs_eq_output, lhs_eq_output, dtype, rhs_rank)
+    });
     vec![lhs, rhs]
 }
 
@@ -807,6 +855,7 @@ pub fn transpose_select(
     cotangent_out: &[Option<LocalValueId>],
     inputs: &[TransposeInputRef<'_>],
     mode: &OperationRole,
+    ctx: &mut ShapeGuardContext,
 ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     let Some(ct) = cotangent_out[0] else {
         return Ok(vec![None, None, None]);
@@ -818,8 +867,20 @@ pub fn transpose_select(
         return Ok(vec![None, None, None]);
     }
     let condition = inputs[0].fixed_value("select", 0)?;
-    let (on_true, on_false) =
-        split_cotangent_by_mask(builder, condition, ct, true_active, false_active);
+    let dtype = promote_dtype(
+        dtype_of_or_real(ctx, &inputs[1].metadata_value()),
+        dtype_of_or_real(ctx, &inputs[2].metadata_value()),
+    );
+    let rank = ctx.rank_of(&condition).unwrap_or(0);
+    let (on_true, on_false) = split_cotangent_by_mask(
+        builder,
+        condition,
+        ct,
+        true_active,
+        false_active,
+        dtype,
+        rank,
+    );
     Ok(vec![None, on_true, on_false])
 }
 
@@ -828,10 +889,13 @@ pub fn transpose_clamp(
     cotangent_out: &[Option<LocalValueId>],
     inputs: &[ValueRef<StdTensorOp>],
     mode: &OperationRole,
+    ctx: &mut ShapeGuardContext,
 ) -> Vec<Option<LocalValueId>> {
     let Some(ct) = cotangent_out[0] else {
         return vec![None, None, None];
     };
+    let dtype = dtype_of_or_real(ctx, &inputs[0]);
+    let rank = ctx.rank_of(&inputs[0]).unwrap_or(0);
     let active = active_mask(mode, 3);
     if active.iter().all(|is_active| !is_active) {
         return vec![None, None, None];
@@ -877,12 +941,14 @@ pub fn transpose_clamp(
         ValueRef::Local(max_input_lower),
     );
 
-    let input_ct = input_active
-        .then(|| mask_active_by_conditions(builder, ct, &[input_gt_lower, input_lt_upper]));
-    let lower_ct = lower_active
-        .then(|| mask_active_by_conditions(builder, ct, &[lower_gt_input, lower_lt_upper]));
-    let upper_ct =
-        upper_active.then(|| mask_active_by_conditions(builder, ct, &[upper_lt_max_input_lower]));
+    let input_ct = input_active.then(|| {
+        mask_active_by_conditions(builder, ct, &[input_gt_lower, input_lt_upper], dtype, rank)
+    });
+    let lower_ct = lower_active.then(|| {
+        mask_active_by_conditions(builder, ct, &[lower_gt_input, lower_lt_upper], dtype, rank)
+    });
+    let upper_ct = upper_active
+        .then(|| mask_active_by_conditions(builder, ct, &[upper_lt_max_input_lower], dtype, rank));
 
     vec![input_ct, lower_ct, upper_ct]
 }

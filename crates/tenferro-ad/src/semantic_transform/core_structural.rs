@@ -280,8 +280,7 @@ fn zero_like(
     anchor: ProgramValue,
     role: SemanticTransformRole,
 ) -> Result<ProgramValue, SemanticAdTransformError> {
-    let one = one_like(builder, anchor, role)?;
-    Ok(builder.add_op(CoreSemanticOp::Sub, &[one, one])?[0])
+    zero_constant_like(builder, anchor, role)
 }
 
 fn exact_usize_shape(

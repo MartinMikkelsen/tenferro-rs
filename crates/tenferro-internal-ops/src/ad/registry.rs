@@ -628,10 +628,10 @@ fn linearize_select(
     primal_in: &[ValueKey<StdTensorOp>],
     _primal_out: &[ValueKey<StdTensorOp>],
     tangent_in: &[Option<LocalValueId>],
-    _ctx: &mut ShapeGuardContext,
+    ctx: &mut ShapeGuardContext,
 ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     Ok(elementwise::linearize_select(
-        builder, primal_in, tangent_in,
+        builder, primal_in, tangent_in, ctx,
     ))
 }
 
@@ -641,9 +641,11 @@ fn linearize_clamp(
     primal_in: &[ValueKey<StdTensorOp>],
     _primal_out: &[ValueKey<StdTensorOp>],
     tangent_in: &[Option<LocalValueId>],
-    _ctx: &mut ShapeGuardContext,
+    ctx: &mut ShapeGuardContext,
 ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
-    Ok(elementwise::linearize_clamp(builder, primal_in, tangent_in))
+    Ok(elementwise::linearize_clamp(
+        builder, primal_in, tangent_in, ctx,
+    ))
 }
 
 macro_rules! transpose_elementwise {
@@ -654,10 +656,10 @@ macro_rules! transpose_elementwise {
             cotangent_out: &[Option<LocalValueId>],
             inputs: &[TransposeInputRef<'_>],
             mode: &OperationRole,
-            _ctx: &mut ShapeGuardContext,
+            ctx: &mut ShapeGuardContext,
         ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
             let inputs = fixed_value_refs(stringify!($name), inputs)?;
-            Ok($callee(builder, cotangent_out, &inputs, mode))
+            Ok($callee(builder, cotangent_out, &inputs, mode, ctx))
         }
     };
 }
@@ -693,11 +695,17 @@ fn transpose_sign(
     _op: &StdTensorOp,
     builder: &mut dyn PrimitiveRuleBuilder,
     cotangent_out: &[Option<LocalValueId>],
-    _inputs: &[TransposeInputRef<'_>],
+    inputs: &[TransposeInputRef<'_>],
     mode: &OperationRole,
-    _ctx: &mut ShapeGuardContext,
+    ctx: &mut ShapeGuardContext,
 ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
-    Ok(elementwise::transpose_sign(builder, cotangent_out, mode))
+    Ok(elementwise::transpose_sign(
+        builder,
+        cotangent_out,
+        inputs,
+        mode,
+        ctx,
+    ))
 }
 fn transpose_maximum(
     _op: &StdTensorOp,
@@ -740,9 +748,9 @@ fn transpose_select(
     cotangent_out: &[Option<LocalValueId>],
     inputs: &[TransposeInputRef<'_>],
     mode: &OperationRole,
-    _ctx: &mut ShapeGuardContext,
+    ctx: &mut ShapeGuardContext,
 ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
-    elementwise::transpose_select(builder, cotangent_out, inputs, mode)
+    elementwise::transpose_select(builder, cotangent_out, inputs, mode, ctx)
 }
 transpose_elementwise!(transpose_clamp, elementwise::transpose_clamp);
 fn transpose_compare(

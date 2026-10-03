@@ -1496,38 +1496,25 @@ fn convert_ad_value(
     unary_ad_value(builder, CoreSemanticOp::Convert { from, to }, value)
 }
 
-fn zero_from_ad_value(
-    builder: &mut SemanticProgramBuilder,
-    value: AdValue,
-) -> Result<AdValue, ProgramBuildError> {
-    let negated = unary_ad_value(builder, CoreSemanticOp::Neg, value)?;
-    add_ad_values(builder, value, negated)
-}
-
 fn select_ad_values(
     builder: &mut SemanticProgramBuilder,
     condition: ProgramValue,
     on_true: AdValue,
     on_false: AdValue,
-) -> Result<AdValue, ProgramBuildError> {
+) -> Result<AdValue, SemanticAdTransformError> {
     match (on_true, on_false) {
         (AdValue::Absent, AdValue::Absent) => Ok(AdValue::Absent),
         (AdValue::Value(on_true), AdValue::Value(on_false)) => Ok(AdValue::Value(
             builder.add_op(CoreSemanticOp::Select, &[condition, on_true, on_false])?[0],
         )),
         (AdValue::Value(on_true), AdValue::Absent) => {
-            let AdValue::Value(zero) = zero_from_ad_value(builder, AdValue::Value(on_true))? else {
-                unreachable!();
-            };
+            let zero = zero_constant_like(builder, on_true, SemanticTransformRole::Jvp)?;
             Ok(AdValue::Value(
                 builder.add_op(CoreSemanticOp::Select, &[condition, on_true, zero])?[0],
             ))
         }
         (AdValue::Absent, AdValue::Value(on_false)) => {
-            let AdValue::Value(zero) = zero_from_ad_value(builder, AdValue::Value(on_false))?
-            else {
-                unreachable!();
-            };
+            let zero = zero_constant_like(builder, on_false, SemanticTransformRole::Jvp)?;
             Ok(AdValue::Value(
                 builder.add_op(CoreSemanticOp::Select, &[condition, zero, on_false])?[0],
             ))
@@ -1541,16 +1528,14 @@ fn split_select_cotangent(
     cotangent: AdValue,
     true_active: bool,
     false_active: bool,
-) -> Result<(AdValue, AdValue), ProgramBuildError> {
+) -> Result<(AdValue, AdValue), SemanticAdTransformError> {
     if !true_active && !false_active {
         return Ok((AdValue::Absent, AdValue::Absent));
     }
     let AdValue::Value(cotangent) = cotangent else {
         return Ok((AdValue::Absent, AdValue::Absent));
     };
-    let AdValue::Value(zero) = zero_from_ad_value(builder, AdValue::Value(cotangent))? else {
-        unreachable!();
-    };
+    let zero = zero_constant_like(builder, cotangent, SemanticTransformRole::Vjp)?;
     let on_true = if true_active {
         AdValue::Value(builder.add_op(CoreSemanticOp::Select, &[condition, cotangent, zero])?[0])
     } else {
@@ -1642,7 +1627,7 @@ fn balanced_extrema_contribution(
     let AdValue::Value(active) = active else {
         return Ok(AdValue::Absent);
     };
-    let zero = builder.add_op(CoreSemanticOp::Sub, &[active, active])?[0];
+    let zero = zero_constant_like(builder, active, role)?;
     let selected = builder.add_op(CoreSemanticOp::Select, &[self_eq_output, active, zero])?[0];
     let one = one_like(builder, active, role)?;
     let two = builder.add_op(CoreSemanticOp::Add, &[one, one])?[0];
@@ -1656,13 +1641,28 @@ fn linearize_clamp(
     builder: &mut SemanticProgramBuilder,
     primal_inputs: &[ProgramValue],
     tangent_inputs: &[AdValue],
-) -> Result<AdValue, ProgramBuildError> {
+) -> Result<AdValue, SemanticAdTransformError> {
     let masks = clamp_masks(builder, primal_inputs)?;
-    let input = mask_ad_value(builder, tangent_inputs[0], &[masks[0], masks[1]])?;
-    let lower = mask_ad_value(builder, tangent_inputs[1], &[masks[2], masks[3]])?;
-    let upper = mask_ad_value(builder, tangent_inputs[2], &[masks[4]])?;
+    let input = mask_ad_value(
+        builder,
+        tangent_inputs[0],
+        &[masks[0], masks[1]],
+        SemanticTransformRole::Jvp,
+    )?;
+    let lower = mask_ad_value(
+        builder,
+        tangent_inputs[1],
+        &[masks[2], masks[3]],
+        SemanticTransformRole::Jvp,
+    )?;
+    let upper = mask_ad_value(
+        builder,
+        tangent_inputs[2],
+        &[masks[4]],
+        SemanticTransformRole::Jvp,
+    )?;
     let input_and_lower = add_ad_values(builder, input, lower)?;
-    add_ad_values(builder, input_and_lower, upper)
+    Ok(add_ad_values(builder, input_and_lower, upper)?)
 }
 
 fn clamp_vjp(
@@ -1672,9 +1672,19 @@ fn clamp_vjp(
     active_inputs: &[bool],
 ) -> Result<Vec<AdValue>, SemanticAdTransformError> {
     let masks = clamp_masks(builder, primal_inputs)?;
-    let input = mask_ad_value(builder, cotangent, &[masks[0], masks[1]])?;
-    let lower = mask_ad_value(builder, cotangent, &[masks[2], masks[3]])?;
-    let upper = mask_ad_value(builder, cotangent, &[masks[4]])?;
+    let input = mask_ad_value(
+        builder,
+        cotangent,
+        &[masks[0], masks[1]],
+        SemanticTransformRole::Vjp,
+    )?;
+    let lower = mask_ad_value(
+        builder,
+        cotangent,
+        &[masks[2], masks[3]],
+        SemanticTransformRole::Vjp,
+    )?;
+    let upper = mask_ad_value(builder, cotangent, &[masks[4]], SemanticTransformRole::Vjp)?;
     Ok(vec![
         normalize_ad_value(builder, input, active_inputs[0], primal_inputs[0])?,
         normalize_ad_value(builder, lower, active_inputs[1], primal_inputs[1])?,
@@ -1715,11 +1725,12 @@ fn mask_ad_value(
     builder: &mut SemanticProgramBuilder,
     active: AdValue,
     conditions: &[ProgramValue],
-) -> Result<AdValue, ProgramBuildError> {
+    role: SemanticTransformRole,
+) -> Result<AdValue, SemanticAdTransformError> {
     let AdValue::Value(active) = active else {
         return Ok(AdValue::Absent);
     };
-    let zero = builder.add_op(CoreSemanticOp::Sub, &[active, active])?[0];
+    let zero = zero_constant_like(builder, active, role)?;
     let mut value = active;
     for condition in conditions {
         value = builder.add_op(CoreSemanticOp::Select, &[*condition, value, zero])?[0];
@@ -1754,7 +1765,7 @@ fn linearize_sign(
         return Ok(AdValue::Absent);
     }
 
-    let zero = builder.add_op(CoreSemanticOp::Sub, &[primal_input, primal_input])?[0];
+    let zero = zero_constant_like(builder, primal_input, SemanticTransformRole::Jvp)?;
     let zero_mask = builder.add_op(
         CoreSemanticOp::Compare(CompareDir::Eq),
         &[primal_input, zero],
@@ -1781,13 +1792,13 @@ fn linearize_sign(
     let sign_times_abs_tangent = multiply_ad_value(builder, abs_tangent, safe_sign)?;
     let correction = divide_ad_value(builder, sign_times_abs_tangent, safe_abs)?;
     let derivative = sub_ad_values(builder, tangent_over_abs, correction)?;
-    let zero_derivative = zero_from_ad_value(builder, AdValue::Value(tangent_value))?;
-    Ok(select_ad_values(
+    let zero_derivative = zero_constant_like(builder, tangent_value, SemanticTransformRole::Jvp)?;
+    select_ad_values(
         builder,
         zero_mask,
-        zero_derivative,
+        AdValue::Value(zero_derivative),
         derivative,
-    )?)
+    )
 }
 
 fn analytic_unary_coefficient(
@@ -1877,6 +1888,53 @@ fn one_like(
             &shape.dynamic_axes,
         )?)
     }
+}
+
+/// Build a true dtype-aware zero shaped like `anchor`.
+///
+/// A zero synthesized as `x - x` or `x + (-x)` evaluates to `NaN` when `x` is
+/// non-finite, so emission sites that need an additive identity for masked-out
+/// values must materialize a `Constant` zero instead of deriving it from the
+/// active value.
+fn zero_constant_like(
+    builder: &mut SemanticProgramBuilder,
+    anchor: ProgramValue,
+    role: SemanticTransformRole,
+) -> Result<ProgramValue, SemanticAdTransformError> {
+    let metadata = builder.value_metadata(anchor)?.clone();
+    let dtype = metadata.dtype();
+    let bytes = match dtype {
+        DType::F32 => 0.0_f32.to_le_bytes().to_vec(),
+        DType::F64 => 0.0_f64.to_le_bytes().to_vec(),
+        DType::I32 => 0_i32.to_le_bytes().to_vec(),
+        DType::I64 => 0_i64.to_le_bytes().to_vec(),
+        DType::Bool => vec![0],
+        DType::C32 => {
+            let mut bytes = 0.0_f32.to_le_bytes().to_vec();
+            bytes.extend_from_slice(&0.0_f32.to_le_bytes());
+            bytes
+        }
+        DType::C64 => {
+            let mut bytes = 0.0_f64.to_le_bytes().to_vec();
+            bytes.extend_from_slice(&0.0_f64.to_le_bytes());
+            bytes
+        }
+        // INVARIANT: the semantic AD catalog is closed to the preset scalars,
+        // so an externally defined dtype cannot reach a constant emission.
+        DType::External(_) => unreachable!("the AD catalog is closed to the presets"),
+    };
+    let scalar = builder.add_op(CoreSemanticOp::Constant { dtype, bytes }, &[])?[0];
+    if metadata.shape().is_empty() {
+        return Ok(scalar);
+    }
+    let shape = shape_plan(metadata.shape(), role, "zero-like anchor")?;
+    let zero = broadcast_value_in_dim_to_shape(builder, scalar, anchor, &shape, Vec::new())?;
+    Ok(truncate_value_to_dynamic_axes(
+        builder,
+        zero,
+        anchor,
+        &shape.dynamic_axes,
+    )?)
 }
 
 fn active_cotangent(
