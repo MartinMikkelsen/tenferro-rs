@@ -88,8 +88,9 @@ fall through to the built-in faer/LAPACK kernel. Kernels must return exactly
 the built-in outputs (order, shapes, dtypes, pivot and ordering conventions,
 trailing batch axes), so composites and AD rules are unchanged. The
 Householder family, `lu_factor`, prepared LU solves and `_into` outputs keep
-the built-in kernels. `ext/tenferro-cpu-tprims` implements this trait with
-tprims for single matrices and declines batched inputs.
+the built-in kernels. No in-tree extension implements it now:
+`ext/tenferro-cpu-tprims` dropped its tprims-backed kernels when tprims-rs
+removed `trsm` and its linalg crate, so the built-in kernels run.
 
 ## Concrete, Read, And Typed Boundary
 

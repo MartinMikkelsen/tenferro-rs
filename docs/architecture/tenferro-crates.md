@@ -75,9 +75,8 @@ selected `tenferro-cpu` base provider. The unpublished
 `ext/tenferro-cpu-tprims` crate likewise depends on tprims-rs by git commit
 (and repeats the workspace strided-rs pin) and installs GEMM and
 general-contraction providers that run on the context's Rayon pool
-(`CpuExecutionContext::rayon_pool`), plus `tenferro-linalg` CPU kernels
-through a typed bundle extension (`CpuProviderBundleBuilder::extension`);
-`tenferro-cpu` has no tprims or linalg dependency.
+(`CpuExecutionContext::rayon_pool`); linear algebra stays on the built-in
+kernels. `tenferro-cpu` has no tprims dependency.
 
 ## III. Layering
 
