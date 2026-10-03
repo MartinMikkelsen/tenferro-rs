@@ -461,7 +461,9 @@ fn lapack_batched_value_factor_paths_reuse_pooled_batch_input() {
     let lu_source = include_str!("../linalg/lapack_linalg/lu.rs");
     let lu_factor = source_from(lu_source, "pub(crate) fn lu_factor");
     assert!(lu_factor.contains("pooled_copy(buffers, input.host_data()?)"));
-    assert!(lu_factor.contains("lu_factor_batched_in_place("));
+    // The factor kernel now lives in the extracted LAPACK implementation; what this test pins
+    // is that the wrapper still reuses the pooled batch input and delegates in one batched call.
+    assert!(lu_factor.contains("crate::cpu::tlinalg_blas::factor_batch::<T>("));
     assert!(!lu_factor.contains("host_data()?[range].to_vec()"));
 
     let eigh_source = include_str!("../linalg/lapack_linalg/eigh.rs");

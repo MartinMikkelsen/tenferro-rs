@@ -94,15 +94,16 @@ macro_rules! impl_cpu_packed_lu {
                         CpuLinalgProvider::Blas => {
                             #[cfg(feature = "cpu-blas")]
                             {
-                                let batch = pivots.len().checked_div(n).unwrap_or(0);
-                                linalg::blas::check_packed_lu_batch_strategy(ctx, op, batch)?;
-                                linalg::blas::lu_solve_prepared_batched_in_place::<$scalar>(
-                                    op,
-                                    (n, nrhs),
+                                crate::cpu::tlinalg_blas::solve_prepared_batch::<$scalar>(
+                                    ctx,
+                                    tlinalg_traits::Op::LuSolvePrepared,
+                                    n,
+                                    nrhs,
                                     packed_lu,
                                     pivots,
                                     output,
-                                    (transpose_a, conjugate_a),
+                                    transpose_a,
+                                    conjugate_a,
                                 )
                             }
                             #[cfg(not(feature = "cpu-blas"))]
@@ -146,10 +147,14 @@ macro_rules! impl_cpu_packed_lu {
                         CpuLinalgProvider::Blas => {
                             #[cfg(feature = "cpu-blas")]
                             {
-                                let batch = pivots.len().checked_div(n).unwrap_or(0);
-                                linalg::blas::check_packed_lu_batch_strategy(ctx, op, batch)?;
-                                linalg::blas::lu_factor_solve_batched_in_place::<$scalar>(
-                                    op, n, nrhs, packed_lu, pivots, output,
+                                crate::cpu::tlinalg_blas::factor_solve_batch::<$scalar>(
+                                    ctx,
+                                    tlinalg_traits::Op::LuFactorSolve,
+                                    n,
+                                    nrhs,
+                                    packed_lu,
+                                    pivots,
+                                    output,
                                 )
                             }
                             #[cfg(not(feature = "cpu-blas"))]
