@@ -180,7 +180,7 @@ let transposed = source.as_view().transpose_view([1, 0])?;
 let error = transposed.as_slice().unwrap_err();
 assert!(error
     .to_string()
-    .contains("view is not contiguous column-major"));
+    .contains("view is not slice-contiguous"));
 
 let mut backend = CpuBackend::new();
 let read = transposed.into_tensor_read()?;

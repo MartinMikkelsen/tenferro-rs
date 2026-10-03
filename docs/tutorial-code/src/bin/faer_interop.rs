@@ -168,7 +168,7 @@ fn faer_rejects_non_contiguous_without_materializing() -> tenferro_tensor::Resul
     // as_slice rejects the view explicitly. There is no hidden materialization.
     let error = transposed.as_slice().unwrap_err();
     assert!(
-        error.to_string().contains("not contiguous column-major"),
+        error.to_string().contains("not slice-contiguous"),
         "unexpected error: {error}"
     );
 
