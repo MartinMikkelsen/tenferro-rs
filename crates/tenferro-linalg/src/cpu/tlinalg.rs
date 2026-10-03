@@ -15,7 +15,9 @@ use std::sync::Mutex;
 use tenferro_cpu::{CpuBatchStrategy, CpuExecutionContext};
 use tlinalg::packed_lu::{factor_chunk, factor_solve_chunk, solve_prepared_chunk, FactorScratch};
 use tlinalg::FaerScalar;
-use tlinalg_traits::{Error as TlError, LanePlan, Op, Parallel};
+use tlinalg_traits::{LanePlan, Op, Parallel};
+
+use super::tlinalg_error::map_error;
 
 /// The parallelism of one tenferro context, for `tlinalg`.
 ///
@@ -85,47 +87,6 @@ pub(crate) fn lane_plan<'a>(
         _ => Err(unavailable(
             "the linalg provider has no vendor batched factorization",
         )),
-    }
-}
-
-/// Rebuild tenferro's error from a `tlinalg` failure.
-///
-/// The mapping is one-to-one on kind, role and typed source, because callers downcast the source
-/// and classify by kind.
-pub(crate) fn map_error(op: Op, error: TlError) -> tenferro_tensor::Error {
-    let op_str = op.as_str();
-    match error {
-        TlError::NonConvergence { .. } => {
-            crate::error::into_tensor_error(op_str, crate::Error::NonConvergence { op: op_str })
-        }
-        TlError::NonFinite { role, .. } => crate::error::into_tensor_error(
-            op_str,
-            crate::Error::NonFinite {
-                op: op_str,
-                role: role.as_str(),
-            },
-        ),
-        TlError::Singular { .. } => {
-            crate::error::into_tensor_error(op_str, crate::Error::Singular { op: op_str })
-        }
-        TlError::InvalidArgument { role, detail, .. } => {
-            tenferro_tensor::Error::invalid_argument(op_str, role, detail)
-        }
-        TlError::InvalidWorkspace {
-            library,
-            routine,
-            detail,
-            ..
-        } => crate::error::invalid_workspace(op_str, library, routine, detail),
-        TlError::Inconsistent { detail, .. } => {
-            tenferro_tensor::Error::Internal(format!("{op_str}: {detail}"))
-        }
-        // `tlinalg_traits::Error` is non-exhaustive so a new variant is not a breaking change for
-        // the crate that reports it. The host cannot reproduce a payload it does not know, so it
-        // fails loudly instead of guessing a kind and silently misclassifying the failure.
-        other => {
-            tenferro_tensor::Error::Internal(format!("{op_str}: unmapped tlinalg error {other:?}"))
-        }
     }
 }
 

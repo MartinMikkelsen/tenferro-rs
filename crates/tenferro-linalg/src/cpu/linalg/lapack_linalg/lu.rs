@@ -127,12 +127,12 @@ fn lu_2d<T: LapackLu>(
     let p_len = checked_product("lu", "permutation matrix", &[m, m])?;
     let mut p_data = pooled_zeroed::<T>(buffers, p_len);
     for (row, &source_row) in permutation.iter().enumerate() {
-        p_data[row + source_row * m] = T::one();
+        p_data[row + source_row * m] = <T as LapackLu>::one();
     }
     let parity = if swap_count.is_multiple_of(2) {
-        T::one()
+        <T as LapackLu>::one()
     } else {
-        T::negative_one()
+        <T as LapackLu>::negative_one()
     };
 
     let l_len = checked_product("lu", "lower factor", &[m, k])?;
@@ -141,7 +141,7 @@ fn lu_2d<T: LapackLu>(
         for row in col..m {
             l_data[row + col * m] = lu[row + col * m];
         }
-        l_data[col + col * m] = T::one();
+        l_data[col + col * m] = <T as LapackLu>::one();
     }
     let u_data = leading_upper_triangle_from_lapack(&lu, m, k, n)?;
     release_scratch(buffers, lu);
@@ -181,7 +181,7 @@ pub(crate) fn lu<T: LapackLu>(
             )?,
             tensor_from_vec_with_template(
                 batch_shape.to_vec(),
-                vec![T::one(); parity_elements],
+                vec![<T as LapackLu>::one(); parity_elements],
                 input,
             )?,
         ]);
@@ -189,7 +189,8 @@ pub(crate) fn lu<T: LapackLu>(
     batched_multi("lu", buffers, input, lu_2d)
 }
 
-pub(crate) fn lu_factor<T: LapackLu>(
+pub(crate) fn lu_factor<T: LapackLu + tlinalg_blas::LapackScalar>(
+    ctx: &tenferro_cpu::CpuExecutionContext<'_>,
     buffers: &mut BufferPool,
     input: &TypedTensor<T>,
 ) -> tenferro_tensor::Result<(TypedTensor<T>, TypedTensor<i32>, TypedTensor<T>)> {
@@ -206,7 +207,7 @@ pub(crate) fn lu_factor<T: LapackLu>(
             )?,
             tensor_from_vec_with_template(
                 batch_shape.to_vec(),
-                vec![T::one(); parity_elements],
+                vec![<T as LapackLu>::one(); parity_elements],
                 input,
             )?,
         ));
@@ -219,9 +220,10 @@ pub(crate) fn lu_factor<T: LapackLu>(
     let mut lu_data = pooled_copy(buffers, input.host_data()?);
     let mut pivot_data = pooled_zeroed::<i32>(buffers, pivot_len);
     let mut parity_data = buffers.acquire_with_capacity::<T>(batch_total);
-    parity_data.resize(batch_total, T::one());
-    lu_factor_batched_in_place(
-        "lu_factor",
+    parity_data.resize(batch_total, <T as LapackLu>::one());
+    crate::cpu::tlinalg_blas::factor_batch::<T>(
+        ctx,
+        tlinalg_traits::Op::LuFactor,
         m,
         n,
         &mut lu_data,
@@ -234,68 +236,4 @@ pub(crate) fn lu_factor<T: LapackLu>(
         tensor_from_vec_with_template(vector_with_batch_shape(k, batch_shape), pivot_data, input)?,
         tensor_from_vec_with_template(batch_shape.to_vec(), parity_data, input)?,
     ))
-}
-
-/// Factor every column-major `m x n` matrix of `lu_data` in place with `getrf`.
-///
-/// `pivot_data` receives `min(m, n)` one-based LAPACK pivots per matrix and
-/// `parity_data` one permutation parity (`+1` or `-1`) per matrix. Exactly
-/// singular matrices are not an error here: `getrf` reports them through a
-/// positive `info`, and the packed factors stay valid for callers that check
-/// the `U` diagonal themselves.
-///
-/// # Errors
-///
-/// Returns `Error::InvalidArgument` when a dimension exceeds the LAPACK `i32`
-/// range, when the buffer lengths do not describe the same batch, or when
-/// LAPACK reports an illegal argument.
-pub(crate) fn lu_factor_batched_in_place<T: LapackLu>(
-    op: &'static str,
-    m: usize,
-    n: usize,
-    lu_data: &mut [T],
-    pivot_data: &mut [i32],
-    parity_data: &mut [T],
-) -> tenferro_tensor::Result<()> {
-    let k = m.min(n);
-    let matrix_len = checked_product(op, "matrix shape", &[m, n])?;
-    let batch_total = parity_data.len();
-    if lu_data.len() != checked_product(op, "packed LU output", &[matrix_len, batch_total])?
-        || pivot_data.len() != checked_product(op, "pivot output", &[k, batch_total])?
-    {
-        return Err(tenferro_tensor::Error::Internal(format!(
-            "{op}: packed LU, pivot, and parity buffers describe different batches"
-        )));
-    }
-    if batch_total == 0 || matrix_len == 0 {
-        return Ok(());
-    }
-    let m_i32 = dim_i32(m, op)?;
-    let n_i32 = dim_i32(n, op)?;
-    // INVARIANT: the three buffers were checked above to hold exactly
-    // `batch_total` matrices, pivot vectors, and parities, and the early
-    // return guarantees `matrix_len > 0` and hence `k > 0`, so the chunk
-    // iterators stay in lockstep. The serial loop is intentional: the LAPACK
-    // provider owns any threading inside `getrf`, and one call per matrix
-    // writes straight into the caller's output buffers without scratch.
-    for ((matrix, ipiv), parity) in lu_data
-        .chunks_exact_mut(matrix_len)
-        .zip(pivot_data.chunks_exact_mut(k))
-        .zip(parity_data.iter_mut())
-    {
-        let mut info = 0;
-        T::getrf(m_i32, n_i32, matrix, m_i32, ipiv, &mut info);
-        check_lapack_info(op, "getrf", info.min(0))?;
-        let swap_count = ipiv
-            .iter()
-            .enumerate()
-            .filter(|(idx, pivot_one_based)| **pivot_one_based != (*idx as i32 + 1))
-            .count();
-        *parity = if swap_count.is_multiple_of(2) {
-            T::one()
-        } else {
-            T::negative_one()
-        };
-    }
-    Ok(())
 }
