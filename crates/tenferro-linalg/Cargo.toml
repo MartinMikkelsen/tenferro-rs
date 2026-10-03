@@ -143,6 +143,10 @@ path = "tests/lapack_allocation.rs"
 required-features = ["cpu-blas"]
 
 [[test]]
+name = "packed_lu_allocation"
+path = "tests/packed_lu_allocation.rs"
+
+[[test]]
 name = "apple_accelerate"
 path = "tests/apple_accelerate.rs"
 required-features = ["blas-accelerate", "webgpu", "autodiff"]
