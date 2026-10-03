@@ -2581,7 +2581,7 @@ fn engine_extension_cache_owner_id(engine_id: &EngineId) -> CacheOwnerId {
 
 fn allocate_nonzero(counter: &AtomicU64) -> Result<NonZeroU64, RuntimeConfigError> {
     let value = counter
-        .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |next| {
+        .try_update(Ordering::SeqCst, Ordering::SeqCst, |next| {
             next.checked_add(1)
         })
         .map_err(|_| RuntimeConfigError::IdentityExhausted)?;
