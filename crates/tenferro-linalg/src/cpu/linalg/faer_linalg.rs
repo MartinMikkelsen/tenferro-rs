@@ -3633,7 +3633,7 @@ pub(crate) fn lu<T: FaerLinalg>(
     })
 }
 
-pub(crate) fn lu_factor<T: FaerLinalg + FaerPackedLu>(
+pub(crate) fn lu_factor<T: FaerLinalg + tlinalg::FaerScalar>(
     ctx: &CpuExecutionContext<'_>,
     buffers: &mut BufferPool,
     input: &TypedTensor<T>,
@@ -3667,9 +3667,9 @@ pub(crate) fn lu_factor<T: FaerLinalg + FaerPackedLu>(
     let mut pivot_data = <i32 as PoolScalar>::pool_acquire_zeroed(buffers, pivot_len);
     let mut parity_data = buffers.acquire_with_capacity::<T>(batch_total);
     parity_data.resize(batch_total, T::parity_one());
-    lu_factor_batched_in_place(
+    crate::cpu::tlinalg::factor_batch::<T>(
         ctx,
-        "lu_factor",
+        tlinalg_traits::Op::LuFactor,
         m,
         n,
         &mut lu_data,
@@ -5163,13 +5163,6 @@ fn vector_with_batch_shape(len: usize, batch_shape: &[usize]) -> Vec<usize> {
     shape.extend_from_slice(batch_shape);
     shape
 }
-
-#[path = "faer_linalg/packed_lu.rs"]
-mod packed_lu;
-pub(crate) use packed_lu::{
-    lu_factor_batched_in_place, lu_factor_solve_batched_in_place,
-    lu_solve_prepared_batched_in_place, FaerPackedLu,
-};
 
 #[cfg(test)]
 #[path = "faer_linalg/tests.rs"]

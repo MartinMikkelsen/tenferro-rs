@@ -796,7 +796,7 @@ fn linalg_batched_helpers_use_checked_products_and_slice_ranges() {
     let faer_source = cpu_faer_linalg_source();
     let lu_factor = source_section(
         &faer_source,
-        "pub(crate) fn lu_factor<T: FaerLinalg + FaerPackedLu>",
+        "pub(crate) fn lu_factor<T: FaerLinalg + tlinalg::FaerScalar>",
         "pub(crate) fn full_piv_lu<T: FaerLinalg>",
     );
     assert!(

@@ -29,6 +29,8 @@ autodiff = [
 ]
 cpu-faer = [
     "dep:faer",
+    "dep:tlinalg",
+    "dep:tlinalg-traits",
     "tenferro-ad?/cpu-faer",
     "tenferro-cpu/cpu-faer",
 ]
@@ -92,6 +94,11 @@ cubecl-cuda = { workspace = true, optional = true }
 cubecl-runtime = { workspace = true, optional = true }
 cudarc = { workspace = true, optional = true }
 faer = { workspace = true, optional = true }
+# The extracted tensor-free linalg crate. Spelled with both a git rev and a version so that Cargo
+# uses the rev locally while a packaged manifest keeps only the version requirement, matching the
+# workspace's pre-publish staging pattern for its fork dependencies.
+tlinalg = { git = "https://github.com/tensor4all/tlinalg-rs.git", rev = "1f448c1828a8601210d88cd8015c5b883412e526", version = "0.1.0", optional = true }
+tlinalg-traits = { git = "https://github.com/tensor4all/tlinalg-rs.git", rev = "1f448c1828a8601210d88cd8015c5b883412e526", version = "0.1.0", optional = true }
 rayon.workspace = true
 lapack = { workspace = true, optional = true }
 lapack-inject = { workspace = true, optional = true }
@@ -141,6 +148,10 @@ path = "tests/prelude.rs"
 name = "lapack_allocation"
 path = "tests/lapack_allocation.rs"
 required-features = ["cpu-blas"]
+
+[[test]]
+name = "packed_lu_allocation"
+path = "tests/packed_lu_allocation.rs"
 
 [[test]]
 name = "apple_accelerate"

@@ -74,14 +74,16 @@ macro_rules! impl_cpu_packed_lu {
                         CpuLinalgProvider::Faer => {
                             #[cfg(feature = "cpu-faer")]
                             {
-                                linalg::faer::lu_solve_prepared_batched_in_place::<$scalar>(
+                                crate::cpu::tlinalg::solve_prepared_batch::<$scalar>(
                                     ctx,
-                                    op,
-                                    (n, nrhs),
+                                    tlinalg_traits::Op::LuSolvePrepared,
+                                    n,
+                                    nrhs,
                                     packed_lu,
                                     pivots,
                                     output,
-                                    (transpose_a, conjugate_a),
+                                    transpose_a,
+                                    conjugate_a,
                                 )
                             }
                             #[cfg(not(feature = "cpu-faer"))]
@@ -126,8 +128,14 @@ macro_rules! impl_cpu_packed_lu {
                         CpuLinalgProvider::Faer => {
                             #[cfg(feature = "cpu-faer")]
                             {
-                                linalg::faer::lu_factor_solve_batched_in_place::<$scalar>(
-                                    ctx, op, n, nrhs, packed_lu, pivots, output,
+                                crate::cpu::tlinalg::factor_solve_batch::<$scalar>(
+                                    ctx,
+                                    tlinalg_traits::Op::LuFactorSolve,
+                                    n,
+                                    nrhs,
+                                    packed_lu,
+                                    pivots,
+                                    output,
                                 )
                             }
                             #[cfg(not(feature = "cpu-faer"))]
