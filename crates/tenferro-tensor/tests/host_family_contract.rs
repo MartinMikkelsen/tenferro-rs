@@ -680,10 +680,11 @@ fn as_slice_accepts_nonzero_offset_and_rejects_non_contiguous_views() {
 
     let non_contiguous =
         TypedTensorView::<_, DynRank, Host>::from_host_slice(vec![2], vec![2], 0, &data).unwrap();
-    // The canonical view reports a non-contiguous layout as an invalid argument.
+    // The canonical view reports a non-contiguous layout with the same variant as
+    // `reshape_view_as`.
     assert!(matches!(
         validation(non_contiguous.as_slice().unwrap_err()),
-        ValidationError::InvalidArgument { .. }
+        ValidationError::NonContiguousViewAsSlice
     ));
 }
 

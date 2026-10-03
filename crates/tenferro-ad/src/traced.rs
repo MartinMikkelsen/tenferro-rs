@@ -34,6 +34,21 @@ fn error_shape_hint(tensor: &TracedTensor) -> Vec<usize> {
         .unwrap_or_else(|| vec![0; tensor.rank])
 }
 
+/// Typed error for the documented, user-reachable inactive-`wrt` state.
+///
+/// The `_optional` siblings expose this state as `Ok(None)`; the strict wrapper
+/// must not report a reachable input condition as an internal invariant.
+pub(crate) fn inactive_wrt_error(op: &'static str, wrt_key: impl std::fmt::Debug) -> Error {
+    Error::invalid_argument(
+        op,
+        ErrorPhase::GraphBuild,
+        "wrt",
+        format!(
+            "{op} is inactive for {wrt_key:?}; use {op}_optional to observe the inactive state"
+        ),
+    )
+}
+
 pub(crate) fn grad_with_rules_and_cache(
     output: &TracedTensor,
     wrt: &TracedTensor,
@@ -52,7 +67,7 @@ pub(crate) fn jvp_with_rules_and_cache(
 ) -> Result<TracedTensor> {
     let wrt_input_key = leaf_input_key(wrt)?;
     jvp_many_with_rules_and_cache(output, &[(wrt, tangent)], rules, ad_transform_cache)?
-        .ok_or_else(|| Error::Internal(format!("jvp output is inactive for {:?}", wrt_input_key)))
+        .ok_or_else(|| inactive_wrt_error("jvp", &wrt_input_key))
 }
 
 pub(crate) fn jvp_many_with_rules_and_cache(
@@ -104,7 +119,7 @@ pub(crate) fn vjp_with_rules_and_cache(
         .into_iter()
         .next()
         .flatten()
-        .ok_or_else(|| Error::Internal(format!("vjp output is inactive for {:?}", wrt_input_key)))
+        .ok_or_else(|| inactive_wrt_error("vjp", &wrt_input_key))
 }
 
 pub(crate) fn vjp_many_with_rules_and_cache(
@@ -164,7 +179,7 @@ fn grad_with_optional_rules(
     vjp_many_with_transform_and_cache(output, &[wrt], &seed, rules, "grad", ad_transform_cache)?
         .pop()
         .flatten()
-        .ok_or_else(|| Error::Internal(format!("grad output is inactive for {:?}", wrt_input_key)))
+        .ok_or_else(|| inactive_wrt_error("grad", &wrt_input_key))
 }
 
 fn single_runtime_output(mut outputs: Vec<Tensor>, op: &'static str) -> Result<Tensor> {
@@ -236,7 +251,9 @@ pub trait TracedTensorAdExt {
     ///
     /// Returns [`tenferro_runtime::Error::NonScalarGrad`] for a non-scalar
     /// output, [`tenferro_runtime::Error::UnsupportedAdRule`] when an AD rule
-    /// is unavailable, or a typed validation/backend/runtime-state error.
+    /// is unavailable, or a typed validation/backend/runtime-state error. An
+    /// inactive `wrt` returns [`Error::Validation`] with `argument: "wrt"`; use
+    /// [`grad_optional`](Self::grad_optional) to observe that state.
     ///
     /// # Deferred errors
     ///
@@ -342,7 +359,9 @@ pub trait TracedTensorAdExt {
     ///
     /// Returns [`tenferro_runtime::Error::UnsupportedAdRule`] when a JVP rule
     /// is unavailable, [`Error::Validation`] for incompatible tangent metadata,
-    /// or a typed backend/runtime-state error.
+    /// or a typed backend/runtime-state error. An inactive `wrt` returns
+    /// [`Error::Validation`] with `argument: "wrt"`; use
+    /// [`jvp_optional`](Self::jvp_optional) to observe that state.
     ///
     /// # Deferred errors
     ///
@@ -424,7 +443,9 @@ pub trait TracedTensorAdExt {
     ///
     /// Returns [`tenferro_runtime::Error::UnsupportedAdRule`] when a VJP rule
     /// is unavailable, [`Error::Validation`] for incompatible cotangent
-    /// metadata, or a typed backend/runtime-state error.
+    /// metadata, or a typed backend/runtime-state error. An inactive `wrt`
+    /// returns [`Error::Validation`] with `argument: "wrt"`; use
+    /// [`vjp_optional`](Self::vjp_optional) to observe that state.
     ///
     /// # Deferred errors
     ///
@@ -505,9 +526,8 @@ impl TracedTensorAdExt for TracedTensor {
 
     fn jvp(&self, wrt: &TracedTensor, tangent: &TracedTensor) -> Result<TracedTensor> {
         let wrt_input_key = leaf_input_key(wrt)?;
-        self.jvp_optional(wrt, tangent)?.ok_or_else(|| {
-            Error::Internal(format!("jvp output is inactive for {:?}", wrt_input_key))
-        })
+        self.jvp_optional(wrt, tangent)?
+            .ok_or_else(|| inactive_wrt_error("jvp", &wrt_input_key))
     }
 
     fn jvp_optional(
@@ -521,9 +541,8 @@ impl TracedTensorAdExt for TracedTensor {
 
     fn vjp(&self, wrt: &TracedTensor, cotangent: &TracedTensor) -> Result<TracedTensor> {
         let wrt_input_key = leaf_input_key(wrt)?;
-        self.vjp_optional(wrt, cotangent)?.ok_or_else(|| {
-            Error::Internal(format!("vjp output is inactive for {:?}", wrt_input_key))
-        })
+        self.vjp_optional(wrt, cotangent)?
+            .ok_or_else(|| inactive_wrt_error("vjp", &wrt_input_key))
     }
 
     fn vjp_optional(

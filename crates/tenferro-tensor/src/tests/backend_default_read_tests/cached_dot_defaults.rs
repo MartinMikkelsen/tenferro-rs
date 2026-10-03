@@ -3,7 +3,7 @@
 
 use super::*;
 use crate::backend::{dot_general_output_shape, elementwise_read_into_via_allocating_ops};
-use crate::{Error, SessionCachedDot, ShapeMismatch, ValidationError};
+use crate::{Error, SessionCachedDot, ShapeMismatch, StridedSliceSpec, ValidationError};
 
 fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
     Tensor::from_vec_col_major(shape, data).unwrap()
@@ -609,6 +609,33 @@ fn structural_default_materialization_copies_host_tensors_and_views() {
         .unwrap();
     assert_eq!(copy.shape(), &[2]);
     assert_eq!(copy.as_slice::<f64>().unwrap(), &[2.0, 3.0]);
+}
+
+#[test]
+fn structural_default_materialization_gathers_strided_views() {
+    let mut backend = StructuralDefaults;
+
+    // A transposed, non-compact view is gathered into a compact column-major copy.
+    let tensor =
+        TypedTensor::<i32>::from_vec_col_major(vec![2, 3], vec![1, 2, 3, 4, 5, 6]).unwrap();
+    let transposed = tensor.as_view().transpose_view([1, 0]).unwrap();
+    assert_eq!(transposed.strides(), &[2, 1]);
+    let copy = backend
+        .to_contiguous_read(TensorRead::from_view(TensorView::I32(transposed)))
+        .unwrap();
+    assert_eq!(copy.shape(), &[3, 2]);
+    assert_eq!(copy.as_slice::<i32>().unwrap(), &[1, 3, 5, 2, 4, 6]);
+
+    // A reversed (negative-stride) view gathers in logical order.
+    let data = [1_i32, 2, 3, 4];
+    let view = TypedTensorView::from_slice(vec![4], vec![1], 0, data.as_slice()).unwrap();
+    let reversed = view.slice_view(&[StridedSliceSpec::reverse()]).unwrap();
+    assert_eq!(reversed.strides(), &[-1]);
+    let copy = backend
+        .to_contiguous_read(TensorRead::from_view(TensorView::I32(reversed)))
+        .unwrap();
+    assert_eq!(copy.shape(), &[4]);
+    assert_eq!(copy.as_slice::<i32>().unwrap(), &[4, 3, 2, 1]);
 }
 
 #[test]

@@ -1033,9 +1033,14 @@ fn test_std_tensor_op_elementwise_special_cases_are_covered() {
 
     let (sign_result, sign_graph) = run_linearize_case(StdTensorOp::Sign, 1, 0, &[true]);
     assert!(sign_result[0].is_some());
-    assert_eq!(sign_graph.operations().len(), 2);
-    assert_eq!(sign_graph.operations()[0].operation, StdTensorOp::Neg);
-    assert_eq!(sign_graph.operations()[1].operation, StdTensorOp::Add);
+    assert!(!sign_graph
+        .operations()
+        .iter()
+        .any(|op| op.operation == StdTensorOp::Neg));
+    assert!(sign_graph.operations().iter().any(|op| matches!(
+        &op.operation,
+        StdTensorOp::Constant { bytes, .. } if bytes.iter().all(|byte| *byte == 0)
+    )));
 
     let (transpose_div_result, _, transpose_div_graph) =
         run_transpose_case(StdTensorOp::Div, 2, &[false, true], true);
@@ -1049,15 +1054,14 @@ fn test_std_tensor_op_elementwise_special_cases_are_covered() {
     let (transpose_sign_result, _, transpose_sign_graph) =
         run_transpose_case(StdTensorOp::Sign, 1, &[true], true);
     assert!(transpose_sign_result[0].is_some());
-    assert_eq!(transpose_sign_graph.operations().len(), 2);
-    assert_eq!(
-        transpose_sign_graph.operations()[0].operation,
-        StdTensorOp::Neg
-    );
-    assert_eq!(
-        transpose_sign_graph.operations()[1].operation,
-        StdTensorOp::Add
-    );
+    assert!(!transpose_sign_graph
+        .operations()
+        .iter()
+        .any(|op| op.operation == StdTensorOp::Neg));
+    assert!(transpose_sign_graph.operations().iter().any(|op| matches!(
+        &op.operation,
+        StdTensorOp::Constant { bytes, .. } if bytes.iter().all(|byte| *byte == 0)
+    )));
 
     let (transpose_div_none_result, _, transpose_div_none_graph) =
         run_transpose_case(StdTensorOp::Div, 2, &[true, true], false);

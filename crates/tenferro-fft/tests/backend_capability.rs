@@ -386,7 +386,6 @@ impl TensorOnlyBackend {
     fn record_transfer(&self) {}
 }
 
-#[doc(hidden)]
 impl_minimal_tensor_backend!(TensorOnlyBackend);
 
 fn assert_fft_capability<B: FftBackend>() {}

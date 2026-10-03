@@ -4207,10 +4207,12 @@ impl EagerRuntime {
     /// Returns [`tenferro_runtime::Error::NonScalarGrad`] for a non-scalar
     /// output, [`Error::ContextMismatch`] for tensors from another runtime,
     /// [`Error::UnsupportedAdRule`] when an AD rule is unavailable, or a typed
-    /// validation/backend error from eager execution.
+    /// validation/backend error from eager execution. An inactive `wrt` returns
+    /// [`Error::Validation`] with `argument: "wrt"`; use
+    /// [`grad_optional`](Self::grad_optional) to observe that state.
     pub fn grad(self: &Arc<Self>, output: &EagerTensor, wrt: &EagerTensor) -> Result<EagerTensor> {
         self.grad_optional(output, wrt)?
-            .ok_or_else(|| Error::Internal(format!("grad output is inactive for {:?}", wrt.key)))
+            .ok_or_else(|| crate::traced::inactive_wrt_error("grad", &wrt.key))
     }
 
     /// Gradient that returns `None` when `wrt` is inactive.
@@ -4285,7 +4287,9 @@ impl EagerRuntime {
     /// Returns [`Error::ContextMismatch`] for tensors from different eager
     /// runtimes, [`Error::Validation`] when the cotangent shape or dtype does
     /// not match the output, [`Error::UnsupportedAdRule`] when a rule is not
-    /// registered, or a typed backend/runtime-state error.
+    /// registered, or a typed backend/runtime-state error. An inactive `wrt`
+    /// returns [`Error::Validation`] with `argument: "wrt"`; use
+    /// [`vjp_optional`](Self::vjp_optional) to observe that state.
     pub fn vjp(
         self: &Arc<Self>,
         output: &EagerTensor,
@@ -4293,7 +4297,7 @@ impl EagerRuntime {
         cotangent: &EagerTensor,
     ) -> Result<EagerTensor> {
         self.vjp_optional(output, wrt, cotangent)?
-            .ok_or_else(|| Error::Internal(format!("vjp output is inactive for {:?}", wrt.key)))
+            .ok_or_else(|| crate::traced::inactive_wrt_error("vjp", &wrt.key))
     }
 
     /// Reverse-mode vector-Jacobian product that returns `None` for inactive inputs.
@@ -4371,7 +4375,9 @@ impl EagerRuntime {
     /// Returns [`Error::ContextMismatch`] for tensors from different eager
     /// runtimes, [`Error::Validation`] when the tangent shape or dtype does not
     /// match `wrt`, [`Error::UnsupportedAdRule`] when a rule is unavailable, or
-    /// a typed backend/runtime-state error.
+    /// a typed backend/runtime-state error. An inactive `wrt` returns
+    /// [`Error::Validation`] with `argument: "wrt"`; use
+    /// [`jvp_optional`](Self::jvp_optional) to observe that state.
     pub fn jvp(
         self: &Arc<Self>,
         output: &EagerTensor,
@@ -4379,7 +4385,7 @@ impl EagerRuntime {
         tangent: &EagerTensor,
     ) -> Result<EagerTensor> {
         self.jvp_optional(output, wrt, tangent)?
-            .ok_or_else(|| Error::Internal(format!("jvp output is inactive for {:?}", wrt.key)))
+            .ok_or_else(|| crate::traced::inactive_wrt_error("jvp", &wrt.key))
     }
 
     /// Forward-mode Jacobian-vector product that returns `None` for inactive outputs.

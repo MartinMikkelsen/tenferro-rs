@@ -632,11 +632,11 @@ fn typed_tensor_view_as_slice_rejects_non_contiguous_layout() {
         err,
         Error::Validation {
             op: "TypedTensorView::as_slice",
-            source: ValidationError::InvalidArgument { .. },
+            source: ValidationError::NonContiguousViewAsSlice,
             ..
         }
     ));
-    assert!(err.to_string().contains("not contiguous column-major"));
+    assert!(err.to_string().contains("not slice-contiguous"));
 }
 
 #[test]
@@ -1759,10 +1759,7 @@ fn tensor_read_as_slice_rejects_noncompact_typed_view() {
     assert!(matches!(
         err,
         Error::Validation {
-            source: ValidationError::InvalidArgument {
-                argument: "layout",
-                ..
-            },
+            source: ValidationError::NonContiguousViewAsSlice,
             ..
         }
     ));

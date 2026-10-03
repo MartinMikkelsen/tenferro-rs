@@ -1,7 +1,7 @@
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
 use tenferro_ad::{EagerRuntime, EagerTensor, TracedTensorAdExt};
-use tenferro_runtime::{DType, TracedTensor};
+use tenferro_runtime::{DType, ErrorPhase, TracedTensor};
 use tenferro_tensor::{Error as TensorError, Tensor};
 
 #[test]
@@ -157,17 +157,36 @@ fn eager_dot_general_surfaces_validate_config_before_dispatch_source_contract() 
 }
 
 #[test]
-fn traced_jvp_vjp_return_errors_for_inactive_inputs() {
+fn traced_jvp_vjp_grad_return_typed_errors_for_inactive_inputs() {
     let x = TracedTensor::from_vec_col_major(vec![], vec![3.0_f64]).unwrap();
     let y = TracedTensor::from_vec_col_major(vec![], vec![4.0_f64]).unwrap();
     let tangent = TracedTensor::from_vec_col_major(vec![], vec![1.0_f64]).unwrap();
     let cotangent = TracedTensor::from_vec_col_major(vec![], vec![1.0_f64]).unwrap();
     let loss = (&y * &y).unwrap();
 
-    let _ = loss.jvp(&x, &tangent).unwrap_err();
-    let _ = loss.vjp(&x, &cotangent).unwrap_err();
+    // The documented inactive-`wrt` state is user-reachable input validation, not
+    // an internal invariant: the strict wrappers must return a typed error.
+    for err in [
+        loss.jvp(&x, &tangent).unwrap_err(),
+        loss.vjp(&x, &cotangent).unwrap_err(),
+        loss.grad(&x).unwrap_err(),
+    ] {
+        assert!(matches!(
+            err,
+            tenferro_runtime::Error::Validation {
+                phase: ErrorPhase::GraphBuild,
+                source: tenferro_tensor::ValidationError::InvalidArgument {
+                    argument: "wrt",
+                    ..
+                },
+                ..
+            }
+        ));
+    }
+
     assert!(loss.jvp_optional(&x, &tangent).unwrap().is_none());
     assert!(loss.vjp_optional(&x, &cotangent).unwrap().is_none());
+    assert!(loss.grad_optional(&x).unwrap().is_none());
 }
 
 #[test]

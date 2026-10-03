@@ -310,7 +310,7 @@ pub trait TensorLinalgExt {
     ///     a.rank_revealing_qr(RankRevealingQrOptions::default().rtol(1e-12), session)
     /// })??;
     /// assert_eq!(result.column_permutation.shape(), &[2]);
-    /// assert_eq!(result.rank.shape(), &[]);
+    /// assert_eq!(result.rank.shape(), &[] as &[usize]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
     fn rank_revealing_qr(
@@ -332,7 +332,7 @@ pub trait TensorLinalgExt {
     /// let (_p, l, u, parity) = host.with_backend_session(|session| a.lu(session))??;
     /// assert_eq!(l.shape(), &[2, 2]);
     /// assert_eq!(u.shape(), &[2, 2]);
-    /// assert_eq!(parity.shape(), &[]);
+    /// assert_eq!(parity.shape(), &[] as &[usize]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
     fn lu(
@@ -353,7 +353,7 @@ pub trait TensorLinalgExt {
     /// let (p, _l, _u, q, parity) = host.with_backend_session(|session| a.full_piv_lu(session))??;
     /// assert_eq!(p.shape(), &[2, 2]);
     /// assert_eq!(q.shape(), &[2, 2]);
-    /// assert_eq!(parity.shape(), &[]);
+    /// assert_eq!(parity.shape(), &[] as &[usize]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
     fn full_piv_lu(
@@ -512,7 +512,7 @@ pub trait TensorLinalgExt {
     /// # let mut host = CpuBackend::new();
     /// let (sign, logabsdet) = host.with_backend_session(|session| a.slogdet(session))??;
     /// assert_eq!(sign.as_slice::<f64>()?, &[1.0]);
-    /// assert_eq!(logabsdet.shape(), &[]);
+    /// assert_eq!(logabsdet.shape(), &[] as &[usize]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
     fn slogdet(
@@ -631,7 +631,7 @@ pub trait TensorLinalgExt {
     /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![3.0_f64, 0.0, 0.0, 4.0])?;
     /// # let mut host = CpuBackend::new();
     /// let frobenius = host.with_backend_session(|session| a.norm(None, None, false, session))??;
-    /// assert_eq!(frobenius.shape(), &[]);
+    /// assert_eq!(frobenius.shape(), &[] as &[usize]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
     fn norm(
@@ -1088,7 +1088,7 @@ pub trait TensorReadLinalgExt {
     /// # let mut host = CpuBackend::new();
     /// let (sign, logabsdet) = host.with_backend_session(|session| { TensorRead::from_tensor(&a).slogdet_read(session) })??;
     /// assert_eq!(sign.as_slice::<f64>()?, &[1.0]);
-    /// assert_eq!(logabsdet.shape(), &[]);
+    /// assert_eq!(logabsdet.shape(), &[] as &[usize]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
     fn slogdet_read(
@@ -1207,7 +1207,7 @@ pub trait TensorReadLinalgExt {
     /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![3.0_f64, 0.0, 0.0, 4.0])?;
     /// # let mut host = CpuBackend::new();
     /// let frobenius = host.with_backend_session(|session| { TensorRead::from_tensor(&a).norm_read(None, None, false, session) })??;
-    /// assert_eq!(frobenius.shape(), &[]);
+    /// assert_eq!(frobenius.shape(), &[] as &[usize]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
     fn norm_read(
@@ -1582,7 +1582,7 @@ pub trait TypedTensorLinalgExt<T: LinalgScalar> {
     /// # let mut host = CpuBackend::new();
     /// let (sign, logabsdet) = host.with_backend_session(|session| a.slogdet(session))??;
     /// assert_eq!(sign.as_slice()?, &[1.0]);
-    /// assert_eq!(logabsdet.shape(), &[]);
+    /// assert_eq!(logabsdet.shape(), &[] as &[usize]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
     fn slogdet(
@@ -1707,7 +1707,7 @@ pub trait TypedTensorLinalgExt<T: LinalgScalar> {
     /// # let a = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![3.0, 0.0, 0.0, 4.0])?;
     /// # let mut host = CpuBackend::new();
     /// let frobenius = host.with_backend_session(|session| a.norm(None, None, false, session))??;
-    /// assert_eq!(frobenius.shape(), &[]);
+    /// assert_eq!(frobenius.shape(), &[] as &[usize]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
     fn norm(

@@ -46,7 +46,7 @@ impl RootResourceId {
         static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 
         let value = NEXT_ID
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
                 if current == 0 {
                     None
                 } else {

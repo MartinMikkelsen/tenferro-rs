@@ -3381,9 +3381,10 @@ impl<'a, T: 'static, R: TensorRank, D: Representation> TypedTensorView<'a, T, R,
     /// # Errors
     ///
     /// Returns [`crate::Error::RuntimeState`] when this view wraps a backend
-    /// buffer, [`tenferro_tensor_core::ValidationError::InvalidArgument`] when
-    /// the layout is not slice-contiguous or has a negative offset, or
-    /// [`crate::Error::Validation`] with
+    /// buffer, [`tenferro_tensor_core::ValidationError::NonContiguousViewAsSlice`]
+    /// when the layout is not compact column-major,
+    /// [`tenferro_tensor_core::ValidationError::InvalidArgument`] when the view
+    /// offset is negative, or [`crate::Error::Validation`] with
     /// [`tenferro_tensor_core::ValidationError::ViewOutOfBounds`] or
     /// [`tenferro_tensor_core::ValidationError::IntegerOverflow`] when the
     /// requested host range is invalid.
@@ -7851,8 +7852,9 @@ impl<'a> TensorRead<'a> {
     /// # Errors
     ///
     /// Returns [`ValidationError::DTypeMismatch`] when `T` does not match the
-    /// input dtype, [`ValidationError::InvalidArgument`] for a noncompact view,
-    /// or a typed runtime-state host-access error for backend-owned storage.
+    /// input dtype, [`ValidationError::NonContiguousViewAsSlice`] for a
+    /// noncompact view, or a typed runtime-state host-access error for
+    /// backend-owned storage.
     /// Backend-owned
     /// inputs are never downloaded implicitly.
     ///
@@ -8729,10 +8731,9 @@ fn contiguous_layout_slice<'a, T, R: TensorRank>(
         .is_compact_col_major()
         .map_err(|err| tensor_layout_error(op, err))?
     {
-        return Err(crate::Error::invalid_argument(
+        return Err(crate::Error::validation(
             op,
-            "layout",
-            "view is not contiguous column-major",
+            ValidationError::NonContiguousViewAsSlice,
         ));
     }
     let len = checked_view_element_count(layout.shape(), op)?;
