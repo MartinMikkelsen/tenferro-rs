@@ -325,7 +325,10 @@ impl AdContext {
     /// Returns [`tenferro_runtime::Error::NonScalarGrad`] when `output` is not
     /// scalar, [`tenferro_runtime::Error::UnsupportedAdRule`] when a graph op
     /// lacks a registered rule, or a typed [`tenferro_runtime::Error::Validation`]
-    /// / backend error when graph metadata or execution is invalid.
+    /// / backend error when graph metadata or execution is invalid. An inactive
+    /// `wrt` returns [`tenferro_runtime::Error::Validation`] with
+    /// `argument: "wrt"`; use [`grad_optional`](Self::grad_optional) to observe
+    /// that state.
     pub fn grad(&self, output: &TracedTensor, wrt: &TracedTensor) -> Result<TracedTensor> {
         crate::traced::grad_with_rules_and_cache(
             output,
@@ -390,7 +393,9 @@ impl AdContext {
     /// Returns [`tenferro_runtime::Error::UnsupportedAdRule`] when the graph
     /// has no JVP rule, [`tenferro_runtime::Error::Validation`] for
     /// inconsistent tangent metadata, or a typed backend/runtime-state error
-    /// during evaluation.
+    /// during evaluation. An inactive `wrt` returns
+    /// [`tenferro_runtime::Error::Validation`] with `argument: "wrt"`; use
+    /// [`jvp_optional`](Self::jvp_optional) to observe that state.
     pub fn jvp(
         &self,
         output: &TracedTensor,
@@ -513,7 +518,9 @@ impl AdContext {
     /// Returns [`tenferro_runtime::Error::Validation`] when the cotangent
     /// metadata is incompatible, [`tenferro_runtime::Error::UnsupportedAdRule`]
     /// when a VJP rule is unavailable, or a typed backend/runtime-state error
-    /// during execution.
+    /// during execution. An inactive `wrt` returns
+    /// [`tenferro_runtime::Error::Validation`] with `argument: "wrt"`; use
+    /// [`vjp_optional`](Self::vjp_optional) to observe that state.
     pub fn vjp(
         &self,
         output: &TracedTensor,
