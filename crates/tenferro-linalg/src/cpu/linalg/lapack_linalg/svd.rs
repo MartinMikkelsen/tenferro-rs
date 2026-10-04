@@ -147,7 +147,7 @@ fn tlinalg_svd_mode(mode: SvdMode) -> tlinalg_blas::svd::SvdMode {
 
 fn svd_buffers<T: SvdScratch>(
     buffers: &mut BufferPool,
-    op: &'static str,
+    op: tlinalg_traits::Op,
     mode: SvdMode,
     m: usize,
     n: usize,
@@ -157,17 +157,18 @@ fn svd_buffers<T: SvdScratch>(
 where
     <T as tlinalg_blas::symbols::Symbols>::Real: SvdReal,
 {
-    let batch = batch_element_count(op, batch_shape)?;
+    let op_name = op.as_str();
+    let batch = batch_element_count(op_name, batch_shape)?;
     let (u_cols, vt_rows) = mode.factor_dims(m, n);
-    let s_len = checked_product(op, "singular values", &[m.min(n), batch])?;
-    let u_len = checked_product(op, "left singular vectors", &[m, u_cols, batch])?;
-    let vt_len = checked_product(op, "right singular vectors", &[vt_rows, n, batch])?;
+    let s_len = checked_product(op_name, "singular values", &[m.min(n), batch])?;
+    let u_len = checked_product(op_name, "left singular vectors", &[m, u_cols, batch])?;
+    let vt_len = checked_product(op_name, "right singular vectors", &[vt_rows, n, batch])?;
     let mut a = pooled_copy(buffers, input.host_data()?);
     let mut s = pooled_zeroed::<SvdRealOf<T>>(buffers, s_len);
     let mut u = pooled_zeroed::<T>(buffers, u_len);
     let mut vt = pooled_zeroed::<T>(buffers, vt_len);
     tlinalg_blas::svd::svd_batch(
-        tlinalg_traits::Op::Svd,
+        op,
         tlinalg_svd_mode(mode),
         m,
         n,
@@ -178,7 +179,7 @@ where
         &mut T::workspace(buffers),
         tlinalg_traits::Parallel::Sequential,
     )
-    .map_err(|error| crate::cpu::tlinalg_error::map_error(tlinalg_traits::Op::Svd, error))?;
+    .map_err(|error| crate::cpu::tlinalg_error::map_error(op, error))?;
     Ok((a, s, u, vt))
 }
 
@@ -211,7 +212,15 @@ where
             )?,
         ]);
     }
-    let (a, s, u, vt) = svd_buffers(buffers, "svd", SvdMode::Thin, m, n, batch_shape, input)?;
+    let (a, s, u, vt) = svd_buffers(
+        buffers,
+        tlinalg_traits::Op::Svd,
+        SvdMode::Thin,
+        m,
+        n,
+        batch_shape,
+        input,
+    )?;
     release_scratch(buffers, a);
     let s = T::values_as_scalar(buffers, s);
     Ok(vec![
@@ -233,7 +242,15 @@ where
     if has_zero_dim(input.shape()) {
         return empty_full_svd_outputs("svd_full", m, n, batch_shape, input);
     }
-    let (a, s, u, vt) = svd_buffers(buffers, "svd_full", SvdMode::Full, m, n, batch_shape, input)?;
+    let (a, s, u, vt) = svd_buffers(
+        buffers,
+        tlinalg_traits::Op::SvdFull,
+        SvdMode::Full,
+        m,
+        n,
+        batch_shape,
+        input,
+    )?;
     release_scratch(buffers, a);
     let s = T::values_as_scalar(buffers, s);
     Ok(vec![
@@ -319,7 +336,7 @@ where
     }
     let (a, s, u, vt) = svd_buffers(
         buffers,
-        "svd_values",
+        tlinalg_traits::Op::SvdValues,
         SvdMode::Values,
         m,
         n,
