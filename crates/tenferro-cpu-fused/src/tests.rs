@@ -393,3 +393,39 @@ fn elementwise_fusion_returns_none_for_erased_unsupported_ops() {
         "complex ordered ops stay outside erased strided fusion"
     );
 }
+
+#[test]
+fn elementwise_fusion_returns_none_above_erased_input_limit() {
+    use tenferro_tensor::backend::ElementwiseFusionInst;
+
+    let mut buffers = BufferPool::default();
+    let n = ELEMENTWISE_FUSION_MIN_ELEMENTS;
+    let input_count = ERASED_FUSION_MAX_INPUTS + 1;
+    let tensors = (0..input_count)
+        .map(|_| {
+            Tensor::from_typed::<f64>(
+                TypedTensor::<f64>::from_vec_col_major(vec![n], vec![1.0; n]).unwrap(),
+            )
+        })
+        .collect::<Vec<_>>();
+    let inputs = tensors.iter().collect::<Vec<_>>();
+    // Left-fold sum: value `input_count + k` is the sum of inputs `0..=k + 1`.
+    let ops = (1..input_count)
+        .map(|input| {
+            let accumulated = if input == 1 {
+                0
+            } else {
+                input_count + input - 2
+            };
+            ElementwiseFusionInst::new(ElementwiseFusionOp::Add, vec![accumulated, input])
+        })
+        .collect::<Vec<_>>();
+    let plan = ElementwiseFusionPlan::new(DType::F64, input_count, vec![2 * input_count - 2], ops);
+
+    assert!(
+        elementwise_fusion_with_pool(&mut buffers, &ExecContext::serial(), &inputs, &plan)
+            .unwrap()
+            .is_none(),
+        "plans reading more inputs than erased strided fusion accepts are declined"
+    );
+}
