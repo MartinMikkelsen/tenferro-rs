@@ -269,20 +269,14 @@ pub fn scalar_real_complex_binary<F: Float>(
         let re = complex[complex_idx];
         let im = complex[complex_idx + 1];
         let zero = F::new(0.0f32);
-        // INVARIANT: These unsimplified component expressions must evaluate in the
-        // same order as CPU `num_complex` after promotion to `Complex(real, +0)`.
-        // Keep zero cross terms: they determine NaN, infinity, overflow, and signed zero.
-        let divisor_finite = if real_lhs {
-            complex_div_abs::<F>(re) <= F::max_value() && complex_div_abs::<F>(im) <= F::max_value()
-        } else {
-            complex_div_abs::<F>(scalar) <= F::max_value()
-        };
-        if mode == MIXED_DIV && divisor_finite {
+        if mode == MIXED_DIV {
             // The host promotes a real operand to `Complex(real, +0.0)` and runs its scale-robust
-            // complex division, so a finite divisor goes through the same algorithm here: the
-            // componentwise form overflows its squared denominator for `2.0 / (1e38 + 1e38i)`
-            // (returning `0` where the value is about `1e-38`) and picks the other sign for a zero
-            // component.
+            // complex division, so this path runs the same algorithm: the componentwise form
+            // overflows its squared denominator for `2.0 / (1e38 + 1e38i)` (returning `0` where the
+            // value is about `1e-38`), picks the other sign for a zero component, and turns an
+            // infinite divisor into `NaN` where the value is a zero quotient. Nor is the host a
+            // reference for those inputs: it returns `NaN` for `2.0 / (inf + 1i)` on one machine
+            // and `0` on another, so the reference algorithm decides.
             if real_lhs {
                 complex_div_parts_at::<F>(scalar, zero, re, im, out, complex_idx);
             } else {
@@ -292,8 +286,6 @@ pub fn scalar_real_complex_binary<F: Float>(
             // INVARIANT: These unsimplified component expressions must evaluate in the
             // same order as CPU `num_complex` after promotion to `Complex(real, +0)`.
             // Keep zero cross terms: they determine NaN, infinity, overflow, and signed zero.
-            // A non-finite divisor also stays here: the host overflows it, and agreeing on the
-            // resulting classification matters more than the finite value it never produces.
             let (out_re, out_im) = if mode == MIXED_ADD {
                 if real_lhs {
                     (scalar + re, zero + im)
