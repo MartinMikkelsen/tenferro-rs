@@ -204,7 +204,10 @@ closed-form value instead of the host, whose result for one element depends on
 the machine and on the rest of the tensor (`2.0 / (1e38 + 1e38i)` is `0` on one
 machine and a finite `1e-38` on another), so the complex/complex and mixed
 real-scalar forms both run the scale-robust algorithm and keep the quotient
-finite. A non-finite divisor is not in that set: there the host's classification
+finite. A non-finite divisor is checked the same way, against the reference algorithm's value,
+because the host is no more stable there: `2.0 / (inf + 1i)` is `NaN` on one machine and
+`0` on another, while the reference gives a zero quotient for an infinite divisor and
+`NaN` for a zero or `NaN` one.
 is what the device reproduces, so the mixed form keeps its componentwise
 expansion for a non-finite divisor and the host's `NaN` stays `NaN`.
 

@@ -641,22 +641,6 @@ fn test_real_scalar_complex_binary_ops_match_cpu() {
             (
                 cpu.with_backend_session(|__s| {
                     __s.div_read(
-                        TensorRead::from_tensor(&scalar),
-                        TensorRead::from_tensor(&complex),
-                    )
-                })
-                .unwrap(),
-                gpu.with_backend_session(|__s| {
-                    __s.div_read(
-                        TensorRead::from_tensor(&gpu_scalar),
-                        TensorRead::from_tensor(&gpu_complex),
-                    )
-                })
-                .unwrap(),
-            ),
-            (
-                cpu.with_backend_session(|__s| {
-                    __s.div_read(
                         TensorRead::from_tensor(&complex),
                         TensorRead::from_tensor(&scalar),
                     )
@@ -680,6 +664,79 @@ fn test_real_scalar_complex_binary_ops_match_cpu() {
                 ZeroSign::Strict,
             );
         }
+    }
+
+    // A non-finite divisor has no host to agree with either: the same call returns `NaN` on one
+    // machine and `0` on another. What is contractual is the reference algorithm's value, and it
+    // is checked here: an infinite divisor gives a zero quotient, a zero or `NaN` divisor gives
+    // `NaN`.
+    for (scalar, complex) in [
+        (
+            tensor_f32(vec![], vec![2.0]),
+            tensor_c32(
+                vec![4],
+                vec![
+                    Complex32::new(0.0, -0.0),
+                    Complex32::new(f32::INFINITY, 1.0),
+                    Complex32::new(f32::NAN, 0.0),
+                    Complex32::new(0.0, f32::INFINITY),
+                ],
+            ),
+        ),
+        (
+            tensor_f64(vec![], vec![2.0]),
+            tensor_c64(
+                vec![4],
+                vec![
+                    Complex64::new(0.0, -0.0),
+                    Complex64::new(f64::INFINITY, 1.0),
+                    Complex64::new(f64::NAN, 0.0),
+                    Complex64::new(0.0, f64::INFINITY),
+                ],
+            ),
+        ),
+    ] {
+        let gpu_scalar = upload(&gpu, &scalar);
+        let gpu_complex = upload(&gpu, &complex);
+        let quotient = gpu
+            .with_backend_session(|__s| {
+                __s.div_read(
+                    TensorRead::from_tensor(&gpu_scalar),
+                    TensorRead::from_tensor(&gpu_complex),
+                )
+            })
+            .unwrap()
+            .unwrap();
+        let quotient = download(&gpu, &quotient);
+        let values: Vec<(f64, f64)> = match quotient.dtype() {
+            DType::C32 => quotient
+                .as_typed::<Complex32>()
+                .expect("the dtype guard selects this arm")
+                .as_slice()
+                .unwrap()
+                .iter()
+                .map(|value| (value.re as f64, value.im as f64))
+                .collect(),
+            DType::C64 => quotient
+                .as_typed::<Complex64>()
+                .expect("the dtype guard selects this arm")
+                .as_slice()
+                .unwrap()
+                .iter()
+                .map(|value| (value.re, value.im))
+                .collect(),
+            other => panic!("expected a complex quotient, got {other:?}"),
+        };
+        assert!(
+            values[0].0.is_nan() && values[0].1.is_nan(),
+            "zero divisor: {values:?}"
+        );
+        assert_eq!(values[1], (0.0, 0.0), "infinite divisor: {values:?}");
+        assert!(
+            values[2].0.is_nan() && values[2].1.is_nan(),
+            "NaN divisor: {values:?}"
+        );
+        assert_eq!(values[3], (0.0, 0.0), "infinite divisor: {values:?}");
     }
 
     for (lhs, rhs, expected_lhs, expected_rhs) in [
