@@ -2110,29 +2110,22 @@ macro_rules! impl_faer_linalg_for_real {
         n: usize,
         placement: &tenferro_tensor::Placement,
     ) -> tenferro_tensor::Result<TypedTensor<<Self as FaerLinalg>::Real>> {
-        let k = m.min(n);
-        let mut s = Diag::zeros(k);
-        let mut mem = MemBuffer::new(faer::linalg::svd::svd_scratch::<Self>(
-            m,
-            n,
-            faer::linalg::svd::ComputeSvdVectors::No,
-            faer::linalg::svd::ComputeSvdVectors::No,
-            ctx.faer_parallelism(),
-            Default::default(),
-        ));
-        let stack = MemStack::new(&mut mem);
-        faer::linalg::svd::svd(
-            mat,
-            s.as_mut(),
-            None,
-            None,
-            ctx.faer_parallelism(),
-            stack,
-            Default::default(),
-        )
-        .map_err(|_| decomposition_failed("svd_values"))?;
-
-        tensor_from_vec_with_template(vec![k], vec_from_diag(buffers, s.as_ref()), placement)
+        let mut s = buffers.acquire_with_capacity::<<Self as FaerLinalg>::Real>(m.min(n));
+        if m > 0 && n > 0 {
+            let descriptor = faer_descriptor("svd_values", mat, m, n)?;
+            tlinalg::svd::svd_values(
+                tlinalg_traits::Op::SvdValues,
+                m,
+                n,
+                descriptor,
+                &mut s,
+                crate::cpu::tlinalg::parallel_from(ctx),
+            )
+            .map_err(|error| {
+                crate::cpu::tlinalg_error::map_error(tlinalg_traits::Op::SvdValues, error)
+            })?;
+        }
+        tensor_from_vec_with_template(vec![m.min(n)], s, placement)
     }
 
     fn qr_2d(
@@ -2313,54 +2306,32 @@ macro_rules! impl_faer_linalg_for_real {
         placement: &tenferro_tensor::Placement,
     ) -> tenferro_tensor::Result<Vec<TypedTensor<Self>>> {
         let k = m.min(n);
-        // Full mode returns the square unitary factors `U (m x m)` and
-        // `V (n x n)`; thin mode keeps only the leading `k` vectors. The
-        // singular-value count is `k` in both modes.
-        let (u_cols, v_cols, vectors) = if full {
-            (m, n, faer::linalg::svd::ComputeSvdVectors::Full)
-        } else {
-            (k, k, faer::linalg::svd::ComputeSvdVectors::Thin)
-        };
-        let mut u = Mat::zeros(m, u_cols);
-        let mut v = Mat::zeros(n, v_cols);
-        let mut s = Diag::zeros(k);
-        let mut mem = MemBuffer::new(faer::linalg::svd::svd_scratch::<Self>(
-            m,
-            n,
-            vectors,
-            vectors,
-            ctx.faer_parallelism(),
-            Default::default(),
-        ));
-        let stack = MemStack::new(&mut mem);
-        faer::linalg::svd::svd(
-            mat,
-            s.as_mut(),
-            Some(u.as_mut()),
-            Some(v.as_mut()),
-            ctx.faer_parallelism(),
-            stack,
-            Default::default(),
-        )
-        .map_err(|_| decomposition_failed("svd"))?;
-
-        let u = tensor_from_vec_with_template(
-            vec![m, u_cols],
-            col_major_vec_from_mat(buffers, u.as_ref())?,
-            placement,
-        )?;
-        let s =
-            tensor_from_vec_with_template(vec![k], vec_from_diag(buffers, s.as_ref()), placement)?;
-        let vt_len = checked_product("svd", "right singular vectors", &[v_cols, n])?;
-        let mut vt_data = buffers.acquire_with_capacity::<Self>(vt_len);
-        for j in 0..n {
-            for i in 0..v_cols {
-                vt_data.push(v[(j, i)]);
-            }
+        let (u_cols, v_cols) = if full { (m, n) } else { (k, k) };
+        let mut u = buffers
+            .acquire_with_capacity::<Self>(checked_product("svd", "left singular vectors", &[m, u_cols])?);
+        let mut s = buffers.acquire_with_capacity::<Self>(k);
+        let mut vt = buffers
+            .acquire_with_capacity::<Self>(checked_product("svd", "right singular vectors", &[v_cols, n])?);
+        if m > 0 && n > 0 {
+            let descriptor = faer_descriptor("svd", mat, m, n)?;
+            tlinalg::svd::svd(
+                tlinalg_traits::Op::Svd,
+                m,
+                n,
+                full,
+                descriptor,
+                &mut u,
+                &mut s,
+                &mut vt,
+                crate::cpu::tlinalg::parallel_from(ctx),
+            )
+            .map_err(|error| crate::cpu::tlinalg_error::map_error(tlinalg_traits::Op::Svd, error))?;
         }
-        let vt = tensor_from_vec_with_template(vec![v_cols, n], vt_data, placement)?;
-
-        Ok(vec![u, s, vt])
+        Ok(vec![
+            tensor_from_vec_with_template(vec![m, u_cols], u, placement)?,
+            tensor_from_vec_with_template(vec![k], s, placement)?,
+            tensor_from_vec_with_template(vec![v_cols, n], vt, placement)?,
+        ])
     }
 
     fn qr_core(
@@ -3085,46 +3056,22 @@ macro_rules! impl_faer_linalg_for_complex {
         n: usize,
         placement: &tenferro_tensor::Placement,
     ) -> tenferro_tensor::Result<TypedTensor<<Self as FaerLinalg>::Real>> {
-        // SAFETY: `mat` is a validated host view with an in-bounds shape/stride
-        // span and aligned base; the `impl_complex_faer_casts` const assertions
-        // prove the scalar layouts match for this faer reinterpretation.
-        let mat: MatRef<'_, $faer_complex> = unsafe {
-            MatRef::from_raw_parts(
-                mat.as_ptr() as *const $faer_complex,
+        let mut s = buffers.acquire_with_capacity::<<Self as FaerLinalg>::Real>(m.min(n));
+        if m > 0 && n > 0 {
+            let descriptor = faer_descriptor("svd_values", mat, m, n)?;
+            tlinalg::svd::svd_values(
+                tlinalg_traits::Op::SvdValues,
                 m,
                 n,
-                mat.row_stride(),
-                mat.col_stride(),
+                descriptor,
+                &mut s,
+                crate::cpu::tlinalg::parallel_from(ctx),
             )
-        };
-        let k = m.min(n);
-        let mut s = Diag::zeros(k);
-        let mut mem = MemBuffer::new(faer::linalg::svd::svd_scratch::<$faer_complex>(
-            m,
-            n,
-            faer::linalg::svd::ComputeSvdVectors::No,
-            faer::linalg::svd::ComputeSvdVectors::No,
-            ctx.faer_parallelism(),
-            Default::default(),
-        ));
-        let stack = MemStack::new(&mut mem);
-        faer::linalg::svd::svd(
-            mat,
-            s.as_mut(),
-            None,
-            None,
-            ctx.faer_parallelism(),
-            stack,
-            Default::default(),
-        )
-        .map_err(|_| decomposition_failed("svd_values"))?;
-
-        let col = s.as_ref().column_vector();
-        let mut data = buffers.acquire_with_capacity::<$real>(col.nrows());
-        for i in 0..col.nrows() {
-            data.push(col[i].re);
+            .map_err(|error| {
+                crate::cpu::tlinalg_error::map_error(tlinalg_traits::Op::SvdValues, error)
+            })?;
         }
-        tensor_from_vec_with_template(vec![k], data, placement)
+        tensor_from_vec_with_template(vec![m.min(n)], s, placement)
     }
 
     fn qr_2d(
@@ -3345,69 +3292,33 @@ macro_rules! impl_faer_linalg_for_complex {
         full: bool,
         placement: &tenferro_tensor::Placement,
     ) -> tenferro_tensor::Result<Vec<TypedTensor<Self>>> {
-        // Cast Self (Complex32/64) to $faer_complex (faer::c32/c64) for faer calls.
-        // SAFETY: layout identity guaranteed by impl_complex_faer_casts const asserts.
-        let mat: MatRef<'_, $faer_complex> = unsafe {
-            MatRef::from_raw_parts(
-                mat.as_ptr() as *const $faer_complex,
+        let k = m.min(n);
+        let (u_cols, v_cols) = if full { (m, n) } else { (k, k) };
+        let mut u = buffers
+            .acquire_with_capacity::<Self>(checked_product("svd", "left singular vectors", &[m, u_cols])?);
+        let mut s = buffers.acquire_with_capacity::<<Self as FaerLinalg>::Real>(k);
+        let mut vt = buffers
+            .acquire_with_capacity::<Self>(checked_product("svd", "right singular vectors", &[v_cols, n])?);
+        if m > 0 && n > 0 {
+            let descriptor = faer_descriptor("svd", mat, m, n)?;
+            tlinalg::svd::svd(
+                tlinalg_traits::Op::Svd,
                 m,
                 n,
-                mat.row_stride(),
-                mat.col_stride(),
+                full,
+                descriptor,
+                &mut u,
+                &mut s,
+                &mut vt,
+                crate::cpu::tlinalg::parallel_from(ctx),
             )
-        };
-        let k = m.min(n);
-        // Full mode returns the square unitary factors `U (m x m)` and
-        // `V (n x n)`; thin mode keeps only the leading `k` vectors. The
-        // singular-value count is `k` in both modes.
-        let (u_cols, v_cols, vectors) = if full {
-            (m, n, faer::linalg::svd::ComputeSvdVectors::Full)
-        } else {
-            (k, k, faer::linalg::svd::ComputeSvdVectors::Thin)
-        };
-        let mut u = Mat::zeros(m, u_cols);
-        let mut v = Mat::zeros(n, v_cols);
-        let mut s = Diag::zeros(k);
-        let mut mem = MemBuffer::new(faer::linalg::svd::svd_scratch::<$faer_complex>(
-            m,
-            n,
-            vectors,
-            vectors,
-            ctx.faer_parallelism(),
-            Default::default(),
-        ));
-        let stack = MemStack::new(&mut mem);
-        faer::linalg::svd::svd(
-            mat,
-            s.as_mut(),
-            Some(u.as_mut()),
-            Some(v.as_mut()),
-            ctx.faer_parallelism(),
-            stack,
-            Default::default(),
-        )
-        .map_err(|_| decomposition_failed("svd"))?;
-
-        let u = tensor_from_vec_with_template(
-            vec![m, u_cols],
-            $vec_from_mat(buffers, u.as_ref())?,
-            placement,
-        )?;
-        let s = tensor_from_vec_with_template(
-            vec![k],
-            $vec_from_real_diag(buffers, s.as_ref()),
-            placement,
-        )?;
-        let vt_len = checked_product("svd", "right singular vectors", &[v_cols, n])?;
-        let mut vt_data = buffers.acquire_with_capacity::<Self>(vt_len);
-        for j in 0..n {
-            for i in 0..v_cols {
-                vt_data.push(v[(j, i)].conj());
-            }
+            .map_err(|error| crate::cpu::tlinalg_error::map_error(tlinalg_traits::Op::Svd, error))?;
         }
-        let vt = tensor_from_vec_with_template(vec![v_cols, n], vt_data, placement)?;
-
-        Ok(vec![u, s, vt])
+        Ok(vec![
+            tensor_from_vec_with_template(vec![m, u_cols], u, placement)?,
+            tensor_from_vec_with_template(vec![k], s, placement)?,
+            tensor_from_vec_with_template(vec![v_cols, n], vt, placement)?,
+        ])
     }
 
     fn qr_core(
@@ -4327,6 +4238,35 @@ pub(crate) fn rank_revealing_qr_view<T: FaerLinalg + 'static>(
     // aligned non-null element pointer at that offset.
     let mat = unsafe { T::faer_mat_ref_strided(base, m, n, view.strides()[0], view.strides()[1]) };
     T::rank_revealing_qr_core(ctx, buffers, mat, m, n, options, &placement)
+}
+
+/// Borrow a faer matrix descriptor for the extracted kernel.
+///
+/// The extracted SVD takes a `RawStridedRef`; a `MatRef` already carries the same shape, strides and
+/// base pointer, so this recovers the element span and hands it over. `RawStridedRef::new`
+/// re-validates the bounds, so a span that is too small fails closed instead of reading out of
+/// range.
+fn faer_descriptor<'a, T>(
+    op: &'static str,
+    mat: MatRef<'a, T>,
+    m: usize,
+    n: usize,
+) -> tenferro_tensor::Result<RawStridedRef<'a, T>> {
+    let (rs, cs) = (mat.row_stride(), mat.col_stride());
+    if rs < 0 || cs < 0 {
+        return Err(tenferro_tensor::Error::unsupported(
+            op,
+            "a negative stride is not a supported SVD input layout",
+        ));
+    }
+    // INVARIANT: `m` and `n` are nonzero here, so the span covers the element at (0, 0) through the
+    // far corner `(m-1, n-1)`, which is exactly the region the `MatRef` was built from.
+    let span = (m - 1) as isize * rs + (n - 1) as isize * cs + 1;
+    // SAFETY: the `MatRef` region is live for `'a` and covers `span` elements, because it was built
+    // from a live slice of that region by its constructor.
+    let data = unsafe { core::slice::from_raw_parts(mat.as_ptr(), span as usize) };
+    RawStridedRef::new(data, &[m, n], &[rs, cs], 0)
+        .map_err(|error| tenferro_tensor::Error::invalid_argument(op, "layout", error.to_string()))
 }
 
 pub(crate) fn svd_view<T: FaerLinalg + 'static>(
