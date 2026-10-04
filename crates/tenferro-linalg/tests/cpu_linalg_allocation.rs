@@ -1,10 +1,9 @@
-//! Allocation accounting for the packed-LU family on the CPU routes.
+//! Allocation accounting for the CPU linalg routes the extraction is moving.
 //!
-//! The packed-LU family (`lu_factor`, `lu_solve_prepared`, `lu_factor_solve`) is the first slice
-//! being moved out of `tenferro-linalg` into an extracted crate, so it needs a recorded
-//! steady-state allocation baseline on both routes *before* anything moves. The ceilings below are
-//! what the current implementation achieves; they exist to catch a move that quietly starts
-//! reacquiring scratch per call.
+//! Every family that moves out of `tenferro-linalg` needs a recorded steady-state allocation
+//! baseline *before* it moves, or a move that quietly starts reacquiring scratch per call is
+//! invisible. The packed-LU family (`lu_factor`, `lu_solve_prepared`, `lu_factor_solve`) landed
+//! this way; the SVD family is next, so its faer route is measured here too.
 //!
 //! This target owns the process allocator, so it must stay a separate test binary. Counts are
 //! steady-state: the pool is primed by warm-up calls first, because a cold first call legitimately
@@ -22,7 +21,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use num_complex::Complex64;
 use tenferro_cpu::{with_cpu_exec_session, CpuBackend, CpuBackendKind};
-use tenferro_linalg::LinalgBackend;
+use tenferro_linalg::{LinalgBackend, TensorLinalgExt};
 use tenferro_tensor::{BackendSession, BackendSessionHost, Tensor, TypedTensor};
 
 /// Counts allocations and live bytes while armed.
@@ -130,6 +129,18 @@ fn f64_matrix(n: usize) -> Tensor {
     Tensor::from_typed::<f64>(TypedTensor::from_vec_col_major(vec![n, n], sample_real(n)).unwrap())
 }
 
+/// A tall column-major `m x n` matrix with `m > n`.
+fn f64_tall(m: usize, n: usize) -> Tensor {
+    let data: Vec<f64> = (0..m * n)
+        .map(|index| {
+            let row = index % m;
+            let col = index / m;
+            0.5 + (row as f64) * 0.25 - (col as f64) * 0.125
+        })
+        .collect();
+    Tensor::from_typed::<f64>(TypedTensor::from_vec_col_major(vec![m, n], data).unwrap())
+}
+
 fn c64_matrix(n: usize) -> Tensor {
     let data = sample_real(n)
         .into_iter()
@@ -159,6 +170,16 @@ fn steady_state(
     best.unwrap_or_default()
 }
 
+/// Thin SVD through the public tensor route, so the measured call is the one users make.
+fn svd_ext(input: &Tensor, session: &mut dyn BackendSession) {
+    input.svd(session).unwrap();
+}
+
+/// Singular values only through the public tensor route.
+fn svdvals_ext(input: &Tensor, session: &mut dyn BackendSession) {
+    input.svdvals(session).unwrap();
+}
+
 fn with_session<T>(
     session: &mut dyn BackendSession,
     operation: impl FnOnce(&mut tenferro_cpu::CpuExecSession<'_>) -> T,
@@ -180,6 +201,13 @@ const F64_LU_CEILINGS: &[(&str, usize)] = &[
     ("blas/lu_factor_solve/48", 8),
     ("faer/lu_factor/complex32", 11),
     ("blas/lu_factor/complex32", 6),
+    // The SVD family, faer route: the next slice's pre-move baseline.
+    ("faer/svd/48", 12),
+    ("faer/svdvals/48", 5),
+    ("faer/svd/tall", 12),
+    ("faer/svdvals/tall", 5),
+    ("faer/svd/complex32", 14),
+    ("faer/svdvals/complex32", 5),
 ];
 
 fn ceiling(name: &str) -> usize {
@@ -212,7 +240,7 @@ fn check(
 }
 
 #[test]
-fn packed_lu_routes_take_their_scratch_from_the_session_buffer_pool() {
+fn cpu_linalg_routes_take_their_scratch_from_the_session_buffer_pool() {
     let mut failures = Vec::new();
 
     let mut faer = faer_backend();
@@ -303,9 +331,35 @@ fn packed_lu_routes_take_their_scratch_from_the_session_buffer_pool() {
         );
     }
 
+    // The SVD family on the faer route: thin, values-only, square, tall and complex.
+    let tall = f64_tall(64, 24);
+    check(&mut faer, &mut failures, "faer/svd/48", |session| {
+        svd_ext(&a, session);
+    });
+    check(&mut faer, &mut failures, "faer/svdvals/48", |session| {
+        svdvals_ext(&a, session);
+    });
+    check(&mut faer, &mut failures, "faer/svd/tall", |session| {
+        svd_ext(&tall, session);
+    });
+    check(&mut faer, &mut failures, "faer/svdvals/tall", |session| {
+        svdvals_ext(&tall, session);
+    });
+    check(&mut faer, &mut failures, "faer/svd/complex32", |session| {
+        svd_ext(&c, session);
+    });
+    check(
+        &mut faer,
+        &mut failures,
+        "faer/svdvals/complex32",
+        |session| {
+            svdvals_ext(&c, session);
+        },
+    );
+
     assert!(
         failures.is_empty(),
-        "packed-LU routes allocate more per call than the recorded ceilings:\n{}",
+        "CPU linalg routes allocate more per call than the recorded ceilings:\n{}",
         failures.join("\n")
     );
 }
