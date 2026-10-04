@@ -24,8 +24,12 @@ tprims-exec = { git = "https://github.com/tensor4all/tprims-rs.git", rev = "d8e5
 tprims-blas = { git = "https://github.com/tensor4all/tprims-rs.git", rev = "d8e565a9c16c35ec98b45ec99bd7046db194bb33" }
 tprims-contract = { git = "https://github.com/tensor4all/tprims-rs.git", rev = "d8e565a9c16c35ec98b45ec99bd7046db194bb33" }
 tprims-linalg = { git = "https://github.com/tensor4all/tprims-rs.git", rev = "d8e565a9c16c35ec98b45ec99bd7046db194bb33" }
-# Spelled exactly as tenferro's workspace pin so both resolve one strided-rs
-# source and share `StridedView`.
+# Held at the strided-rs revision the tprims-rs commit above uses, so this
+# bridge and tprims share one `StridedView`. That tprims commit predates the
+# crate rename, so this workspace resolves strided-rs twice: 0.4.4 here and for
+# tprims, 0.4.5 through the tenferro-* path dependencies. It builds and tests in
+# that state, and moving to one revision is the tprims migration tracked in
+# https://github.com/tensor4all/tenferro-rs/issues/1988.
 strided-view = { git = "https://github.com/tensor4all/strided-rs.git", rev = "25705339d45583f5eb77bdbde22f2349b48e3f95", version = "0.4.4" }
 
 [dev-dependencies]

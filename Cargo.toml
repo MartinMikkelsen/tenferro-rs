@@ -61,13 +61,13 @@ lru = "0.12"
 proc-macro2 = "1"
 quote = "1"
 syn = "2"
-# strided-rs v0.4.4 release commit (tag v0.4.4); update only with an intentional dependency bump.
-strided-view = { git = "https://github.com/tensor4all/strided-rs.git", rev = "25705339d45583f5eb77bdbde22f2349b48e3f95", version = "0.4.4" }
-strided-traits = { git = "https://github.com/tensor4all/strided-rs.git", rev = "25705339d45583f5eb77bdbde22f2349b48e3f95", version = "0.4.4" }
-strided-perm = { git = "https://github.com/tensor4all/strided-rs.git", rev = "25705339d45583f5eb77bdbde22f2349b48e3f95", version = "0.4.4", features = ["parallel"] }
-strided-basic = { git = "https://github.com/tensor4all/strided-rs.git", rev = "25705339d45583f5eb77bdbde22f2349b48e3f95", version = "0.4.4", default-features = false }
-strided-fused = { git = "https://github.com/tensor4all/strided-rs.git", rev = "25705339d45583f5eb77bdbde22f2349b48e3f95", version = "0.4.4", default-features = false, features = ["parallel"] }
-strided-kernel = { git = "https://github.com/tensor4all/strided-rs.git", rev = "25705339d45583f5eb77bdbde22f2349b48e3f95", version = "0.4.4", features = ["parallel"] }
+# strided-rs v0.4.5 release commit (tag v0.4.5); update only with an intentional dependency bump.
+strided-view = { git = "https://github.com/tensor4all/strided-rs.git", rev = "c12d96fa4cfef622bc1f15fd9940fd418fb686ac", version = "0.4.5" }
+strided-traits = { git = "https://github.com/tensor4all/strided-rs.git", rev = "c12d96fa4cfef622bc1f15fd9940fd418fb686ac", version = "0.4.5" }
+strided-perm = { git = "https://github.com/tensor4all/strided-rs.git", rev = "c12d96fa4cfef622bc1f15fd9940fd418fb686ac", version = "0.4.5", features = ["parallel"] }
+strided-basic = { git = "https://github.com/tensor4all/strided-rs.git", rev = "c12d96fa4cfef622bc1f15fd9940fd418fb686ac", version = "0.4.5", default-features = false }
+strided-fused = { git = "https://github.com/tensor4all/strided-rs.git", rev = "c12d96fa4cfef622bc1f15fd9940fd418fb686ac", version = "0.4.5", default-features = false, features = ["parallel"] }
+strided-kernel = { git = "https://github.com/tensor4all/strided-rs.git", rev = "c12d96fa4cfef622bc1f15fd9940fd418fb686ac", version = "0.4.5", features = ["parallel"] }
 libloading = "0.8"
 faer = { version = "0.24", default-features = false, features = ["std", "rayon"] }
 cblas-sys = "0.1"
