@@ -31,6 +31,9 @@ const ELEMENTWISE_FUSION_OP: &str = "execute_elementwise_fusion";
 
 const ELEMENTWISE_FUSION_MIN_ELEMENTS: usize = 16 * 1024;
 
+/// Largest input count `strided_fused::ErasedFusedPlan` accepts.
+const ERASED_FUSION_MAX_INPUTS: usize = 4;
+
 fn validate_elementwise_fusion_inputs(
     inputs: &[&Tensor],
     plan: &ElementwiseFusionPlan,
@@ -283,7 +286,7 @@ pub fn elementwise_fusion_with_pool(
     if !validate_elementwise_fusion_inputs(inputs, plan)? {
         return Ok(None);
     }
-    if inputs.is_empty() {
+    if inputs.is_empty() || inputs.len() > ERASED_FUSION_MAX_INPUTS {
         return Ok(None);
     }
     if plan_uses_unfused_op(plan) {
