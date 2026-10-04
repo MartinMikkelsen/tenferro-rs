@@ -516,45 +516,6 @@ fn test_real_scalar_complex_binary_ops_match_cpu() {
     for (scalar, complex) in [
         (
             tensor_f32(vec![], vec![2.0]),
-            tensor_c32(vec![1], vec![Complex32::new(1.0e38, 1.0e38)]),
-        ),
-        (
-            tensor_f64(vec![], vec![2.0]),
-            tensor_c64(vec![1], vec![Complex64::new(1.0e308, 1.0e308)]),
-        ),
-    ] {
-        let expected = cpu
-            .with_backend_session(|__s| {
-                __s.div_read(
-                    TensorRead::from_tensor(&scalar),
-                    TensorRead::from_tensor(&complex),
-                )
-            })
-            .unwrap()
-            .unwrap();
-        let div_lhs = upload(&gpu, &scalar);
-        let div_rhs = upload(&gpu, &complex);
-        let actual = gpu
-            .with_backend_session(|__s| {
-                __s.div_read(
-                    TensorRead::from_tensor(&div_lhs),
-                    TensorRead::from_tensor(&div_rhs),
-                )
-            })
-            .unwrap()
-            .map(|value| download(&gpu, &value))
-            .unwrap();
-        assert_complex_classes_and_values_match(
-            &actual,
-            &expected,
-            "extreme divisor mixed ops",
-            ZeroSign::Strict,
-        );
-    }
-
-    for (scalar, complex) in [
-        (
-            tensor_f32(vec![], vec![2.0]),
             tensor_c32(
                 vec![4],
                 vec![
@@ -719,45 +680,6 @@ fn test_real_scalar_complex_binary_ops_match_cpu() {
                 ZeroSign::Strict,
             );
         }
-    }
-
-    for (complex, scalar) in [
-        (
-            tensor_c32(vec![1], vec![Complex32::new(1.0, 1.0)]),
-            tensor_f32(vec![], vec![1.0e38]),
-        ),
-        (
-            tensor_c64(vec![1], vec![Complex64::new(1.0, 1.0)]),
-            tensor_f64(vec![], vec![1.0e308]),
-        ),
-    ] {
-        let expected = cpu
-            .with_backend_session(|__s| {
-                __s.div_read(
-                    TensorRead::from_tensor(&complex),
-                    TensorRead::from_tensor(&scalar),
-                )
-            })
-            .unwrap()
-            .unwrap();
-        let div_lhs = upload(&gpu, &complex);
-        let div_rhs = upload(&gpu, &scalar);
-        let actual = gpu
-            .with_backend_session(|__s| {
-                __s.div_read(
-                    TensorRead::from_tensor(&div_lhs),
-                    TensorRead::from_tensor(&div_rhs),
-                )
-            })
-            .unwrap()
-            .map(|value| download(&gpu, &value))
-            .unwrap();
-        assert_complex_classes_and_values_match(
-            &actual,
-            &expected,
-            "extreme divisor mixed ops reversed",
-            ZeroSign::Strict,
-        );
     }
 
     for (lhs, rhs, expected_lhs, expected_rhs) in [
@@ -2925,4 +2847,58 @@ fn complex_division_is_scale_robust() {
         "{:?}",
         values32[0]
     );
+    // The mixed real-scalar form runs the same core, so a real operand on either side of a huge
+    // complex operand stays finite too. The host is not the reference for these inputs: its result
+    // for `2.0 / (1e38 + 1e38i)` depends on the tensor it sits in and on the machine (measured: `0`
+    // for that element alone here and a finite `1e-38` on the CI runner), so the closed-form value
+    // is, as above.
+    let real = tensor_f64(vec![], vec![2.0]);
+    let huge_complex = tensor_c64(vec![1], vec![Complex64::new(huge, huge)]);
+    for (lhs, rhs, expected_re, expected_im) in [
+        (&real, &huge_complex, 2f64.powi(-600), -2f64.powi(-600)),
+        (&huge_complex, &real, 2f64.powi(599), 2f64.powi(599)),
+    ] {
+        let gpu_lhs = upload(&gpu, lhs);
+        let gpu_rhs = upload(&gpu, rhs);
+        let result = gpu
+            .with_backend_session(|__s| {
+                __s.div_read(
+                    TensorRead::from_tensor(&gpu_lhs),
+                    TensorRead::from_tensor(&gpu_rhs),
+                )
+            })
+            .unwrap()
+            .unwrap();
+        let result = download(&gpu, &result);
+        let value = result.as_typed::<Complex64>().unwrap().as_slice().unwrap()[0];
+        assert!(
+            (value.re - expected_re).abs() <= expected_re.abs() * 1e-12
+                && (value.im - expected_im).abs() <= expected_im.abs() * 1e-12,
+            "{value:?} against ({expected_re}, {expected_im})"
+        );
+    }
+
+    // Same in f32, where the componentwise form overflows: `2.0 / (2^70 + 2^70 i)` is
+    // `2^-70 (1 - i)`.
+    let real32_mixed = tensor_f32(vec![], vec![2.0]);
+    let huge32_mixed = tensor_c32(vec![1], vec![Complex32::new(2f32.powi(70), 2f32.powi(70))]);
+    let gpu_real32_mixed = upload(&gpu, &real32_mixed);
+    let gpu_huge32_mixed = upload(&gpu, &huge32_mixed);
+    let mixed32 = gpu
+        .with_backend_session(|__s| {
+            __s.div_read(
+                TensorRead::from_tensor(&gpu_real32_mixed),
+                TensorRead::from_tensor(&gpu_huge32_mixed),
+            )
+        })
+        .unwrap()
+        .unwrap();
+    let mixed32 = download(&gpu, &mixed32);
+    let value32_mixed = mixed32.as_typed::<Complex32>().unwrap().as_slice().unwrap()[0];
+    let expected_mixed32 = 2f32.powi(-70);
+    assert!(
+        (value32_mixed.re - expected_mixed32).abs() <= expected_mixed32 * 1e-5
+            && (value32_mixed.im + expected_mixed32).abs() <= expected_mixed32 * 1e-5,
+        "{value32_mixed:?}"
+    )
 }
