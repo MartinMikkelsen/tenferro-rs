@@ -199,7 +199,14 @@ depends on the division algorithm, and the host's own `f32` and `f64` paths do
 not agree on it (`2.0 / (0.0 - 2.0i)` is `+0.0` for `C32` and `-0.0` for `C64`).
 A complex division therefore has to agree on its classification and on every
 non-zero component, but not on the sign of a zero component; add, subtract and
-multiply keep that sign.
+multiply keep that sign. An extreme but finite divisor is checked against its
+closed-form value instead of the host, whose result for one element depends on
+the machine and on the rest of the tensor (`2.0 / (1e38 + 1e38i)` is `0` on one
+machine and a finite `1e-38` on another), so the complex/complex and mixed
+real-scalar forms both run the scale-robust algorithm and keep the quotient
+finite. A non-finite divisor is not in that set: there the host's classification
+is what the device reproduces, so the mixed form keeps its componentwise
+expansion for a non-finite divisor and the host's `NaN` stays `NaN`.
 
 CPU backend implementations, CPU kernels, and CPU resource pools belong in
 `tenferro-cpu`. GPU backend implementations and GPU transfer helpers belong in

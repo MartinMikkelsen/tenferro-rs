@@ -272,39 +272,62 @@ pub fn scalar_real_complex_binary<F: Float>(
         // INVARIANT: These unsimplified component expressions must evaluate in the
         // same order as CPU `num_complex` after promotion to `Complex(real, +0)`.
         // Keep zero cross terms: they determine NaN, infinity, overflow, and signed zero.
-        let (out_re, out_im) = if mode == MIXED_ADD {
-            if real_lhs {
-                (scalar + re, zero + im)
-            } else {
-                (re + scalar, im + zero)
-            }
-        } else if mode == MIXED_SUB {
-            if real_lhs {
-                (scalar - re, zero - im)
-            } else {
-                (re - scalar, im - zero)
-            }
-        } else if mode == MIXED_MUL {
-            if real_lhs {
-                (scalar * re - zero * im, scalar * im + zero * re)
-            } else {
-                (re * scalar - im * zero, re * zero + im * scalar)
-            }
-        } else if !real_lhs {
-            let norm_sqr = scalar * scalar + zero * zero;
-            (
-                (re * scalar + im * zero) / norm_sqr,
-                (im * scalar - re * zero) / norm_sqr,
-            )
+        let divisor_finite = if real_lhs {
+            complex_div_abs::<F>(re) <= F::max_value() && complex_div_abs::<F>(im) <= F::max_value()
         } else {
-            let norm_sqr = re * re + im * im;
-            (
-                (scalar * re + zero * im) / norm_sqr,
-                (zero * re - scalar * im) / norm_sqr,
-            )
+            complex_div_abs::<F>(scalar) <= F::max_value()
         };
-        out[complex_idx] = out_re;
-        out[complex_idx + 1] = out_im;
+        if mode == MIXED_DIV && divisor_finite {
+            // The host promotes a real operand to `Complex(real, +0.0)` and runs its scale-robust
+            // complex division, so a finite divisor goes through the same algorithm here: the
+            // componentwise form overflows its squared denominator for `2.0 / (1e38 + 1e38i)`
+            // (returning `0` where the value is about `1e-38`) and picks the other sign for a zero
+            // component.
+            if real_lhs {
+                complex_div_parts_at::<F>(scalar, zero, re, im, out, complex_idx);
+            } else {
+                complex_div_parts_at::<F>(re, im, scalar, zero, out, complex_idx);
+            }
+        } else {
+            // INVARIANT: These unsimplified component expressions must evaluate in the
+            // same order as CPU `num_complex` after promotion to `Complex(real, +0)`.
+            // Keep zero cross terms: they determine NaN, infinity, overflow, and signed zero.
+            // A non-finite divisor also stays here: the host overflows it, and agreeing on the
+            // resulting classification matters more than the finite value it never produces.
+            let (out_re, out_im) = if mode == MIXED_ADD {
+                if real_lhs {
+                    (scalar + re, zero + im)
+                } else {
+                    (re + scalar, im + zero)
+                }
+            } else if mode == MIXED_SUB {
+                if real_lhs {
+                    (scalar - re, zero - im)
+                } else {
+                    (re - scalar, im - zero)
+                }
+            } else if mode == MIXED_MUL {
+                if real_lhs {
+                    (scalar * re - zero * im, scalar * im + zero * re)
+                } else {
+                    (re * scalar - im * zero, re * zero + im * scalar)
+                }
+            } else if !real_lhs {
+                let norm_sqr = scalar * scalar + zero * zero;
+                (
+                    (re * scalar + im * zero) / norm_sqr,
+                    (im * scalar - re * zero) / norm_sqr,
+                )
+            } else {
+                let norm_sqr = re * re + im * im;
+                (
+                    (scalar * re + zero * im) / norm_sqr,
+                    (zero * re - scalar * im) / norm_sqr,
+                )
+            };
+            out[complex_idx] = out_re;
+            out[complex_idx + 1] = out_im;
+        }
     }
 }
 
@@ -793,66 +816,78 @@ pub fn div_complex_parts<F: Float>(out: &mut Array<F>, lhs: &Array<F>, rhs: &Arr
     let elements = out.len() / 2;
     if ABSOLUTE_POS < elements {
         let i = ABSOLUTE_POS * 2;
-        let mut a = lhs[i];
-        let mut b = lhs[i + 1];
-        let mut c = rhs[i];
-        let mut d = rhs[i + 1];
-        if complex_div_abs::<F>(c) > F::max_value() || complex_div_abs::<F>(d) > F::max_value() {
-            let a_finite = a == a && complex_div_abs::<F>(a) <= F::max_value();
-            let b_finite = b == b && complex_div_abs::<F>(b) <= F::max_value();
-            if a_finite && b_finite {
-                out[i] = F::new(0.0f32) * complex_div_sign::<F>(a) * complex_div_sign::<F>(c);
-                out[i + 1] = -F::new(0.0f32) * complex_div_sign::<F>(b) * complex_div_sign::<F>(d);
-            } else {
-                // `F::NAN` codegens to an undefined `NaN` identifier on CUDA.
-                let nan = F::new(0.0f32) / F::new(0.0f32);
-                out[i] = nan;
-                out[i + 1] = nan;
-            }
+        complex_div_parts_at::<F>(lhs[i], lhs[i + 1], rhs[i], rhs[i + 1], out, i);
+    }
+}
+
+/// One scale-robust complex division, written as the parts of `a + bi` over `c + di` at
+/// `out[index]` and `out[index + 1]`.
+///
+/// The complex/complex kernel and the mixed real-scalar kernel both come through here, so a real
+/// operand promoted to `Complex(real, +0.0)` divides exactly as the complex case does. The
+/// numerator and denominator terms keep an extreme divisor finite and decide the sign of a zero
+/// result; the componentwise form does neither.
+#[cube]
+fn complex_div_parts_at<F: Float>(a0: F, b0: F, c0: F, d0: F, out: &mut Array<F>, index: usize) {
+    let mut a = a0;
+    let mut b = b0;
+    let mut c = c0;
+    let mut d = d0;
+    if complex_div_abs::<F>(c) > F::max_value() || complex_div_abs::<F>(d) > F::max_value() {
+        let a_finite = a == a && complex_div_abs::<F>(a) <= F::max_value();
+        let b_finite = b == b && complex_div_abs::<F>(b) <= F::max_value();
+        if a_finite && b_finite {
+            out[index] = F::new(0.0f32) * complex_div_sign::<F>(a) * complex_div_sign::<F>(c);
+            out[index + 1] = -F::new(0.0f32) * complex_div_sign::<F>(b) * complex_div_sign::<F>(d);
         } else {
-            let abs_a = complex_div_abs::<F>(a);
-            let abs_b = complex_div_abs::<F>(b);
-            let abs_c = complex_div_abs::<F>(c);
-            let abs_d = complex_div_abs::<F>(d);
-            let ab = if abs_a >= abs_b { abs_a } else { abs_b };
-            let cd = if abs_c >= abs_d { abs_c } else { abs_d };
-            let half = F::new(0.5f32);
-            let two = F::new(2.0f32);
-            let half_ov = F::max_value() * half;
-            let two_un_eps = F::MIN_POSITIVE * two / F::EPSILON;
-            let mut scale = F::new(1.0f32);
-            if ab >= half_ov || ab <= two_un_eps || cd >= half_ov || cd <= two_un_eps {
-                let big = two / (F::EPSILON * F::EPSILON);
-                if ab >= half_ov {
-                    a = a * half;
-                    b = b * half;
-                    scale = scale * two;
-                } else if ab <= two_un_eps {
-                    a = a * big;
-                    b = b * big;
-                    scale = scale / big;
-                }
-                if cd >= half_ov {
-                    c = c * half;
-                    d = d * half;
-                    scale = scale * half;
-                } else if cd <= two_un_eps {
-                    c = c * big;
-                    d = d * big;
-                    scale = scale * big;
-                }
+            // `F::NAN` codegens to an undefined `NaN` identifier on CUDA.
+            let nan = F::new(0.0f32) / F::new(0.0f32);
+            out[index] = nan;
+            out[index + 1] = nan;
+        }
+    } else {
+        let abs_a = complex_div_abs::<F>(a);
+        let abs_b = complex_div_abs::<F>(b);
+        let abs_c = complex_div_abs::<F>(c);
+        let abs_d = complex_div_abs::<F>(d);
+        let ab = if abs_a >= abs_b { abs_a } else { abs_b };
+        let cd = if abs_c >= abs_d { abs_c } else { abs_d };
+        let half = F::new(0.5f32);
+        let two = F::new(2.0f32);
+        let half_ov = F::max_value() * half;
+        let two_un_eps = F::MIN_POSITIVE * two / F::EPSILON;
+        let mut scale = F::new(1.0f32);
+        if ab >= half_ov || ab <= two_un_eps || cd >= half_ov || cd <= two_un_eps {
+            let big = two / (F::EPSILON * F::EPSILON);
+            if ab >= half_ov {
+                a = a * half;
+                b = b * half;
+                scale = scale * two;
+            } else if ab <= two_un_eps {
+                a = a * big;
+                b = b * big;
+                scale = scale / big;
             }
-            if complex_div_abs::<F>(d) <= complex_div_abs::<F>(c) {
-                let r = d / c;
-                let t = F::new(1.0f32) / (c + d * r);
-                out[i] = complex_div_term::<F>(a, b, c, d, r, t) * scale;
-                out[i + 1] = complex_div_term::<F>(b, -a, c, d, r, t) * scale;
-            } else {
-                let r = c / d;
-                let t = F::new(1.0f32) / (c * r + d);
-                out[i] = complex_div_term::<F>(b, a, d, c, r, t) * scale;
-                out[i + 1] = -complex_div_term::<F>(a, -b, d, c, r, t) * scale;
+            if cd >= half_ov {
+                c = c * half;
+                d = d * half;
+                scale = scale * half;
+            } else if cd <= two_un_eps {
+                c = c * big;
+                d = d * big;
+                scale = scale * big;
             }
+        }
+        if complex_div_abs::<F>(d) <= complex_div_abs::<F>(c) {
+            let r = d / c;
+            let t = F::new(1.0f32) / (c + d * r);
+            out[index] = complex_div_term::<F>(a, b, c, d, r, t) * scale;
+            out[index + 1] = complex_div_term::<F>(b, -a, c, d, r, t) * scale;
+        } else {
+            let r = c / d;
+            let t = F::new(1.0f32) / (c * r + d);
+            out[index] = complex_div_term::<F>(b, a, d, c, r, t) * scale;
+            out[index + 1] = -complex_div_term::<F>(a, -b, d, c, r, t) * scale;
         }
     }
 }
