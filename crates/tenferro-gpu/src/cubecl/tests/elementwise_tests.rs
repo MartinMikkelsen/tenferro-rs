@@ -170,17 +170,41 @@ fn elementwise_read_preserves_offset_and_strided_layouts() {
         .is_err());
 }
 
-fn assert_complex_classes_and_values_match(actual: &Tensor, expected: &Tensor) {
-    fn component_matches<T: num_traits::Float + std::fmt::Debug>(actual: T, expected: T) {
+/// Whether the sign bit of a zero component belongs to this comparison's contract.
+///
+/// The host's own `f32` and `f64` paths disagree on it for complex division
+/// (`2.0 / (0.0 - 2.0i)` is `+0.0` for `C32` and `-0.0` for `C64`), so division compares the value,
+/// the class and every non-zero component but not that bit. Add, subtract and multiply keep it.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ZeroSign {
+    Strict,
+    Unchecked,
+}
+
+fn assert_complex_classes_and_values_match(
+    actual: &Tensor,
+    expected: &Tensor,
+    label: &str,
+    zero_sign: ZeroSign,
+) {
+    fn component_matches<T: num_traits::Float + std::fmt::Debug>(
+        actual: T,
+        expected: T,
+        label: &str,
+        zero_sign: ZeroSign,
+    ) {
         if expected.is_nan() {
-            assert!(actual.is_nan(), "expected NaN component, got {actual:?}");
+            assert!(
+                actual.is_nan(),
+                "{label}: expected NaN component, got {actual:?}"
+            );
         } else {
-            assert_eq!(actual, expected);
-            if expected == T::zero() {
+            assert_eq!(actual, expected, "{label}");
+            if expected == T::zero() && zero_sign == ZeroSign::Strict {
                 assert_eq!(
                     actual.is_sign_negative(),
                     expected.is_sign_negative(),
-                    "zero sign mismatch: actual={actual:?}, expected={expected:?}"
+                    "{label}: zero sign mismatch: actual={actual:?}, expected={expected:?}"
                 );
             }
         }
@@ -194,14 +218,25 @@ fn assert_complex_classes_and_values_match(actual: &Tensor, expected: &Tensor) {
             let expected = expected
                 .as_typed::<Complex32>()
                 .expect("the dtype guard selects this arm");
-            for (actual, expected) in actual
+            for (index, (actual, expected)) in actual
                 .as_slice()
                 .unwrap()
                 .iter()
                 .zip(expected.as_slice().unwrap())
+                .enumerate()
             {
-                component_matches(actual.re, expected.re);
-                component_matches(actual.im, expected.im);
+                component_matches(
+                    actual.re,
+                    expected.re,
+                    &format!("{label}[{index}].re"),
+                    zero_sign,
+                );
+                component_matches(
+                    actual.im,
+                    expected.im,
+                    &format!("{label}[{index}].im"),
+                    zero_sign,
+                );
             }
         }
         (DType::C64, DType::C64) => {
@@ -211,14 +246,25 @@ fn assert_complex_classes_and_values_match(actual: &Tensor, expected: &Tensor) {
             let expected = expected
                 .as_typed::<Complex64>()
                 .expect("the dtype guard selects this arm");
-            for (actual, expected) in actual
+            for (index, (actual, expected)) in actual
                 .as_slice()
                 .unwrap()
                 .iter()
                 .zip(expected.as_slice().unwrap())
+                .enumerate()
             {
-                component_matches(actual.re, expected.re);
-                component_matches(actual.im, expected.im);
+                component_matches(
+                    actual.re,
+                    expected.re,
+                    &format!("{label}[{index}].re"),
+                    zero_sign,
+                );
+                component_matches(
+                    actual.im,
+                    expected.im,
+                    &format!("{label}[{index}].im"),
+                    zero_sign,
+                );
             }
         }
         _ => panic!("expected matching complex tensor dtypes"),
@@ -264,9 +310,10 @@ fn test_real_scalar_complex_binary_ops_match_cpu() {
     for (scalar, complex, expected_dtype) in cases {
         let gpu_scalar = upload(&gpu, &scalar);
         let gpu_complex = upload(&gpu, &complex);
-        for (case, expected, actual) in [
+        for (case, zero_sign, expected, actual) in [
             (
                 "scalar+complex",
+                ZeroSign::Strict,
                 cpu.with_backend_session(|__s| {
                     __s.add_read(
                         TensorRead::from_tensor(&scalar),
@@ -284,6 +331,7 @@ fn test_real_scalar_complex_binary_ops_match_cpu() {
             ),
             (
                 "complex+scalar",
+                ZeroSign::Strict,
                 cpu.with_backend_session(|__s| {
                     __s.add_read(
                         TensorRead::from_tensor(&complex),
@@ -301,6 +349,7 @@ fn test_real_scalar_complex_binary_ops_match_cpu() {
             ),
             (
                 "scalar-complex",
+                ZeroSign::Strict,
                 cpu.with_backend_session(|__s| {
                     __s.sub_read(
                         TensorRead::from_tensor(&scalar),
@@ -318,6 +367,7 @@ fn test_real_scalar_complex_binary_ops_match_cpu() {
             ),
             (
                 "complex-scalar",
+                ZeroSign::Strict,
                 cpu.with_backend_session(|__s| {
                     __s.sub_read(
                         TensorRead::from_tensor(&complex),
@@ -335,6 +385,7 @@ fn test_real_scalar_complex_binary_ops_match_cpu() {
             ),
             (
                 "scalar*complex",
+                ZeroSign::Strict,
                 cpu.with_backend_session(|__s| {
                     __s.mul_read(
                         TensorRead::from_tensor(&scalar),
@@ -352,6 +403,7 @@ fn test_real_scalar_complex_binary_ops_match_cpu() {
             ),
             (
                 "complex*scalar",
+                ZeroSign::Strict,
                 cpu.with_backend_session(|__s| {
                     __s.mul_read(
                         TensorRead::from_tensor(&complex),
@@ -369,6 +421,7 @@ fn test_real_scalar_complex_binary_ops_match_cpu() {
             ),
             (
                 "scalar/complex",
+                ZeroSign::Unchecked,
                 cpu.with_backend_session(|__s| {
                     __s.div_read(
                         TensorRead::from_tensor(&scalar),
@@ -386,6 +439,7 @@ fn test_real_scalar_complex_binary_ops_match_cpu() {
             ),
             (
                 "complex/scalar",
+                ZeroSign::Unchecked,
                 cpu.with_backend_session(|__s| {
                     __s.div_read(
                         TensorRead::from_tensor(&complex),
@@ -406,7 +460,12 @@ fn test_real_scalar_complex_binary_ops_match_cpu() {
             let actual = download(&gpu, &actual.unwrap());
             assert_eq!(actual.dtype(), expected_dtype);
             assert_eq!(actual.shape(), &[4], "unexpected shape for {case}");
-            assert_complex_classes_and_values_match(&actual, &expected);
+            assert_complex_classes_and_values_match(
+                &actual,
+                &expected,
+                &format!("{expected_dtype:?} {case}"),
+                zero_sign,
+            );
         }
 
         for (op, result, expected_lhs, expected_rhs) in [
@@ -485,7 +544,12 @@ fn test_real_scalar_complex_binary_ops_match_cpu() {
             .unwrap()
             .map(|value| download(&gpu, &value))
             .unwrap();
-        assert_complex_classes_and_values_match(&actual, &expected);
+        assert_complex_classes_and_values_match(
+            &actual,
+            &expected,
+            "extreme divisor mixed ops",
+            ZeroSign::Strict,
+        );
     }
 
     for (scalar, complex) in [
@@ -648,7 +712,12 @@ fn test_real_scalar_complex_binary_ops_match_cpu() {
         ] {
             let expected = expected.unwrap();
             let actual = download(&gpu, &actual.unwrap());
-            assert_complex_classes_and_values_match(&actual, &expected);
+            assert_complex_classes_and_values_match(
+                &actual,
+                &expected,
+                "non-finite divisor mixed ops",
+                ZeroSign::Strict,
+            );
         }
     }
 
@@ -683,7 +752,12 @@ fn test_real_scalar_complex_binary_ops_match_cpu() {
             .unwrap()
             .map(|value| download(&gpu, &value))
             .unwrap();
-        assert_complex_classes_and_values_match(&actual, &expected);
+        assert_complex_classes_and_values_match(
+            &actual,
+            &expected,
+            "extreme divisor mixed ops reversed",
+            ZeroSign::Strict,
+        );
     }
 
     for (lhs, rhs, expected_lhs, expected_rhs) in [
