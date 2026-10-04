@@ -193,6 +193,14 @@ classification and on signed-zero behavior where the operation makes the sign
 bit contractual; any corner case where Rust, IEEE 754, NumPy, and JAX differ
 must be specified explicitly.
 
+Complex division bounds that agreement, and is therefore specified here: it is
+not a componentwise IEEE operation, so the sign of a zero component of a quotient
+depends on the division algorithm, and the host's own `f32` and `f64` paths do
+not agree on it (`2.0 / (0.0 - 2.0i)` is `+0.0` for `C32` and `-0.0` for `C64`).
+A complex division therefore has to agree on its classification and on every
+non-zero component, but not on the sign of a zero component; add, subtract and
+multiply keep that sign.
+
 CPU backend implementations, CPU kernels, and CPU resource pools belong in
 `tenferro-cpu`. GPU backend implementations and GPU transfer helpers belong in
 `tenferro-gpu`.
