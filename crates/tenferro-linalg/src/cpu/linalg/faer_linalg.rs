@@ -6,6 +6,7 @@ use faer::{
 };
 use num_complex::{Complex32, Complex64};
 use std::ops::Range;
+use strided_view::RawStridedRef;
 
 use tenferro_cpu::linalg_interop::{BufferPool, PoolScalar};
 use tenferro_cpu::CpuExecutionContext;
@@ -2112,7 +2113,9 @@ macro_rules! impl_faer_linalg_for_real {
     ) -> tenferro_tensor::Result<TypedTensor<<Self as FaerLinalg>::Real>> {
         let mut s = buffers.acquire_with_capacity::<<Self as FaerLinalg>::Real>(m.min(n));
         if m > 0 && n > 0 {
-            let descriptor = faer_descriptor("svd_values", mat, m, n)?;
+            let dims = [m, n];
+            let strides = [mat.row_stride(), mat.col_stride()];
+            let descriptor = faer_descriptor("svd_values", mat, &dims, &strides)?;
             tlinalg::svd::svd_values(
                 tlinalg_traits::Op::SvdValues,
                 m,
@@ -2313,7 +2316,9 @@ macro_rules! impl_faer_linalg_for_real {
         let mut vt = buffers
             .acquire_with_capacity::<Self>(checked_product("svd", "right singular vectors", &[v_cols, n])?);
         if m > 0 && n > 0 {
-            let descriptor = faer_descriptor("svd", mat, m, n)?;
+            let dims = [m, n];
+            let strides = [mat.row_stride(), mat.col_stride()];
+            let descriptor = faer_descriptor("svd", mat, &dims, &strides)?;
             tlinalg::svd::svd(
                 tlinalg_traits::Op::Svd,
                 m,
@@ -3058,7 +3063,9 @@ macro_rules! impl_faer_linalg_for_complex {
     ) -> tenferro_tensor::Result<TypedTensor<<Self as FaerLinalg>::Real>> {
         let mut s = buffers.acquire_with_capacity::<<Self as FaerLinalg>::Real>(m.min(n));
         if m > 0 && n > 0 {
-            let descriptor = faer_descriptor("svd_values", mat, m, n)?;
+            let dims = [m, n];
+            let strides = [mat.row_stride(), mat.col_stride()];
+            let descriptor = faer_descriptor("svd_values", mat, &dims, &strides)?;
             tlinalg::svd::svd_values(
                 tlinalg_traits::Op::SvdValues,
                 m,
@@ -3296,11 +3303,13 @@ macro_rules! impl_faer_linalg_for_complex {
         let (u_cols, v_cols) = if full { (m, n) } else { (k, k) };
         let mut u = buffers
             .acquire_with_capacity::<Self>(checked_product("svd", "left singular vectors", &[m, u_cols])?);
-        let mut s = buffers.acquire_with_capacity::<<Self as FaerLinalg>::Real>(k);
+        let mut s = buffers.acquire_with_capacity::<Self>(k);
         let mut vt = buffers
             .acquire_with_capacity::<Self>(checked_product("svd", "right singular vectors", &[v_cols, n])?);
         if m > 0 && n > 0 {
-            let descriptor = faer_descriptor("svd", mat, m, n)?;
+            let dims = [m, n];
+            let strides = [mat.row_stride(), mat.col_stride()];
+            let descriptor = faer_descriptor("svd", mat, &dims, &strides)?;
             tlinalg::svd::svd(
                 tlinalg_traits::Op::Svd,
                 m,
@@ -4243,16 +4252,21 @@ pub(crate) fn rank_revealing_qr_view<T: FaerLinalg + 'static>(
 /// Borrow a faer matrix descriptor for the extracted kernel.
 ///
 /// The extracted SVD takes a `RawStridedRef`; a `MatRef` already carries the same shape, strides and
-/// base pointer, so this recovers the element span and hands it over. `RawStridedRef::new`
-/// re-validates the bounds, so a span that is too small fails closed instead of reading out of
-/// range.
-fn faer_descriptor<'a, T>(
+/// base pointer, so this recovers the element span and hands it over. `RawStridedRef` borrows its
+/// shape and stride slices, so the caller owns them for as long as the descriptor lives.
+/// `RawStridedRef::new` re-validates the bounds, so a span that is too small fails closed instead of
+/// reading out of range.
+fn faer_descriptor<'a, 'b, T>(
     op: &'static str,
     mat: MatRef<'a, T>,
-    m: usize,
-    n: usize,
-) -> tenferro_tensor::Result<RawStridedRef<'a, T>> {
-    let (rs, cs) = (mat.row_stride(), mat.col_stride());
+    dims: &'b [usize],
+    strides: &'b [isize],
+) -> tenferro_tensor::Result<RawStridedRef<'b, T>>
+where
+    'a: 'b,
+{
+    let (m, n) = (dims[0], dims[1]);
+    let (rs, cs) = (strides[0], strides[1]);
     if rs < 0 || cs < 0 {
         return Err(tenferro_tensor::Error::unsupported(
             op,
@@ -4262,10 +4276,10 @@ fn faer_descriptor<'a, T>(
     // INVARIANT: `m` and `n` are nonzero here, so the span covers the element at (0, 0) through the
     // far corner `(m-1, n-1)`, which is exactly the region the `MatRef` was built from.
     let span = (m - 1) as isize * rs + (n - 1) as isize * cs + 1;
-    // SAFETY: the `MatRef` region is live for `'a` and covers `span` elements, because it was built
-    // from a live slice of that region by its constructor.
+    // SAFETY: the `MatRef` region is live for `'a`, which outlives `'b`, and covers `span` elements,
+    // because it was built from a live slice of that region by its constructor.
     let data = unsafe { core::slice::from_raw_parts(mat.as_ptr(), span as usize) };
-    RawStridedRef::new(data, &[m, n], &[rs, cs], 0)
+    RawStridedRef::new(data, dims, strides, 0)
         .map_err(|error| tenferro_tensor::Error::invalid_argument(op, "layout", error.to_string()))
 }
 
