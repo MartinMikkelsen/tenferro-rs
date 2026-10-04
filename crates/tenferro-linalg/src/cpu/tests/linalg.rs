@@ -477,7 +477,9 @@ fn lapack_batched_value_factor_paths_reuse_pooled_batch_input() {
     assert!(svd_values.contains("svd_buffers("));
     let svd_driver = source_from(svd_source, "fn svd_buffers");
     assert!(svd_driver.contains("pooled_copy(buffers, input.host_data()?)"));
-    assert!(svd_driver.contains("T::svd_batched("));
+    // The kernel now lives in the extracted LAPACK crate; what this pins is that the
+    // wrapper still reuses the pooled batch input and delegates in one batched call.
+    assert!(svd_driver.contains("tlinalg_blas::svd::svd_batch("));
     assert!(!svd_values.contains("input.host_data()?[range].to_vec()"));
 }
 
