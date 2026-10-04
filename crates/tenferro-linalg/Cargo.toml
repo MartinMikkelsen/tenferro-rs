@@ -65,6 +65,9 @@ provider-inject = [
     "tenferro-cpu/provider-inject",
     "dep:cblas-inject",
     "dep:lapack-inject",
+    # The injected symbol set exports ?gesvd but not ?gesdd, so the extracted LAPACK
+    # implementation has to select the other driver too.
+    "tlinalg-blas/provider-inject",
 ]
 cuda = [
     "tenferro-ad?/cuda",
@@ -101,7 +104,7 @@ faer = { workspace = true, optional = true }
 # workspace's pre-publish staging pattern for its fork dependencies.
 tlinalg = { git = "https://github.com/tensor4all/tlinalg-rs.git", rev = "c8b0a9fb6b54009f73ed51e9f1fb5f588662ab96", version = "0.1.0", optional = true }
 tlinalg-traits = { git = "https://github.com/tensor4all/tlinalg-rs.git", rev = "c8b0a9fb6b54009f73ed51e9f1fb5f588662ab96", version = "0.1.0", optional = true }
-tlinalg-blas = { git = "https://github.com/tensor4all/tlinalg-blas-rs.git", rev = "25c69ab4bdd7bad7e865c3a6777990b0c0fbabd4", version = "0.1.0", optional = true }
+tlinalg-blas = { git = "https://github.com/tensor4all/tlinalg-blas-rs.git", rev = "18b979744e3ffe0e0c8ab7d9c5c8831b24b05785", version = "0.1.0", optional = true }
 rayon.workspace = true
 lapack = { workspace = true, optional = true }
 lapack-inject = { workspace = true, optional = true }
