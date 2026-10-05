@@ -1,7 +1,6 @@
 #![deny(missing_docs)]
 
-//! Optional tprims-backed GEMM, `dot_general` and linear-algebra providers
-//! for `tenferro-cpu`.
+//! Optional tprims-backed GEMM and `dot_general` providers for `tenferro-cpu`.
 //!
 //! [tprims](https://github.com/tensor4all/tprims-rs) takes an explicit
 //! execution context that borrows a Rayon pool. [`TprimsProvider`] builds one
@@ -21,10 +20,7 @@
 //! let builder = CpuProviderBundle::builder(CpuBackendKind::default_compiled())
 //!     .gemm_provider(Arc::new(TprimsProvider::new()))
 //!     .prefer_general_contraction_provider(Arc::new(TprimsProvider::new()));
-//! // Linear algebra (tenferro_linalg::cpu_kernels): Cholesky, solves, SVD, QR, eigh.
-//! let bundle =
-//!     tenferro_linalg::cpu_kernels::install_linalg_kernels(builder, Arc::new(TprimsProvider::new()))
-//!         .build()?;
+//! let bundle = builder.build()?;
 //! let backend = CpuBackend::new().with_provider_bundle(bundle)?;
 //! # let _ = backend;
 //! # Ok::<(), Box<dyn std::error::Error>>(())
@@ -45,8 +41,6 @@ use tenferro_tensor::{
 use tprims_blas::{BatchIn, BatchStrategy, Conj, GroupedJob, MatIn};
 use tprims_contract::{ContractPlan, DotGeneral, Flags, Strategy};
 use tprims_exec::{Exec, Pool};
-
-mod linalg;
 
 /// tprims implementation of `tenferro-cpu`'s GEMM and general-contraction
 /// provider slots.
@@ -105,13 +99,6 @@ fn with_exec<R>(ctx: &CpuExecutionContext<'_>, f: impl FnOnce(&Exec<'_>) -> R) -
 
 /// The four element types tprims supports, with their tenferro views.
 trait Elem: TensorScalar + tprims_blas::Scalar {
-    /// Complex conjugate (identity for real types).
-    fn conj_elem(self) -> Self;
-    /// A column-major tensor of this type's real counterpart.
-    fn real_tensor(
-        shape: Vec<usize>,
-        data: Vec<<Self as tprims_blas::Scalar>::Re>,
-    ) -> Result<tenferro_tensor::Tensor>;
     fn scalar(s: ContractionScalar) -> Option<Self>;
     fn view<'b, 'a>(v: &'b TensorView<'a>) -> Option<&'b TypedTensorView<'a, Self>>;
     fn view_mut<'b, 'a>(
@@ -120,18 +107,8 @@ trait Elem: TensorScalar + tprims_blas::Scalar {
 }
 
 macro_rules! elem {
-    ($t:ty, $v:ident, $conj:expr) => {
+    ($t:ty, $v:ident) => {
         impl Elem for $t {
-            fn conj_elem(self) -> Self {
-                let conj: fn(Self) -> Self = $conj;
-                conj(self)
-            }
-            fn real_tensor(
-                shape: Vec<usize>,
-                data: Vec<<Self as tprims_blas::Scalar>::Re>,
-            ) -> Result<tenferro_tensor::Tensor> {
-                tenferro_tensor::Tensor::from_vec_col_major(shape, data)
-            }
             fn scalar(s: ContractionScalar) -> Option<Self> {
                 match s {
                     ContractionScalar::$v(x) => Some(x),
@@ -155,10 +132,10 @@ macro_rules! elem {
         }
     };
 }
-elem!(f32, F32, |x| x);
-elem!(f64, F64, |x| x);
-elem!(Complex32, C32, |x| x.conj());
-elem!(Complex64, C64, |x| x.conj());
+elem!(f32, F32);
+elem!(f64, F64);
+elem!(Complex32, C32);
+elem!(Complex64, C64);
 
 /// A read operand: its whole backing storage and the layout of the tensor in
 /// it (element strides and offset).
