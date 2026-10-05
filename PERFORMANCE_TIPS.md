@@ -493,7 +493,10 @@ Audit hints:
   or the engine's `submit_outer`, never a bare `rayon::scope`, so lanes carry
   the fan-out fact; a provider whose declared parallelism is an independent
   runtime (the default for external BLAS/LAPACK) is rejected before any lane
-  runs. No placement promise is made for threads a provider creates.
+  runs. No placement promise is made for threads a provider creates. The one
+  provider-owned fan-out is the batched `tlinalg` linalg provider: the host
+  resolves its lane plan from the effective batch policy and hands it the
+  context's own pool and budget, and its lanes never call back into tenferro.
 - Batched work follows the effective `CpuBatchPolicy` (per-operation scope >
   scoped override > backend default). Thresholds are policy values, not
   hard-coded constants; a forced strategy never overrides a safety rule.

@@ -3,7 +3,7 @@ use tenferro_tensor::TypedTensor;
 
 use super::{append_2d, compact_factor_2d, from_factors_2d, q_columns_2d, raw_r_2d};
 
-fn check_batched_qr<T: super::LapackQr>(
+fn check_batched_qr<T: super::LapackLinalg>(
     make: impl Fn(f64, f64) -> T,
     value: impl Fn(T) -> num_complex::Complex64,
 ) {

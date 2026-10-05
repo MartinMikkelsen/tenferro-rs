@@ -1,76 +1,19 @@
-use num_complex::{Complex32, Complex64};
-
-use tenferro_cpu::linalg_interop::{BufferPool, PoolScalar};
+use strided_view::RawStridedRef;
+use tenferro_cpu::linalg_interop::BufferPool;
 use tenferro_tensor::TypedTensor;
+use tlinalg_blas::Op;
 
 use super::helpers::{
-    batched_single, check_lapack_info, dim_i32, has_zero_dim, lower_triangle_from_lapack,
-    matrix_with_batch_shape, pooled_copy, release_scratch, square_core_and_batch_result,
-    square_matrix_dim, tensor_from_vec_with_template,
+    batch_element_count, checked_product, has_zero_dim, matrix_with_batch_shape, pooled_output,
+    provider, square_core_and_batch_result, tensor_from_vec_with_template, LapackLinalg,
 };
 
-pub(crate) trait LapackCholesky: Clone + Copy + Default + PoolScalar {
-    fn potrf(uplo: u8, n: i32, factor: &mut [Self], lda: i32, info: &mut i32);
-}
-
-impl LapackCholesky for f64 {
-    fn potrf(uplo: u8, n: i32, factor: &mut [Self], lda: i32, info: &mut i32) {
-        // SAFETY: callers pass a mutable column-major `lda x n` factor buffer,
-        // validated i32 dimensions, and a live `info` output for this call.
-        unsafe {
-            lapack::dpotrf(uplo, n, factor, lda, info);
-        }
-    }
-}
-
-impl LapackCholesky for f32 {
-    fn potrf(uplo: u8, n: i32, factor: &mut [Self], lda: i32, info: &mut i32) {
-        // SAFETY: callers pass a mutable column-major `lda x n` factor buffer,
-        // validated i32 dimensions, and a live `info` output for this call.
-        unsafe {
-            lapack::spotrf(uplo, n, factor, lda, info);
-        }
-    }
-}
-
-impl LapackCholesky for Complex32 {
-    fn potrf(uplo: u8, n: i32, factor: &mut [Self], lda: i32, info: &mut i32) {
-        // SAFETY: callers pass a mutable column-major `lda x n` factor buffer,
-        // validated i32 dimensions, and a live `info` output for this call.
-        unsafe {
-            lapack::cpotrf(uplo, n, factor, lda, info);
-        }
-    }
-}
-
-impl LapackCholesky for Complex64 {
-    fn potrf(uplo: u8, n: i32, factor: &mut [Self], lda: i32, info: &mut i32) {
-        // SAFETY: callers pass a mutable column-major `lda x n` factor buffer,
-        // validated i32 dimensions, and a live `info` output for this call.
-        unsafe {
-            lapack::zpotrf(uplo, n, factor, lda, info);
-        }
-    }
-}
-
-fn cholesky_2d<T: LapackCholesky>(
-    buffers: &mut BufferPool,
-    input: &TypedTensor<T>,
-) -> tenferro_tensor::Result<TypedTensor<T>> {
-    let n = square_matrix_dim(input, "cholesky")?;
-    tensor_from_vec_with_template(
-        vec![n, n],
-        cholesky_compact_data(buffers, input.host_data()?, n)?,
-        input,
-    )
-}
-
-pub(crate) fn cholesky_compact_data<T: LapackCholesky>(
+/// Lower Cholesky factor of one compact `n x n` matrix, for the managed (prepared) route.
+pub(crate) fn cholesky_compact_data<T: LapackLinalg>(
     buffers: &mut BufferPool,
     input: &[T],
     n: usize,
 ) -> tenferro_tensor::Result<Vec<T>> {
-    let n_i32 = dim_i32(n, "cholesky")?;
     let expected_len = n.checked_mul(n).ok_or_else(|| {
         tenferro_tensor::Error::invalid_argument(
             "cholesky",
@@ -85,32 +28,34 @@ pub(crate) fn cholesky_compact_data<T: LapackCholesky>(
             format!("expected {expected_len} elements, got {}", input.len()),
         ));
     }
-    let mut factor = pooled_copy(buffers, input);
-    let mut info = 0;
-    T::potrf(b'L', n_i32, &mut factor, n_i32, &mut info);
-    if info > 0 {
-        return Err(crate::error::into_tensor_error(
-            "cholesky",
-            crate::Error::NonConvergence { op: "cholesky" },
-        ));
+    let mut lower = buffers.acquire_with_capacity::<T>(expected_len);
+    if n == 0 {
+        return Ok(lower);
     }
-    check_lapack_info("cholesky", "dpotrf", info)?;
-    let lower = lower_triangle_from_lapack(&factor, n, n);
-    release_scratch(buffers, factor);
-    lower
+    let dims = [n, n];
+    let strides = [1, n as isize];
+    let a = RawStridedRef::new(input, &dims, &strides, 0).map_err(|error| {
+        tenferro_tensor::Error::invalid_argument("cholesky", "layout", error.to_string())
+    })?;
+    T::cholesky(buffers, a, &mut lower).map_err(provider(Op::Cholesky))?;
+    Ok(lower)
 }
 
-pub(crate) fn cholesky<T: LapackCholesky>(
+pub(crate) fn cholesky<T: LapackLinalg>(
     buffers: &mut BufferPool,
     input: &TypedTensor<T>,
 ) -> tenferro_tensor::Result<TypedTensor<T>> {
+    const OP: &str = "cholesky";
+    let (n, batch_shape) = square_core_and_batch_result(input, OP)?;
+    let shape = matrix_with_batch_shape(n, n, batch_shape);
     if has_zero_dim(input.shape()) {
-        let (n, batch_shape) = square_core_and_batch_result(input, "cholesky")?;
-        return tensor_from_vec_with_template(
-            matrix_with_batch_shape(n, n, batch_shape),
-            Vec::new(),
-            input,
-        );
+        return tensor_from_vec_with_template(shape, Vec::new(), input);
     }
-    batched_single("cholesky", buffers, input, cholesky_2d)
+    batch_element_count(OP, batch_shape)?;
+    checked_product(OP, "matrix", &shape)?;
+    let mut lower = pooled_output::<T>(buffers, OP, "matrix", &shape)?;
+    let view = input.as_view();
+    T::cholesky(buffers, super::super::raw_view(OP, &view)?, &mut lower)
+        .map_err(provider(Op::Cholesky))?;
+    tensor_from_vec_with_template(shape, lower, input)
 }

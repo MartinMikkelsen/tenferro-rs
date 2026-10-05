@@ -30,7 +30,6 @@ autodiff = [
 cpu-faer = [
     "dep:faer",
     "dep:tlinalg",
-    "dep:tlinalg-traits",
     "tenferro-ad?/cpu-faer",
     "tenferro-cpu/cpu-faer",
 ]
@@ -38,7 +37,6 @@ cpu-blas = [
     "dep:cblas-sys",
     "dep:lapack",
     "dep:tlinalg-blas",
-    "dep:tlinalg-traits",
     "tenferro-ad?/cpu-blas",
     "tenferro-cpu/cpu-blas",
 ]
@@ -99,12 +97,13 @@ cubecl-cuda = { workspace = true, optional = true }
 cubecl-runtime = { workspace = true, optional = true }
 cudarc = { workspace = true, optional = true }
 faer = { workspace = true, optional = true }
-# The extracted tensor-free linalg crate. Spelled with both a git rev and a version so that Cargo
-# uses the rev locally while a packaged manifest keeps only the version requirement, matching the
-# workspace's pre-publish staging pattern for its fork dependencies.
-tlinalg = { git = "https://github.com/tensor4all/tlinalg-rs.git", rev = "69b3f2df87a14293268e6387904de8d3aa8a738a", version = "0.1.0", optional = true }
-tlinalg-traits = { git = "https://github.com/tensor4all/tlinalg-rs.git", rev = "69b3f2df87a14293268e6387904de8d3aa8a738a", version = "0.1.0", optional = true }
-tlinalg-blas = { git = "https://github.com/tensor4all/tlinalg-blas-rs.git", rev = "e678bfd048b36f3c51f597e2be87a2a2f9265f13", version = "0.1.0", optional = true }
+# The extracted tensor-free linalg providers, both from the tlinalg-rs workspace: `tlinalg` (faer)
+# and `tlinalg-blas` (LAPACK/BLAS). Neither depends on the other; the interface they are adapted to
+# lives in this crate. Spelled with both a git rev and a version so that Cargo uses the rev locally
+# while a packaged manifest keeps only the version requirement, matching the workspace's
+# pre-publish staging pattern for its fork dependencies. Keep the two revs identical.
+tlinalg = { git = "https://github.com/tensor4all/tlinalg-rs.git", rev = "2734716b5b224a67672aef075df6eb90a6ea5ed7", version = "0.1.0", optional = true }
+tlinalg-blas = { git = "https://github.com/tensor4all/tlinalg-rs.git", rev = "2734716b5b224a67672aef075df6eb90a6ea5ed7", version = "0.1.0", optional = true }
 rayon.workspace = true
 lapack = { workspace = true, optional = true }
 lapack-inject = { workspace = true, optional = true }

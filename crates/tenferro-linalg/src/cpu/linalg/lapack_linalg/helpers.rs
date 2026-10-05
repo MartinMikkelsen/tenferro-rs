@@ -1,35 +1,553 @@
-use std::ops::Range;
+//! Shared host helpers of the LAPACK route and its per-scalar provider dispatch.
+//!
+//! Every numerical kernel, its FFI marshalling and the batch loop live in the extracted
+//! `tlinalg-blas` crate. This module keeps tenferro's shape validation and tensor construction
+//! helpers, and [`LapackLinalg`]: one trait per scalar that forwards each family to the provider
+//! with the session pool as its workspace.
+
+use num_complex::{Complex32, Complex64};
+use strided_view::{RawStridedMut, RawStridedRef};
 
 use tenferro_cpu::linalg_interop::{BufferPool, PoolScalar};
-use tenferro_tensor::{Complex32, Complex64, DType, Tensor, TypedTensor};
+use tenferro_tensor::{DType, Tensor, TypedTensor};
+use tlinalg_blas::{Op, Result as BlasResult};
+
+use crate::cpu::tlinalg_blas::workspace;
 
 #[cfg(test)]
 #[path = "helpers/tests.rs"]
 mod tests;
 
-/// Acquire a zero-filled scratch buffer from the session buffer pool.
+/// The LAPACK route's scalar vocabulary: host facts plus one forwarding method per family.
 ///
-/// LAPACK kernels need vendor scratch (`work`, `iwork`, `rwork`) and a
-/// destructible copy of `A` on every call. Those buffers are unavoidable; what
-/// is avoidable is paying the allocator for them each time, so they come from
-/// the pool the kernels already receive and go back with [`release_scratch`].
-pub(crate) fn pooled_zeroed<T: PoolScalar>(buffers: &mut BufferPool, len: usize) -> Vec<T> {
-    <T as PoolScalar>::pool_acquire_zeroed(buffers, len)
+/// The provider is generic over its own scalar and workspace traits; naming those bounds from a
+/// generic host function would thread several where-clauses through every caller, so each method
+/// is implemented once per concrete scalar, where the bounds are simply true.
+pub(crate) trait LapackLinalg:
+    tlinalg_blas::LapackScalar + PoolScalar + Default + PartialEq + std::ops::Mul<Output = Self>
+{
+    /// The real scalar of singular values and Hermitian eigenvalues.
+    type RealScalar: PoolScalar + Default;
+    /// The complex scalar of a general eigendecomposition.
+    type ComplexScalar: PoolScalar;
+
+    fn unit() -> Self;
+    fn r_phase(diagonal: Self) -> Self;
+    fn q_phase(diagonal: Self) -> Self;
+    /// `|x|`, as the rank decision compares it.
+    fn rank_magnitude(self) -> f64;
+    /// Whether every component is finite (the rank-revealing QR input screen).
+    fn is_finite_value(self) -> bool;
+    /// Real values in this scalar type, reusing the buffer when the scalar is real.
+    fn values_as_scalar(buffers: &mut BufferPool, values: Vec<Self::RealScalar>) -> Vec<Self>;
+    /// Wrap a general-eigendecomposition output as an erased tensor.
+    fn wrap_complex(tensor: TypedTensor<Self::ComplexScalar>) -> Tensor;
+    /// `C = A B` for the compact Householder fold of `from_factors_2d` (host composition).
+    fn gemm_2d(
+        a: &[Self],
+        a_rows: usize,
+        a_cols: usize,
+        b: &[Self],
+        b_cols: usize,
+        c: &mut [Self],
+    ) -> tenferro_tensor::Result<()>;
+
+    fn cholesky(
+        pool: &mut BufferPool,
+        a: RawStridedRef<'_, Self>,
+        out: &mut Vec<Self>,
+    ) -> BlasResult<()>;
+    fn triangular_solve(
+        pool: &mut BufferPool,
+        options: tlinalg_blas::triangular_solve::TriangularSolveOptions,
+        a: RawStridedRef<'_, Self>,
+        b: RawStridedRef<'_, Self>,
+        out: &mut Vec<Self>,
+    ) -> BlasResult<()>;
+    fn lu(
+        pool: &mut BufferPool,
+        a: RawStridedRef<'_, Self>,
+        outputs: tlinalg_blas::lu::LuOutputs<'_, Self>,
+    ) -> BlasResult<()>;
+    fn solve(
+        pool: &mut BufferPool,
+        transpose_a: bool,
+        a: RawStridedRef<'_, Self>,
+        b: RawStridedRef<'_, Self>,
+        out: &mut Vec<Self>,
+    ) -> BlasResult<()>;
+    fn solve_into(
+        pool: &mut BufferPool,
+        transpose_a: bool,
+        a: RawStridedRef<'_, Self>,
+        b: RawStridedRef<'_, Self>,
+        out: RawStridedMut<'_, Self>,
+    ) -> BlasResult<()>;
+    fn full_piv_lu(
+        pool: &mut BufferPool,
+        a: RawStridedRef<'_, Self>,
+        outputs: tlinalg_blas::full_piv_lu::FullPivLuOutputs<'_, Self>,
+    ) -> BlasResult<()>;
+    fn full_piv_lu_solve(
+        pool: &mut BufferPool,
+        transpose_a: bool,
+        a: RawStridedRef<'_, Self>,
+        b: RawStridedRef<'_, Self>,
+        out: &mut Vec<Self>,
+    ) -> BlasResult<()>;
+    fn householder_factor(
+        pool: &mut BufferPool,
+        rows: usize,
+        cols: usize,
+        data: &mut [Self],
+        tau: &mut Vec<Self>,
+    ) -> BlasResult<()>;
+    // INVARIANT: the argument list mirrors the provider's reflector ABI one-to-one.
+    #[allow(clippy::too_many_arguments)]
+    fn apply_reflectors(
+        pool: &mut BufferPool,
+        m: usize,
+        a_cols: usize,
+        p: usize,
+        k: usize,
+        transpose: bool,
+        a: &[Self],
+        tau: &[Self],
+        c: &mut [Self],
+    ) -> BlasResult<()>;
+    fn qr(
+        pool: &mut BufferPool,
+        a: RawStridedRef<'_, Self>,
+        q: &mut Vec<Self>,
+        r: &mut Vec<Self>,
+    ) -> BlasResult<()>;
+    fn rank_revealing_qr(
+        pool: &mut BufferPool,
+        a: RawStridedRef<'_, Self>,
+        outputs: tlinalg_blas::qr::RankRevealingQrOutputs<'_, Self>,
+    ) -> BlasResult<()>;
+    fn eigh(
+        pool: &mut BufferPool,
+        op: Op,
+        a: RawStridedRef<'_, Self>,
+        values: &mut Vec<Self::RealScalar>,
+        vectors: Option<&mut Vec<Self>>,
+    ) -> BlasResult<()>;
+    fn svd(
+        pool: &mut BufferPool,
+        op: Op,
+        mode: tlinalg_blas::svd::SvdMode,
+        a: RawStridedRef<'_, Self>,
+        outputs: tlinalg_blas::svd::SvdOutputs<'_, Self, Self::RealScalar>,
+    ) -> BlasResult<()>;
+    fn eig(
+        pool: &mut BufferPool,
+        op: Op,
+        a: RawStridedRef<'_, Self>,
+        values: &mut Vec<Self::ComplexScalar>,
+        vectors: Option<&mut Vec<Self::ComplexScalar>>,
+    ) -> BlasResult<()>;
 }
 
-/// Acquire a pooled copy of a compact host slice.
-///
-/// This is the single preparation copy a destructive LAPACK kernel needs, not
-/// an adapter copy: `?gesdd`, `?geqrf` and friends overwrite `A` in place.
-pub(crate) fn pooled_copy<T: PoolScalar>(buffers: &mut BufferPool, source: &[T]) -> Vec<T> {
-    let mut data = buffers.acquire_with_capacity::<T>(source.len());
-    data.extend_from_slice(source);
-    data
+/// The forwarding methods, identical for every scalar.
+macro_rules! forward_lapack_families {
+    ($real:ty, $complex:ty) => {
+        fn cholesky(
+            pool: &mut BufferPool,
+            a: RawStridedRef<'_, Self>,
+            out: &mut Vec<Self>,
+        ) -> BlasResult<()> {
+            tlinalg_blas::cholesky::cholesky(Op::Cholesky, a, out, &mut workspace(pool))
+        }
+
+        fn triangular_solve(
+            pool: &mut BufferPool,
+            options: tlinalg_blas::triangular_solve::TriangularSolveOptions,
+            a: RawStridedRef<'_, Self>,
+            b: RawStridedRef<'_, Self>,
+            out: &mut Vec<Self>,
+        ) -> BlasResult<()> {
+            tlinalg_blas::triangular_solve::triangular_solve(
+                Op::TriangularSolve,
+                options,
+                a,
+                b,
+                out,
+                &mut workspace(pool),
+            )
+        }
+
+        fn lu(
+            pool: &mut BufferPool,
+            a: RawStridedRef<'_, Self>,
+            outputs: tlinalg_blas::lu::LuOutputs<'_, Self>,
+        ) -> BlasResult<()> {
+            tlinalg_blas::lu::lu(Op::Lu, a, outputs, &mut workspace(pool))
+        }
+
+        fn solve(
+            pool: &mut BufferPool,
+            transpose_a: bool,
+            a: RawStridedRef<'_, Self>,
+            b: RawStridedRef<'_, Self>,
+            out: &mut Vec<Self>,
+        ) -> BlasResult<()> {
+            tlinalg_blas::solve::solve(Op::Solve, transpose_a, a, b, out, &mut workspace(pool))
+        }
+
+        fn solve_into(
+            pool: &mut BufferPool,
+            transpose_a: bool,
+            a: RawStridedRef<'_, Self>,
+            b: RawStridedRef<'_, Self>,
+            out: RawStridedMut<'_, Self>,
+        ) -> BlasResult<()> {
+            tlinalg_blas::solve::solve_into(Op::Solve, transpose_a, a, b, out, &mut workspace(pool))
+        }
+
+        fn full_piv_lu(
+            pool: &mut BufferPool,
+            a: RawStridedRef<'_, Self>,
+            outputs: tlinalg_blas::full_piv_lu::FullPivLuOutputs<'_, Self>,
+        ) -> BlasResult<()> {
+            tlinalg_blas::full_piv_lu::full_piv_lu(Op::FullPivLu, a, outputs, &mut workspace(pool))
+        }
+
+        fn full_piv_lu_solve(
+            pool: &mut BufferPool,
+            transpose_a: bool,
+            a: RawStridedRef<'_, Self>,
+            b: RawStridedRef<'_, Self>,
+            out: &mut Vec<Self>,
+        ) -> BlasResult<()> {
+            tlinalg_blas::full_piv_lu::full_piv_lu_solve(
+                Op::FullPivLuSolve,
+                transpose_a,
+                a,
+                b,
+                out,
+                &mut workspace(pool),
+            )
+        }
+
+        fn householder_factor(
+            pool: &mut BufferPool,
+            rows: usize,
+            cols: usize,
+            data: &mut [Self],
+            tau: &mut Vec<Self>,
+        ) -> BlasResult<()> {
+            tlinalg_blas::householder::factor(
+                Op::HouseholderFactor,
+                rows,
+                cols,
+                data,
+                tau,
+                &mut workspace(pool),
+            )
+        }
+
+        fn apply_reflectors(
+            pool: &mut BufferPool,
+            m: usize,
+            a_cols: usize,
+            p: usize,
+            k: usize,
+            transpose: bool,
+            a: &[Self],
+            tau: &[Self],
+            c: &mut [Self],
+        ) -> BlasResult<()> {
+            tlinalg_blas::householder::apply_reflectors(
+                Op::HouseholderApply,
+                m,
+                a_cols,
+                p,
+                k,
+                transpose,
+                a,
+                tau,
+                c,
+                &mut workspace(pool),
+            )
+        }
+
+        fn qr(
+            pool: &mut BufferPool,
+            a: RawStridedRef<'_, Self>,
+            q: &mut Vec<Self>,
+            r: &mut Vec<Self>,
+        ) -> BlasResult<()> {
+            tlinalg_blas::qr::qr(Op::Qr, a, q, r, &mut workspace(pool))
+        }
+
+        fn rank_revealing_qr(
+            pool: &mut BufferPool,
+            a: RawStridedRef<'_, Self>,
+            outputs: tlinalg_blas::qr::RankRevealingQrOutputs<'_, Self>,
+        ) -> BlasResult<()> {
+            tlinalg_blas::qr::rank_revealing_qr(
+                Op::RankRevealingQr,
+                a,
+                outputs,
+                &mut workspace(pool),
+            )
+        }
+
+        fn eigh(
+            pool: &mut BufferPool,
+            op: Op,
+            a: RawStridedRef<'_, Self>,
+            values: &mut Vec<$real>,
+            vectors: Option<&mut Vec<Self>>,
+        ) -> BlasResult<()> {
+            tlinalg_blas::eigh::eigh(op, a, values, vectors, &mut workspace(pool))
+        }
+
+        fn svd(
+            pool: &mut BufferPool,
+            op: Op,
+            mode: tlinalg_blas::svd::SvdMode,
+            a: RawStridedRef<'_, Self>,
+            outputs: tlinalg_blas::svd::SvdOutputs<'_, Self, $real>,
+        ) -> BlasResult<()> {
+            tlinalg_blas::svd::svd(op, mode, a, outputs, &mut workspace(pool))
+        }
+
+        fn eig(
+            pool: &mut BufferPool,
+            op: Op,
+            a: RawStridedRef<'_, Self>,
+            values: &mut Vec<$complex>,
+            vectors: Option<&mut Vec<$complex>>,
+        ) -> BlasResult<()> {
+            tlinalg_blas::eig::eig(op, a, values, vectors, &mut workspace(pool))
+        }
+    };
 }
 
-/// Return a scratch buffer to the pool for the next call to reuse.
-pub(crate) fn release_scratch<T: PoolScalar>(buffers: &mut BufferPool, data: Vec<T>) {
-    <T as PoolScalar>::pool_release(buffers, data);
+/// Validate the three compact operands of a host GEMM.
+fn validate_gemm_operands(
+    a_len: usize,
+    b_len: usize,
+    c_len: usize,
+    a_rows: usize,
+    a_cols: usize,
+    b_cols: usize,
+) -> tenferro_tensor::Result<(i32, i32, i32)> {
+    validate_buffer_len(
+        "from_factors_2d",
+        "T",
+        a_len,
+        checked_product("from_factors_2d", "T", &[a_rows, a_cols])?,
+    )?;
+    validate_buffer_len(
+        "from_factors_2d",
+        "R",
+        b_len,
+        checked_product("from_factors_2d", "R", &[a_cols, b_cols])?,
+    )?;
+    validate_buffer_len(
+        "from_factors_2d",
+        "folded R",
+        c_len,
+        checked_product("from_factors_2d", "folded R", &[a_rows, b_cols])?,
+    )?;
+    Ok((
+        dim_i32(a_rows, "from_factors_2d")?,
+        dim_i32(b_cols, "from_factors_2d")?,
+        dim_i32(a_cols, "from_factors_2d")?,
+    ))
+}
+
+macro_rules! impl_real_lapack {
+    ($scalar:ty, $complex:ty, $gemm:path) => {
+        impl LapackLinalg for $scalar {
+            type RealScalar = $scalar;
+            type ComplexScalar = $complex;
+
+            fn unit() -> Self {
+                1.0
+            }
+
+            fn r_phase(diagonal: Self) -> Self {
+                if diagonal < 0.0 {
+                    -1.0
+                } else {
+                    1.0
+                }
+            }
+
+            fn q_phase(diagonal: Self) -> Self {
+                Self::r_phase(diagonal)
+            }
+
+            fn rank_magnitude(self) -> f64 {
+                tlinalg_blas::magnitude(self)
+            }
+
+            fn is_finite_value(self) -> bool {
+                self.is_finite()
+            }
+
+            fn values_as_scalar(_buffers: &mut BufferPool, values: Vec<Self>) -> Vec<Self> {
+                values
+            }
+
+            fn wrap_complex(tensor: TypedTensor<$complex>) -> Tensor {
+                Tensor::from_typed::<$complex>(tensor)
+            }
+
+            fn gemm_2d(
+                a: &[Self],
+                a_rows: usize,
+                a_cols: usize,
+                b: &[Self],
+                b_cols: usize,
+                c: &mut [Self],
+            ) -> tenferro_tensor::Result<()> {
+                let (m, n, k) =
+                    validate_gemm_operands(a.len(), b.len(), c.len(), a_rows, a_cols, b_cols)?;
+                // SAFETY: the checked slice lengths cover m*k, k*n, and m*n column-major
+                // elements; dimensions and leading dimensions fit LP64 i32.
+                unsafe {
+                    $gemm(
+                        cblas_sys::CBLAS_LAYOUT::CblasColMajor,
+                        cblas_sys::CBLAS_TRANSPOSE::CblasNoTrans,
+                        cblas_sys::CBLAS_TRANSPOSE::CblasNoTrans,
+                        m,
+                        n,
+                        k,
+                        1.0,
+                        a.as_ptr(),
+                        m,
+                        b.as_ptr(),
+                        k,
+                        0.0,
+                        c.as_mut_ptr(),
+                        m,
+                    );
+                }
+                Ok(())
+            }
+
+            forward_lapack_families!($scalar, $complex);
+        }
+    };
+}
+
+macro_rules! impl_complex_lapack {
+    ($complex:ty, $real:ty, $gemm:path) => {
+        impl LapackLinalg for $complex {
+            type RealScalar = $real;
+            type ComplexScalar = $complex;
+
+            fn unit() -> Self {
+                <$complex>::new(1.0, 0.0)
+            }
+
+            fn r_phase(diagonal: Self) -> Self {
+                let norm = diagonal.norm();
+                if norm == 0.0 {
+                    Self::unit()
+                } else {
+                    diagonal.conj() / norm
+                }
+            }
+
+            fn q_phase(diagonal: Self) -> Self {
+                let norm = diagonal.norm();
+                if norm == 0.0 {
+                    Self::unit()
+                } else {
+                    diagonal / norm
+                }
+            }
+
+            fn rank_magnitude(self) -> f64 {
+                tlinalg_blas::magnitude(self)
+            }
+
+            fn is_finite_value(self) -> bool {
+                self.re.is_finite() && self.im.is_finite()
+            }
+
+            fn values_as_scalar(buffers: &mut BufferPool, values: Vec<$real>) -> Vec<Self> {
+                let mut converted = buffers.acquire_with_capacity::<$complex>(values.len());
+                converted.extend(values.iter().map(|&value| <$complex>::new(value, 0.0)));
+                <$real as PoolScalar>::pool_release(buffers, values);
+                converted
+            }
+
+            fn wrap_complex(tensor: TypedTensor<$complex>) -> Tensor {
+                Tensor::from_typed::<$complex>(tensor)
+            }
+
+            fn gemm_2d(
+                a: &[Self],
+                a_rows: usize,
+                a_cols: usize,
+                b: &[Self],
+                b_cols: usize,
+                c: &mut [Self],
+            ) -> tenferro_tensor::Result<()> {
+                let (m, n, k) =
+                    validate_gemm_operands(a.len(), b.len(), c.len(), a_rows, a_cols, b_cols)?;
+                let alpha = <$complex>::new(1.0, 0.0);
+                let beta = <$complex>::new(0.0, 0.0);
+                // SAFETY: the checked slice lengths cover m*k, k*n, and m*n column-major
+                // elements; dimensions and leading dimensions fit LP64 i32, and `alpha`/`beta`
+                // live for the call.
+                unsafe {
+                    $gemm(
+                        cblas_sys::CBLAS_LAYOUT::CblasColMajor,
+                        cblas_sys::CBLAS_TRANSPOSE::CblasNoTrans,
+                        cblas_sys::CBLAS_TRANSPOSE::CblasNoTrans,
+                        m,
+                        n,
+                        k,
+                        (&alpha as *const $complex).cast(),
+                        a.as_ptr().cast(),
+                        m,
+                        b.as_ptr().cast(),
+                        k,
+                        (&beta as *const $complex).cast(),
+                        c.as_mut_ptr().cast(),
+                        m,
+                    );
+                }
+                Ok(())
+            }
+
+            forward_lapack_families!($real, $complex);
+        }
+    };
+}
+
+impl_real_lapack!(f32, Complex32, cblas_sys::cblas_sgemm);
+impl_real_lapack!(f64, Complex64, cblas_sys::cblas_dgemm);
+impl_complex_lapack!(Complex32, f32, cblas_sys::cblas_cgemm);
+impl_complex_lapack!(Complex64, f64, cblas_sys::cblas_zgemm);
+
+/// Rebuild tenferro's error from a provider failure.
+pub(crate) fn provider(op: Op) -> impl Fn(tlinalg_blas::Error) -> tenferro_tensor::Error {
+    move |error| crate::cpu::tlinalg_error::map_blas_error(op, error)
+}
+
+pub(crate) fn validate_buffer_len(
+    op: &'static str,
+    role: &'static str,
+    actual: usize,
+    expected: usize,
+) -> tenferro_tensor::Result<()> {
+    if actual != expected {
+        return Err(tenferro_tensor::Error::invalid_argument(
+            op,
+            role,
+            format!("expected {expected} elements, got {actual}"),
+        ));
+    }
+    Ok(())
 }
 
 pub(crate) fn matrix_dims<T>(
@@ -46,21 +564,6 @@ pub(crate) fn matrix_dims<T>(
     Ok((input.shape()[0], input.shape()[1]))
 }
 
-pub(crate) fn square_matrix_dim<T>(
-    input: &TypedTensor<T>,
-    op: &'static str,
-) -> tenferro_tensor::Result<usize> {
-    let (rows, cols) = matrix_dims(input, op)?;
-    if rows != cols {
-        return Err(tenferro_tensor::Error::shape_mismatch(
-            op,
-            vec![rows],
-            vec![cols],
-        ));
-    }
-    Ok(rows)
-}
-
 pub(crate) fn tensor_from_vec_with_template<T: Clone + tenferro_tensor::TensorScalar, U>(
     shape: Vec<usize>,
     data: Vec<T>,
@@ -69,25 +572,6 @@ pub(crate) fn tensor_from_vec_with_template<T: Clone + tenferro_tensor::TensorSc
     let mut tensor = TypedTensor::from_vec_col_major(shape, data)?;
     tensor.set_placement(template.placement().clone());
     Ok(tensor)
-}
-
-pub(crate) fn tensor_from_pooled_slice_with_template<T: PoolScalar, U>(
-    buffers: &mut BufferPool,
-    shape: Vec<usize>,
-    data: &[T],
-    template: &TypedTensor<U>,
-) -> tenferro_tensor::Result<TypedTensor<T>> {
-    let mut owned = buffers.acquire_with_capacity::<T>(data.len());
-    owned.extend_from_slice(data);
-    tensor_from_vec_with_template(shape, owned, template)
-}
-
-pub(crate) fn refill_tensor_from_slice<T: Copy + tenferro_tensor::TensorScalar>(
-    tensor: &mut TypedTensor<T>,
-    data: &[T],
-) -> tenferro_tensor::Result<()> {
-    tensor.host_data_mut()?.copy_from_slice(data);
-    Ok(())
 }
 
 pub(crate) fn split_core_and_batch_result<'a, T>(
@@ -132,9 +616,6 @@ pub(crate) fn batch_element_count(
     op: &'static str,
     batch_shape: &[usize],
 ) -> tenferro_tensor::Result<usize> {
-    if batch_shape.is_empty() {
-        return Ok(1);
-    }
     batch_shape.iter().try_fold(1usize, |acc, &dim| {
         acc.checked_mul(dim).ok_or_else(|| {
             tenferro_tensor::Error::validation(
@@ -159,35 +640,6 @@ pub(crate) fn checked_product(
             )
         })
     })
-}
-
-fn checked_repeated_len(
-    op: &'static str,
-    role: &'static str,
-    per_batch: usize,
-    batch_count: usize,
-) -> tenferro_tensor::Result<usize> {
-    per_batch.checked_mul(batch_count).ok_or_else(|| {
-        tenferro_tensor::Error::invalid_argument(
-            op,
-            "batch",
-            format!("{role} repeated batch length overflow"),
-        )
-    })
-}
-
-pub(crate) fn checked_slice_range(
-    op: &'static str,
-    batch_idx: usize,
-    slice_size: usize,
-) -> tenferro_tensor::Result<Range<usize>> {
-    let start = batch_idx.checked_mul(slice_size).ok_or_else(|| {
-        tenferro_tensor::Error::validation(op, tenferro_tensor::ValidationError::IntegerOverflow)
-    })?;
-    let end = start.checked_add(slice_size).ok_or_else(|| {
-        tenferro_tensor::Error::validation(op, tenferro_tensor::ValidationError::IntegerOverflow)
-    })?;
-    Ok(start..end)
 }
 
 pub(crate) fn has_zero_dim(shape: &[usize]) -> bool {
@@ -220,387 +672,62 @@ pub(crate) fn dim_i32(value: usize, op: &'static str) -> tenferro_tensor::Result
     })
 }
 
-pub(crate) fn work_len(
-    query: f64,
+/// A pooled output buffer for `shape` elements; the provider clears and fills it.
+pub(crate) fn pooled_output<T: PoolScalar>(
+    buffers: &mut BufferPool,
     op: &'static str,
-    routine: &'static str,
-) -> tenferro_tensor::Result<i32> {
-    if !(query.is_finite() && query >= 1.0) {
-        return Err(crate::error::invalid_workspace(
-            op,
-            "LAPACK",
-            routine,
-            format!("returned invalid workspace size {query}"),
-        ));
-    }
-    dim_i32(query.ceil() as usize, op)
+    role: &'static str,
+    shape: &[usize],
+) -> tenferro_tensor::Result<Vec<T>> {
+    Ok(buffers.acquire_with_capacity::<T>(checked_product(op, role, shape)?))
 }
 
-pub(crate) fn check_lapack_info(
+/// Return a buffer to the pool for the next call to reuse.
+pub(crate) fn release_scratch<T: PoolScalar>(buffers: &mut BufferPool, data: Vec<T>) {
+    <T as PoolScalar>::pool_release(buffers, data);
+}
+
+/// Empty `(values, vectors)` of a general eigendecomposition with a zero core dimension, tagged
+/// with the complex dtype the nonempty route returns.
+pub(crate) fn zero_dim_eig_outputs(
+    input: &Tensor,
     op: &'static str,
-    routine: &'static str,
-    info: i32,
-) -> tenferro_tensor::Result<()> {
-    if info < 0 {
-        return Err(tenferro_tensor::Error::invalid_argument(
-            op,
-            "lapack_argument",
-            format!("LAPACK {routine} argument {} had an illegal value", -info),
-        ));
-    }
-    if info > 0 {
-        return Err(crate::error::into_tensor_error(
-            op,
-            crate::Error::NonConvergence { op },
-        ));
-    }
-    Ok(())
-}
-
-pub(crate) fn lower_triangle_from_lapack<T: Copy + Default>(
-    data: &[T],
-    rows: usize,
-    cols: usize,
-) -> tenferro_tensor::Result<Vec<T>> {
-    let len = checked_product("lapack_linalg", "lower triangle", &[rows, cols])?;
-    let mut out = vec![T::default(); len];
-    for col in 0..cols {
-        for row in col..rows {
-            out[row + col * rows] = data[row + col * rows];
-        }
-    }
-    Ok(out)
-}
-
-pub(crate) fn leading_upper_triangle_from_lapack<T: Copy + Default>(
-    data: &[T],
-    source_rows: usize,
-    rows: usize,
-    cols: usize,
-) -> tenferro_tensor::Result<Vec<T>> {
-    let len = checked_product("lapack_linalg", "upper triangle", &[rows, cols])?;
-    let mut out = vec![T::default(); len];
-    for col in 0..cols {
-        for row in 0..rows.min(col + 1) {
-            out[row + col * rows] = data[row + col * source_rows];
-        }
-    }
-    Ok(out)
-}
-
-pub(crate) fn batched_single<T, F>(
-    op_name: &'static str,
-    buffers: &mut BufferPool,
-    input: &TypedTensor<T>,
-    op: F,
-) -> tenferro_tensor::Result<TypedTensor<T>>
-where
-    T: PoolScalar,
-    F: Fn(&mut BufferPool, &TypedTensor<T>) -> tenferro_tensor::Result<TypedTensor<T>>,
-{
-    let (core_shape, batch_shape) = split_core_and_batch_result(input, 2, op_name)?;
-    if batch_shape.is_empty() {
-        return op(buffers, input);
-    }
-
-    let slice_size = checked_product(op_name, "core shape", core_shape)?;
-    let batch_count = batch_element_count(op_name, batch_shape)?;
-    if batch_count == 0 {
-        return Err(tenferro_tensor::Error::invalid_argument(
-            op_name,
-            "batch",
-            "zero-sized batch dims must be handled by the caller",
-        ));
-    }
-
-    let mut out_core_shape: Option<Vec<usize>> = None;
-    let mut out_data: Option<Vec<T>> = None;
-
-    let first_range = checked_slice_range(op_name, 0, slice_size)?;
-    let mut batch_input = tensor_from_pooled_slice_with_template(
-        buffers,
-        core_shape.to_vec(),
-        &input.host_data()?[first_range],
-        input,
-    )?;
-
-    for batch_idx in 0..batch_count {
-        if batch_idx > 0 {
-            let range = checked_slice_range(op_name, batch_idx, slice_size)?;
-            refill_tensor_from_slice(&mut batch_input, &input.host_data()?[range])?;
-        }
-        let batch_output = op(buffers, &batch_input)?;
-
-        if let Some(expected_shape) = &out_core_shape {
-            if batch_output.shape() != expected_shape.as_slice() {
-                return Err(tenferro_tensor::Error::shape_mismatch(
-                    op_name,
-                    batch_output.shape().to_vec(),
-                    expected_shape.clone(),
-                ));
-            }
-        } else {
-            out_data = Some(Vec::with_capacity(checked_repeated_len(
-                op_name,
-                "output",
-                batch_output.n_elements(),
-                batch_count,
-            )?));
-            out_core_shape = Some(batch_output.shape().to_vec());
-        }
-
-        match &mut out_data {
-            Some(data) => data.extend_from_slice(batch_output.host_data()?),
-            None => {
-                return Err(tenferro_tensor::Error::Internal(format!(
-                    "{op_name}: missing output buffer after first batch"
-                )));
-            }
-        }
-    }
-
-    let mut out_shape = out_core_shape.ok_or_else(|| {
-        tenferro_tensor::Error::Internal(format!("{op_name}: missing output shape"))
-    })?;
-    out_shape.extend_from_slice(batch_shape);
-    let out_data = out_data.ok_or_else(|| {
-        tenferro_tensor::Error::Internal(format!("{op_name}: missing output data"))
-    })?;
-    tensor_from_vec_with_template(out_shape, out_data, input)
-}
-
-pub(crate) fn batched_multi<T, F>(
-    op_name: &'static str,
-    buffers: &mut BufferPool,
-    input: &TypedTensor<T>,
-    op: F,
-) -> tenferro_tensor::Result<Vec<TypedTensor<T>>>
-where
-    T: PoolScalar,
-    F: Fn(&mut BufferPool, &TypedTensor<T>) -> tenferro_tensor::Result<Vec<TypedTensor<T>>>,
-{
-    let (core_shape, batch_shape) = split_core_and_batch_result(input, 2, op_name)?;
-    if batch_shape.is_empty() {
-        return op(buffers, input);
-    }
-
-    let slice_size = checked_product(op_name, "core shape", core_shape)?;
-    let batch_count = batch_element_count(op_name, batch_shape)?;
-    if batch_count == 0 {
-        return Err(tenferro_tensor::Error::invalid_argument(
-            op_name,
-            "batch",
-            "zero-sized batch dims must be handled by the caller",
-        ));
-    }
-
-    let mut out_shapes: Vec<Vec<usize>> = Vec::new();
-    let mut out_data: Vec<Vec<T>> = Vec::new();
-
-    let first_range = checked_slice_range(op_name, 0, slice_size)?;
-    let mut batch_input = tensor_from_pooled_slice_with_template(
-        buffers,
-        core_shape.to_vec(),
-        &input.host_data()?[first_range],
-        input,
-    )?;
-
-    for batch_idx in 0..batch_count {
-        if batch_idx > 0 {
-            let range = checked_slice_range(op_name, batch_idx, slice_size)?;
-            refill_tensor_from_slice(&mut batch_input, &input.host_data()?[range])?;
-        }
-        let batch_outputs = op(buffers, &batch_input)?;
-
-        if out_shapes.is_empty() {
-            if batch_outputs.is_empty() {
-                return Err(tenferro_tensor::Error::Internal(format!(
-                    "{op_name}: missing outputs for first batch"
-                )));
-            }
-            out_shapes = batch_outputs
-                .iter()
-                .map(|tensor| tensor.shape().to_vec())
-                .collect();
-            out_data = batch_outputs
-                .iter()
-                .map(|tensor| {
-                    checked_repeated_len(op_name, "output", tensor.n_elements(), batch_count)
-                        .map(Vec::with_capacity)
-                })
-                .collect::<tenferro_tensor::Result<_>>()?;
-        } else {
-            if batch_outputs.len() != out_shapes.len() {
-                return Err(tenferro_tensor::Error::invalid_argument(
-                    op_name,
-                    "outputs",
-                    format!(
-                        "output count mismatch across batches: got {}, expected {}",
-                        batch_outputs.len(),
-                        out_shapes.len()
-                    ),
-                ));
-            }
-        }
-
-        for (idx, batch_output) in batch_outputs.iter().enumerate() {
-            if batch_output.shape() != out_shapes[idx].as_slice() {
-                return Err(tenferro_tensor::Error::shape_mismatch(
-                    op_name,
-                    batch_output.shape().to_vec(),
-                    out_shapes[idx].clone(),
-                ));
-            }
-            out_data[idx].extend_from_slice(batch_output.host_data()?);
-        }
-    }
-
-    out_shapes
-        .into_iter()
-        .zip(out_data)
-        .map(|(mut out_shape, out_data)| {
-            out_shape.extend_from_slice(batch_shape);
-            tensor_from_vec_with_template(out_shape, out_data, input)
-        })
-        .collect()
-}
-
-pub(crate) fn batched_multi_convert<
-    InT: PoolScalar,
-    OutT: Clone + tenferro_tensor::TensorScalar,
-    F,
->(
-    op_name: &'static str,
-    buffers: &mut BufferPool,
-    input: &TypedTensor<InT>,
-    op: F,
-) -> tenferro_tensor::Result<Vec<TypedTensor<OutT>>>
-where
-    F: Fn(&mut BufferPool, &TypedTensor<InT>) -> tenferro_tensor::Result<Vec<TypedTensor<OutT>>>,
-{
-    let (core_shape, batch_shape) = split_core_and_batch_result(input, 2, op_name)?;
-    if batch_shape.is_empty() {
-        return op(buffers, input);
-    }
-
-    let slice_size = checked_product(op_name, "core shape", core_shape)?;
-    let batch_count = batch_element_count(op_name, batch_shape)?;
-    if batch_count == 0 {
-        return Err(tenferro_tensor::Error::invalid_argument(
-            op_name,
-            "batch",
-            "zero-sized batch dims must be handled by the caller",
-        ));
-    }
-
-    let mut out_shapes: Vec<Vec<usize>> = Vec::new();
-    let mut out_data: Vec<Vec<OutT>> = Vec::new();
-
-    let first_range = checked_slice_range(op_name, 0, slice_size)?;
-    let mut batch_input = tensor_from_pooled_slice_with_template(
-        buffers,
-        core_shape.to_vec(),
-        &input.host_data()?[first_range],
-        input,
-    )?;
-
-    for batch_idx in 0..batch_count {
-        if batch_idx > 0 {
-            let range = checked_slice_range(op_name, batch_idx, slice_size)?;
-            refill_tensor_from_slice(&mut batch_input, &input.host_data()?[range])?;
-        }
-        let batch_outputs = op(buffers, &batch_input)?;
-
-        if out_shapes.is_empty() {
-            if batch_outputs.is_empty() {
-                return Err(tenferro_tensor::Error::Internal(format!(
-                    "{op_name}: missing outputs for first batch"
-                )));
-            }
-            out_shapes = batch_outputs
-                .iter()
-                .map(|tensor| tensor.shape().to_vec())
-                .collect();
-            out_data = batch_outputs
-                .iter()
-                .map(|tensor| {
-                    checked_repeated_len(op_name, "output", tensor.n_elements(), batch_count)
-                        .map(Vec::with_capacity)
-                })
-                .collect::<tenferro_tensor::Result<_>>()?;
-        } else {
-            if batch_outputs.len() != out_shapes.len() {
-                return Err(tenferro_tensor::Error::invalid_argument(
-                    op_name,
-                    "outputs",
-                    format!(
-                        "output count mismatch across batches: got {}, expected {}",
-                        batch_outputs.len(),
-                        out_shapes.len()
-                    ),
-                ));
-            }
-        }
-
-        for (idx, batch_output) in batch_outputs.iter().enumerate() {
-            if batch_output.shape() != out_shapes[idx].as_slice() {
-                return Err(tenferro_tensor::Error::shape_mismatch(
-                    op_name,
-                    batch_output.shape().to_vec(),
-                    out_shapes[idx].clone(),
-                ));
-            }
-            out_data[idx].extend_from_slice(batch_output.host_data()?);
-        }
-    }
-
-    out_shapes
-        .into_iter()
-        .zip(out_data)
-        .map(|(mut out_shape, out_data)| {
-            out_shape.extend_from_slice(batch_shape);
-            tensor_from_vec_with_template(out_shape, out_data, input)
-        })
-        .collect()
-}
-
-pub(crate) fn zero_dim_eig_outputs(input: &Tensor) -> tenferro_tensor::Result<Vec<Tensor>> {
+    vectors: bool,
+) -> tenferro_tensor::Result<Vec<Tensor>> {
     let shape = input.shape();
     if shape.len() < 2 {
-        return Err(tenferro_tensor::Error::rank_mismatch("eig", 2, shape.len()));
+        return Err(tenferro_tensor::Error::rank_mismatch(op, 2, shape.len()));
     }
     let n = shape[0];
     if shape[1] != n {
         return Err(tenferro_tensor::Error::shape_mismatch(
-            "eig",
+            op,
             vec![n],
             vec![shape[1]],
         ));
     }
     let batch_shape = &shape[2..];
-    let value_shape = vector_with_batch_shape(n, batch_shape);
-    let vector_shape = matrix_with_batch_shape(n, n, batch_shape);
+    let mut shapes = vec![vector_with_batch_shape(n, batch_shape)];
+    if vectors {
+        shapes.push(matrix_with_batch_shape(n, n, batch_shape));
+    }
     match input.dtype() {
-        DType::F32 | DType::C32 => Ok(vec![
-            Tensor::from_typed::<Complex32>(TypedTensor::from_vec_col_major(
-                value_shape,
-                Vec::new(),
-            )?),
-            Tensor::from_typed::<Complex32>(TypedTensor::from_vec_col_major(
-                vector_shape,
-                Vec::new(),
-            )?),
-        ]),
-        DType::F64 | DType::C64 => Ok(vec![
-            Tensor::from_typed::<Complex64>(TypedTensor::from_vec_col_major(
-                value_shape,
-                Vec::new(),
-            )?),
-            Tensor::from_typed::<Complex64>(TypedTensor::from_vec_col_major(
-                vector_shape,
-                Vec::new(),
-            )?),
-        ]),
-        _ => Err(super::unsupported_dtype("eig", input.dtype())),
+        DType::F32 | DType::C32 => shapes
+            .into_iter()
+            .map(|shape| {
+                Ok(Tensor::from_typed::<Complex32>(
+                    TypedTensor::from_vec_col_major(shape, Vec::new())?,
+                ))
+            })
+            .collect(),
+        DType::F64 | DType::C64 => shapes
+            .into_iter()
+            .map(|shape| {
+                Ok(Tensor::from_typed::<Complex64>(
+                    TypedTensor::from_vec_col_major(shape, Vec::new())?,
+                ))
+            })
+            .collect(),
+        _ => Err(super::unsupported_dtype(op, input.dtype())),
     }
 }

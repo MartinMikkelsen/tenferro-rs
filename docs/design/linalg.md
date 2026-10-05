@@ -88,8 +88,48 @@ fall through to the built-in faer/LAPACK kernel. Kernels must return exactly
 the built-in outputs (order, shapes, dtypes, pivot and ordering conventions,
 trailing batch axes), so composites and AD rules are unchanged. The
 Householder family, `lu_factor`, prepared LU solves and `_into` outputs keep
-the built-in kernels. `ext/tenferro-cpu-tprims` implements this trait with
-tprims for single matrices and declines batched inputs.
+the built-in kernels.
+
+### Built-in CPU providers
+
+The built-in kernels are the extracted, tensor-free `tlinalg` (faer) and
+`tlinalg-blas` (LAPACK/BLAS) crates of the tlinalg-rs workspace. Neither depends
+on the other, and each owns its own error, scalar and scratch vocabulary; the
+interface they are adapted to is this crate's, in `cpu/tlinalg.rs`,
+`cpu/tlinalg_blas.rs`, `cpu/tlinalg_error.rs` and `cpu/tlinalg_workspace.rs`.
+Every family is called once per batch with borrowed strided descriptors of
+dims `[rows, cols, batch...]`; the provider owns the kernels, their scratch and
+the batch loop, and returns compact column-major, batch-contiguous outputs. The
+host keeps shape validation with tenferro's error shapes, empty and zero-batch
+results, pooled output allocation, tensor construction, negative-stride
+rejection (a borrowed operand with a negative stride is gathered once into a
+compact copy), the QR gauges, the rank decision of rank-revealing QR and its
+non-finite input screen (both routes screen before the provider runs), and the
+compact Householder QR state compositions (append, from-factors, `R`,
+`Q` columns) built on the providers' reflector kernels.
+
+Batch policy. On the faer route every batched family follows the effective
+`CpuBatchPolicy` through one host-resolved lane plan (`cpu/tlinalg.rs`
+`lane_plan`): `Auto` fans out over the context's budget once the item-count
+thresholds allow, forced `OuterParallel` needs a context that can fan out,
+`Sequential` and `ProviderItems` stay on one lane, and `WholeBatchVendor` is a
+typed error. `tlinalg` runs the lanes as tasks on the pool the context hands it,
+each lane sequential; it never calls back into tenferro from a lane, so it needs
+no outer-lane execution contexts. Before the extraction only packed LU/solve
+followed the policy and every other faer family looped over its batch serially;
+those families now follow it too, and a forced strategy the route cannot serve
+is now a typed error for them as well. Under `Auto` they fan out only when one
+item is small, `max(rows, cols) <= 64` (the crate-private
+`AUTO_FAN_OUT_MAX_ITEM_DIM`, wrapped around the plan by `lane_plan_for_item`):
+lanes pay off for many small matrices that cannot use the budget one at a time,
+while a large matrix is better served by faer's own parallelism within the item,
+and the item-count thresholds cannot tell the two apart. Above the guard `Auto`
+keeps the pre-extraction behaviour, one lane with the context's parallelism per
+item. The guard is provisional, pending a work-model thread policy for CPU
+linalg (#2000); forced strategies and the packed-LU family ignore it. On the LAPACK route the
+provider loops over the batch serially with one workspace query per call and
+vendor-owned threading; packed LU keeps its strategy admission and the other
+families ignore the policy, as before.
 
 ## Concrete, Read, And Typed Boundary
 

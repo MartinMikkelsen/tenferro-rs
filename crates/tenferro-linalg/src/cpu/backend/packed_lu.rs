@@ -69,14 +69,14 @@ macro_rules! impl_cpu_packed_lu {
                     transpose_a: bool,
                     conjugate_a: bool,
                 ) -> tenferro_tensor::Result<()> {
-                    let _ = (&ctx, &packed_lu, &pivots, &output, n, nrhs, transpose_a, conjugate_a);
+                    let _ = (op, &ctx, &packed_lu, &pivots, &output, n, nrhs, transpose_a, conjugate_a);
                     match provider {
                         CpuLinalgProvider::Faer => {
                             #[cfg(feature = "cpu-faer")]
                             {
                                 crate::cpu::tlinalg::solve_prepared_batch::<$scalar>(
                                     ctx,
-                                    tlinalg_traits::Op::LuSolvePrepared,
+                                    tlinalg::Op::LuSolvePrepared,
                                     n,
                                     nrhs,
                                     packed_lu,
@@ -96,7 +96,7 @@ macro_rules! impl_cpu_packed_lu {
                             {
                                 crate::cpu::tlinalg_blas::solve_prepared_batch::<$scalar>(
                                     ctx,
-                                    tlinalg_traits::Op::LuSolvePrepared,
+                                    tlinalg_blas::Op::LuSolvePrepared,
                                     n,
                                     nrhs,
                                     packed_lu,
@@ -124,14 +124,14 @@ macro_rules! impl_cpu_packed_lu {
                     pivots: &mut [i32],
                     output: &mut [Self],
                 ) -> tenferro_tensor::Result<()> {
-                    let _ = (&ctx, &packed_lu, &pivots, &output, n, nrhs);
+                    let _ = (op, &ctx, &packed_lu, &pivots, &output, n, nrhs);
                     match provider {
                         CpuLinalgProvider::Faer => {
                             #[cfg(feature = "cpu-faer")]
                             {
                                 crate::cpu::tlinalg::factor_solve_batch::<$scalar>(
                                     ctx,
-                                    tlinalg_traits::Op::LuFactorSolve,
+                                    tlinalg::Op::LuFactorSolve,
                                     n,
                                     nrhs,
                                     packed_lu,
@@ -149,7 +149,7 @@ macro_rules! impl_cpu_packed_lu {
                             {
                                 crate::cpu::tlinalg_blas::factor_solve_batch::<$scalar>(
                                     ctx,
-                                    tlinalg_traits::Op::LuFactorSolve,
+                                    tlinalg_blas::Op::LuFactorSolve,
                                     n,
                                     nrhs,
                                     packed_lu,

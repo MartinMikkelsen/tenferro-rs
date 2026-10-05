@@ -1,8 +1,8 @@
-//! The `tlinalg` scratch contract over tenferro's buffer pool.
+//! The `tlinalg-blas` scratch contract over tenferro's buffer pool.
 //!
-//! An extracted implementation obtains every reusable buffer through
-//! [`tlinalg_traits::Workspace`] (and [`tlinalg_traits::IndexWorkspace`] for integer work
-//! buffers). This is the host side of that contract: the pool, its retention and its accounting stay
+//! The LAPACK provider obtains every reusable buffer through [`tlinalg_blas::Workspace`] (and
+//! [`tlinalg_blas::IndexWorkspace`] for integer work buffers). The faer provider owns its scratch
+//! and takes none. This is the host side of that contract: the pool, its retention and its accounting stay
 //! exactly as they are, so the extraction does not introduce a second allocator.
 //!
 //! # Abandonment
@@ -18,7 +18,7 @@ use core::mem::MaybeUninit;
 
 use num_complex::{Complex32, Complex64};
 use tenferro_cpu::linalg_interop::{BufferPool, PoolScalar};
-use tlinalg_traits::{IndexWorkspace, Workspace};
+use tlinalg_blas::{IndexWorkspace, Workspace};
 
 /// tenferro's implementation of the extracted scratch contract.
 pub(crate) struct TlinalgWorkspace<'a> {

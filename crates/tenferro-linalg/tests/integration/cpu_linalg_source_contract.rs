@@ -40,30 +40,6 @@ fn cpu_lapack_helpers_source() -> String {
     .unwrap_or_else(|err| panic!("LAPACK helper source should be readable: {err}"))
 }
 
-fn cpu_lapack_full_piv_lu_source() -> String {
-    fs::read_to_string(
-        Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("src")
-            .join("cpu")
-            .join("linalg")
-            .join("lapack_linalg")
-            .join("full_piv_lu.rs"),
-    )
-    .unwrap_or_else(|err| panic!("LAPACK full_piv_lu source should be readable: {err}"))
-}
-
-fn cpu_lapack_eig_source() -> String {
-    fs::read_to_string(
-        Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("src")
-            .join("cpu")
-            .join("linalg")
-            .join("lapack_linalg")
-            .join("eig.rs"),
-    )
-    .unwrap_or_else(|err| panic!("LAPACK eig source should be readable: {err}"))
-}
-
 fn cpu_lapack_source(path: &str) -> String {
     fs::read_to_string(
         Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -628,118 +604,28 @@ fn lapack_ffi_unsafe_blocks_document_safety_invariants() {
 }
 
 #[test]
-fn lapack_right_triangular_solve_uses_right_side_trsm_without_physical_transposes() {
-    let source = cpu_lapack_source("triangular_solve.rs");
-    let solve_right = source_section(
-        &source,
-        "} else {\n            if !unit_diagonal {",
-        "tensor_from_vec_with_template(b.shape().to_vec(), output, b)",
-    );
-
-    assert!(
-        solve_right.contains("T::trsm("),
-        "right-side triangular_solve should call BLAS TRSM directly"
-    );
-    assert!(
-        solve_right.contains("CblasRight"),
-        "right-side triangular_solve should use BLAS side=Right"
-    );
-    assert!(
-        !solve_right.contains("transpose_col_major_data("),
-        "right-side triangular_solve should not physically transpose RHS data"
-    );
-    assert!(
-        !solve_right.contains("T::trtrs("),
-        "right-side triangular_solve should not emulate side=Right through LAPACK TRTRS"
-    );
-    assert!(
-        solve_right.contains("validate_non_unit_diagonal"),
-        "right-side TRSM path should preserve non-unit singular checks before calling BLAS"
-    );
-}
-
-#[test]
-fn lapack_batched_helpers_reuse_input_scratch_instead_of_copying_per_batch() {
-    let source = cpu_lapack_helpers_source();
-    let batched_helpers = source_section(
-        &source,
-        "pub(crate) fn batched_single",
-        "pub(crate) fn zero_dim_eig_outputs",
-    );
-
-    for needle in [
-        "input.host_data().unwrap()[start..end].to_vec()",
-        "a.host_data().unwrap()[a_start..a_end].to_vec()",
-        "b.host_data().unwrap()[b_start..b_end].to_vec()",
-    ] {
-        assert!(
-            !batched_helpers.contains(needle),
-            "LAPACK batched helpers should not allocate a fresh input Vec per batch: found {needle}"
-        );
-    }
-
-    for needle in [
-        "tensor_from_pooled_slice_with_template",
-        "refill_tensor_from_slice",
-    ] {
-        assert!(
-            batched_helpers.contains(needle),
-            "LAPACK batched helpers should reuse pooled input scratch via {needle}"
-        );
-    }
-}
-
-#[test]
-fn lapack_full_piv_lu_rejects_positive_getc2_info() {
-    let source = cpu_lapack_full_piv_lu_source();
-    let factor = source_section(&source, "fn getc2_in_place", "fn factor_getc2");
-
-    assert!(
-        factor.contains("check_lapack_info(op, \"getc2\", info.min(0))?;"),
-        "getc2_in_place should still report negative LAPACK argument errors"
-    );
-    assert!(
-        factor.contains("if info > 0"),
-        "getc2_in_place should not discard positive getc2 singularity info"
-    );
-    assert!(
-        factor.contains("crate::Error::Singular"),
-        "positive getc2 info should be reported through the typed singular source"
-    );
-}
-
-#[test]
-fn cpu_eig_real_complex_classification_uses_tolerance() {
-    for (name, source) in [
-        ("LAPACK eig", cpu_lapack_eig_source()),
-        ("faer eig", cpu_faer_linalg_source()),
-    ] {
-        assert!(
-            source.contains("eig_imag_is_effectively_zero"),
-            "{name} should classify real-vs-complex eigenvalue pairs with a tolerance helper"
-        );
-        assert!(
-            !source.contains("s_im[col] == 0.0") && !source.contains("s_im[j] == 0.0"),
-            "{name} should not compare eigenvalue imaginary parts to exact zero"
-        );
-    }
-}
-
-#[test]
-fn real_eig_complex_pair_conversion_guards_unpaired_last_column() {
-    for (name, source, loop_var) in [
-        ("LAPACK eig", cpu_lapack_eig_source(), "col"),
-        ("faer eig", cpu_faer_linalg_source(), "j"),
-    ] {
-        let converter = source_section(
-            &source,
-            "macro_rules! impl_real_eig_to_complex_outputs",
-            "macro_rules! impl_real_eig_to_complex_values",
-        );
-        assert!(
-            converter.contains(&format!("if {loop_var} + 1 >= n")),
-            "{name} real eig conversion should guard an apparent complex pair at the final column"
-        );
+fn cpu_linalg_routes_hand_whole_batches_to_the_extracted_providers() {
+    // The batch loop belongs to the extracted providers (`tlinalg`, `tlinalg-blas`): a host
+    // route makes one provider call per batch and never slices the batch into per-matrix tensors.
+    for (name, source) in lapack_production_sources()
+        .into_iter()
+        .chain(std::iter::once((
+            "faer_linalg.rs".to_owned(),
+            cpu_faer_linalg_source(),
+        )))
+    {
+        for needle in [
+            "fn batched_single",
+            "fn batched_multi",
+            "refill_tensor_from_slice",
+            "for batch_idx in 0..",
+            "host_data()?[range]",
+        ] {
+            assert!(
+                !source.contains(needle),
+                "{name} should delegate whole batches to its provider instead of `{needle}`"
+            );
+        }
     }
 }
 
@@ -766,38 +652,19 @@ fn faer_complex_slice_casts_assert_field_offsets() {
 }
 
 #[test]
-fn linalg_batched_helpers_use_checked_products_and_slice_ranges() {
-    let lapack_helpers = cpu_lapack_helpers_source();
-    let batched_helpers = source_section(
-        &lapack_helpers,
-        "pub(crate) fn batched_single",
-        "pub(crate) fn zero_dim_eig_outputs",
-    );
-    assert!(
-        !batched_helpers.contains(".iter().product"),
-        "LAPACK batched helpers must use checked shape products"
-    );
-    for needle in [
-        "batch_idx * slice_size",
-        "batch_idx * a_slice_size",
-        "batch_idx * b_slice_size",
-    ] {
+fn linalg_host_shapes_use_checked_products() {
+    for (name, source) in lapack_production_sources() {
         assert!(
-            !batched_helpers.contains(needle),
-            "LAPACK batched helpers must use checked slice ranges instead of {needle}"
+            !source.contains(".iter().product"),
+            "LAPACK host source {name} must use checked shape products"
         );
     }
-    assert!(
-        batched_helpers.contains("checked_product(")
-            && batched_helpers.contains("checked_slice_range("),
-        "LAPACK batched helpers should route products and batch ranges through checked helpers"
-    );
 
     let faer_source = cpu_faer_linalg_source();
     let lu_factor = source_section(
         &faer_source,
-        "pub(crate) fn lu_factor<T: FaerLinalg + tlinalg::FaerScalar>",
-        "pub(crate) fn full_piv_lu<T: FaerLinalg>",
+        "pub(crate) fn lu_factor<T: FaerLinalg>",
+        "fn full_piv_lu_impl",
     );
     assert!(
         !lu_factor.contains(".iter().product") && lu_factor.contains("checked_product("),
@@ -805,7 +672,7 @@ fn linalg_batched_helpers_use_checked_products_and_slice_ranges() {
     );
     assert!(
         !lu_factor.contains("batch * matrix_len") && !lu_factor.contains("start + matrix_len"),
-        "faer LU factor batching must iterate checked chunks instead of raw batch offsets"
+        "faer LU factor must hand the whole batch to the provider instead of raw batch offsets"
     );
 }
 

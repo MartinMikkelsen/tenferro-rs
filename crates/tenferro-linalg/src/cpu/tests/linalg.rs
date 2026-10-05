@@ -457,29 +457,24 @@ fn svd_read_accepts_an_owned_tensor_read() {
 }
 
 #[test]
-fn lapack_batched_value_factor_paths_reuse_pooled_batch_input() {
+fn lapack_batched_value_factor_paths_delegate_whole_batches() {
+    // The kernels and the batch loop live in the extracted LAPACK implementation; what this pins
+    // is that each wrapper delegates the whole batch in one call instead of slicing it.
     let lu_source = include_str!("../linalg/lapack_linalg/lu.rs");
     let lu_factor = source_from(lu_source, "pub(crate) fn lu_factor");
-    assert!(lu_factor.contains("pooled_copy(buffers, input.host_data()?)"));
-    // The factor kernel now lives in the extracted LAPACK implementation; what this test pins
-    // is that the wrapper still reuses the pooled batch input and delegates in one batched call.
     assert!(lu_factor.contains("crate::cpu::tlinalg_blas::factor_batch::<T>("));
     assert!(!lu_factor.contains("host_data()?[range].to_vec()"));
 
     let eigh_source = include_str!("../linalg/lapack_linalg/eigh.rs");
     let eigh_values = source_from(eigh_source, "pub(crate) fn eigh_values");
-    assert!(eigh_values.contains("pooled_copy(buffers, input.host_data()?)"));
-    assert!(eigh_values.contains("T::eigh_batched("));
+    assert_eq!(eigh_values.matches("T::eigh(").count(), 1);
     assert!(!eigh_values.contains("input.host_data()?[range].to_vec()"));
 
     let svd_source = include_str!("../linalg/lapack_linalg/svd.rs");
     let svd_values = source_from(svd_source, "pub(crate) fn svd_values");
     assert!(svd_values.contains("svd_buffers("));
     let svd_driver = source_from(svd_source, "fn svd_buffers");
-    assert!(svd_driver.contains("pooled_copy(buffers, input.host_data()?)"));
-    // The kernel now lives in the extracted LAPACK crate; what this pins is that the
-    // wrapper still reuses the pooled batch input and delegates in one batched call.
-    assert!(svd_driver.contains("tlinalg_blas::svd::svd_batch("));
+    assert!(svd_driver.contains("T::svd("));
     assert!(!svd_values.contains("input.host_data()?[range].to_vec()"));
 }
 

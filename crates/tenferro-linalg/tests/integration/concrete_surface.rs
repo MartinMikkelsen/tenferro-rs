@@ -200,6 +200,65 @@ fn rank_revealing_qr_zero_and_batched_metadata() {
     .unwrap();
 }
 
+/// Every compiled CPU provider kind, so a test runs on both the faer and LAPACK routes.
+fn rrqr_provider_backends() -> Vec<CpuBackend> {
+    [
+        #[cfg(feature = "cpu-faer")]
+        tenferro_cpu::CpuBackendKind::Faer,
+        #[cfg(feature = "cpu-blas")]
+        tenferro_cpu::CpuBackendKind::Blas,
+    ]
+    .into_iter()
+    .map(|kind| CpuBackend::with_kind(kind).expect("compiled CPU backend"))
+    .collect()
+}
+
+/// An all-zero item between nonzero items gets the canonical zero-rank factors from one batched
+/// provider call, on every route, while the nonzero items keep their own factors and ranks.
+#[test]
+fn rank_revealing_qr_mixes_zero_and_nonzero_items_in_one_batch() {
+    // Items: diag(3, 2) (rank 2), zeros (rank 0), [[1, 1], [1, 1]] (rank 1).
+    let data = vec![
+        3.0_f64, 0.0, 0.0, 2.0, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0,
+    ];
+    let input = Tensor::from_vec_col_major(vec![2, 2, 3], data).unwrap();
+    for mut host in rrqr_provider_backends() {
+        host.with_backend_session(|session| {
+            let result = input
+                .rank_revealing_qr(RankRevealingQrOptions::default().rtol(1.0e-12), session)
+                .unwrap();
+            assert_eq!(result.rank.as_slice::<i64>().unwrap(), &[2, 0, 1]);
+            let q = result.q.as_slice::<f64>().unwrap();
+            let r = result.r.as_slice::<f64>().unwrap();
+            let p = result.column_permutation.as_slice::<i64>().unwrap();
+            assert_eq!(
+                &q[4..8],
+                &[1.0, 0.0, 0.0, 1.0],
+                "zero item: identity Q columns"
+            );
+            assert_eq!(&r[4..8], &[0.0; 4], "zero item: zero R");
+            assert_eq!(&p[2..4], &[0, 1], "zero item: identity permutation");
+        })
+        .unwrap();
+    }
+}
+
+/// A non-finite item is reported before any item is factored, on every route.
+#[test]
+fn rank_revealing_qr_reports_non_finite_input_first_on_every_route() {
+    let data = vec![1.0_f64, 0.0, 0.0, 1.0, f64::INFINITY, 0.0, 0.0, 1.0];
+    let input = Tensor::from_vec_col_major(vec![2, 2, 2], data).unwrap();
+    for mut host in rrqr_provider_backends() {
+        host.with_backend_session(|session| {
+            let error = input
+                .rank_revealing_qr(RankRevealingQrOptions::default(), session)
+                .unwrap_err();
+            assert!(error.to_string().contains("non-finite input"), "{error}");
+        })
+        .unwrap();
+    }
+}
+
 #[test]
 fn typed_surface_exposes_associated_real_and_complex_outputs() {
     let real =

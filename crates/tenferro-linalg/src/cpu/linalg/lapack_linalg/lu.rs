@@ -1,203 +1,66 @@
-use num_complex::{Complex32, Complex64};
-
 use tenferro_cpu::linalg_interop::{BufferPool, PoolScalar};
 use tenferro_tensor::TypedTensor;
+use tlinalg_blas::Op;
 
 use super::helpers::{
-    batch_element_count, batched_multi, check_lapack_info, checked_product, dim_i32, has_zero_dim,
-    leading_upper_triangle_from_lapack, matrix_core_and_batch_result, matrix_dims,
-    matrix_with_batch_shape, pooled_copy, pooled_zeroed, release_scratch,
-    tensor_from_vec_with_template, vector_with_batch_shape,
+    batch_element_count, checked_product, has_zero_dim, matrix_core_and_batch_result,
+    matrix_with_batch_shape, pooled_output, provider, tensor_from_vec_with_template,
+    vector_with_batch_shape, LapackLinalg,
 };
 
-pub(crate) trait LapackLu: Clone + Copy + Default + PoolScalar {
-    fn one() -> Self;
-    fn negative_one() -> Self;
-    fn getrf(m: i32, n: i32, data: &mut [Self], lda: i32, ipiv: &mut [i32], info: &mut i32);
-}
-
-impl LapackLu for f64 {
-    fn one() -> Self {
-        1.0
-    }
-
-    fn negative_one() -> Self {
-        -1.0
-    }
-
-    fn getrf(m: i32, n: i32, data: &mut [Self], lda: i32, ipiv: &mut [i32], info: &mut i32) {
-        // SAFETY: callers validate `m`, `n`, and `lda`, provide a mutable
-        // column-major `lda x n` matrix, `min(m, n)` pivots, and live `info`.
-        unsafe {
-            lapack::dgetrf(m, n, data, lda, ipiv, info);
-        }
-    }
-}
-
-impl LapackLu for f32 {
-    fn one() -> Self {
-        1.0
-    }
-
-    fn negative_one() -> Self {
-        -1.0
-    }
-
-    fn getrf(m: i32, n: i32, data: &mut [Self], lda: i32, ipiv: &mut [i32], info: &mut i32) {
-        // SAFETY: callers validate `m`, `n`, and `lda`, provide a mutable
-        // column-major `lda x n` matrix, `min(m, n)` pivots, and live `info`.
-        unsafe {
-            lapack::sgetrf(m, n, data, lda, ipiv, info);
-        }
-    }
-}
-
-impl LapackLu for Complex32 {
-    fn one() -> Self {
-        Complex32::new(1.0, 0.0)
-    }
-
-    fn negative_one() -> Self {
-        Complex32::new(-1.0, 0.0)
-    }
-
-    fn getrf(m: i32, n: i32, data: &mut [Self], lda: i32, ipiv: &mut [i32], info: &mut i32) {
-        // SAFETY: callers validate `m`, `n`, and `lda`, provide a mutable
-        // column-major `lda x n` matrix, `min(m, n)` pivots, and live `info`.
-        unsafe {
-            lapack::cgetrf(m, n, data, lda, ipiv, info);
-        }
-    }
-}
-
-impl LapackLu for Complex64 {
-    fn one() -> Self {
-        Complex64::new(1.0, 0.0)
-    }
-
-    fn negative_one() -> Self {
-        Complex64::new(-1.0, 0.0)
-    }
-
-    fn getrf(m: i32, n: i32, data: &mut [Self], lda: i32, ipiv: &mut [i32], info: &mut i32) {
-        // SAFETY: callers validate `m`, `n`, and `lda`, provide a mutable
-        // column-major `lda x n` matrix, `min(m, n)` pivots, and live `info`.
-        unsafe {
-            lapack::zgetrf(m, n, data, lda, ipiv, info);
-        }
-    }
-}
-
-fn lu_2d<T: LapackLu>(
+/// Explicit partial-pivot LU, `P A = L U`, of every matrix of a batch.
+pub(crate) fn lu<T: LapackLinalg>(
     buffers: &mut BufferPool,
     input: &TypedTensor<T>,
 ) -> tenferro_tensor::Result<Vec<TypedTensor<T>>> {
-    let (m, n) = matrix_dims(input, "lu")?;
+    const OP: &str = "lu";
+    let (m, n, batch_shape) = matrix_core_and_batch_result(input, OP)?;
     let k = m.min(n);
-    let m_i32 = dim_i32(m, "lu")?;
-    let n_i32 = dim_i32(n, "lu")?;
-    let mut lu = pooled_copy(buffers, input.host_data()?);
-    let mut ipiv = pooled_zeroed::<i32>(buffers, k);
-    let mut info = 0;
-    T::getrf(m_i32, n_i32, &mut lu, m_i32, &mut ipiv, &mut info);
-    check_lapack_info("lu", "getrf", info.min(0))?;
-
-    let mut permutation: Vec<usize> = (0..m).collect();
-    let mut swap_count = 0usize;
-    for (idx, &pivot_one_based) in ipiv.iter().enumerate() {
-        let pivot = match usize::try_from(pivot_one_based - 1) {
-            Ok(pivot) => pivot,
-            Err(_) => {
-                return Err(tenferro_tensor::Error::Internal(
-                    "LAPACK getrf returned an invalid pivot index".to_string(),
-                ));
-            }
-        };
-        if pivot >= m {
-            return Err(tenferro_tensor::Error::Internal(
-                "LAPACK getrf returned an out-of-bounds pivot index".to_string(),
-            ));
-        }
-        if pivot != idx {
-            permutation.swap(idx, pivot);
-            swap_count += 1;
-        }
+    let batch = batch_element_count(OP, batch_shape)?;
+    let p_shape = matrix_with_batch_shape(m, m, batch_shape);
+    let l_shape = matrix_with_batch_shape(m, k, batch_shape);
+    let u_shape = matrix_with_batch_shape(k, n, batch_shape);
+    if has_zero_dim(input.shape()) {
+        return Ok(vec![
+            tensor_from_vec_with_template(p_shape, Vec::new(), input)?,
+            tensor_from_vec_with_template(l_shape, Vec::new(), input)?,
+            tensor_from_vec_with_template(u_shape, Vec::new(), input)?,
+            tensor_from_vec_with_template(batch_shape.to_vec(), vec![T::unit(); batch], input)?,
+        ]);
     }
-
-    let p_len = checked_product("lu", "permutation matrix", &[m, m])?;
-    let mut p_data = pooled_zeroed::<T>(buffers, p_len);
-    for (row, &source_row) in permutation.iter().enumerate() {
-        p_data[row + source_row * m] = <T as LapackLu>::one();
-    }
-    let parity = if swap_count.is_multiple_of(2) {
-        <T as LapackLu>::one()
-    } else {
-        <T as LapackLu>::negative_one()
-    };
-
-    let l_len = checked_product("lu", "lower factor", &[m, k])?;
-    let mut l_data = pooled_zeroed::<T>(buffers, l_len);
-    for col in 0..k {
-        for row in col..m {
-            l_data[row + col * m] = lu[row + col * m];
-        }
-        l_data[col + col * m] = <T as LapackLu>::one();
-    }
-    let u_data = leading_upper_triangle_from_lapack(&lu, m, k, n)?;
-    release_scratch(buffers, lu);
-    release_scratch(buffers, ipiv);
-
+    let mut p = pooled_output::<T>(buffers, OP, "permutation matrix", &p_shape)?;
+    let mut l = pooled_output::<T>(buffers, OP, "lower factor", &l_shape)?;
+    let mut u = pooled_output::<T>(buffers, OP, "upper factor", &u_shape)?;
+    let mut parity = buffers.acquire_with_capacity::<T>(batch);
+    let view = input.as_view();
+    T::lu(
+        buffers,
+        super::super::raw_view(OP, &view)?,
+        tlinalg_blas::lu::LuOutputs {
+            p: &mut p,
+            l: &mut l,
+            u: &mut u,
+            parity: &mut parity,
+        },
+    )
+    .map_err(provider(Op::Lu))?;
     Ok(vec![
-        tensor_from_vec_with_template(vec![m, m], p_data, input)?,
-        tensor_from_vec_with_template(vec![m, k], l_data, input)?,
-        tensor_from_vec_with_template(vec![k, n], u_data, input)?,
-        tensor_from_vec_with_template(vec![], vec![parity], input)?,
+        tensor_from_vec_with_template(p_shape, p, input)?,
+        tensor_from_vec_with_template(l_shape, l, input)?,
+        tensor_from_vec_with_template(u_shape, u, input)?,
+        tensor_from_vec_with_template(batch_shape.to_vec(), parity, input)?,
     ])
 }
 
-pub(crate) fn lu<T: LapackLu>(
-    buffers: &mut BufferPool,
-    input: &TypedTensor<T>,
-) -> tenferro_tensor::Result<Vec<TypedTensor<T>>> {
-    if has_zero_dim(input.shape()) {
-        let (m, n, batch_shape) = matrix_core_and_batch_result(input, "lu")?;
-        let k = m.min(n);
-        let parity_elements = batch_element_count("lu", batch_shape)?;
-        return Ok(vec![
-            tensor_from_vec_with_template(
-                matrix_with_batch_shape(m, m, batch_shape),
-                Vec::new(),
-                input,
-            )?,
-            tensor_from_vec_with_template(
-                matrix_with_batch_shape(m, k, batch_shape),
-                Vec::new(),
-                input,
-            )?,
-            tensor_from_vec_with_template(
-                matrix_with_batch_shape(k, n, batch_shape),
-                Vec::new(),
-                input,
-            )?,
-            tensor_from_vec_with_template(
-                batch_shape.to_vec(),
-                vec![<T as LapackLu>::one(); parity_elements],
-                input,
-            )?,
-        ]);
-    }
-    batched_multi("lu", buffers, input, lu_2d)
-}
-
-pub(crate) fn lu_factor<T: LapackLu + tlinalg_blas::LapackScalar>(
+pub(crate) fn lu_factor<T: LapackLinalg>(
     ctx: &tenferro_cpu::CpuExecutionContext<'_>,
     buffers: &mut BufferPool,
     input: &TypedTensor<T>,
 ) -> tenferro_tensor::Result<(TypedTensor<T>, TypedTensor<i32>, TypedTensor<T>)> {
+    let (m, n, batch_shape) = matrix_core_and_batch_result(input, "lu_factor")?;
+    let k = m.min(n);
+    let batch_total = batch_element_count("lu_factor", batch_shape)?;
     if has_zero_dim(input.shape()) {
-        let (m, n, batch_shape) = matrix_core_and_batch_result(input, "lu_factor")?;
-        let k = m.min(n);
-        let parity_elements = batch_element_count("lu_factor", batch_shape)?;
         return Ok((
             tensor_from_vec_with_template(input.shape().to_vec(), Vec::new(), input)?,
             tensor_from_vec_with_template(
@@ -207,23 +70,21 @@ pub(crate) fn lu_factor<T: LapackLu + tlinalg_blas::LapackScalar>(
             )?,
             tensor_from_vec_with_template(
                 batch_shape.to_vec(),
-                vec![<T as LapackLu>::one(); parity_elements],
+                vec![T::unit(); batch_total],
                 input,
             )?,
         ));
     }
 
-    let (m, n, batch_shape) = matrix_core_and_batch_result(input, "lu_factor")?;
-    let k = m.min(n);
-    let batch_total = batch_element_count("lu_factor", batch_shape)?;
     let pivot_len = checked_product("lu_factor", "pivot output", &[k, batch_total])?;
-    let mut lu_data = pooled_copy(buffers, input.host_data()?);
-    let mut pivot_data = pooled_zeroed::<i32>(buffers, pivot_len);
+    let mut lu_data = buffers.acquire_with_capacity::<T>(input.n_elements());
+    lu_data.extend_from_slice(input.host_data()?);
+    let mut pivot_data = <i32 as PoolScalar>::pool_acquire_zeroed(buffers, pivot_len);
     let mut parity_data = buffers.acquire_with_capacity::<T>(batch_total);
-    parity_data.resize(batch_total, <T as LapackLu>::one());
+    parity_data.resize(batch_total, T::unit());
     crate::cpu::tlinalg_blas::factor_batch::<T>(
         ctx,
-        tlinalg_traits::Op::LuFactor,
+        Op::LuFactor,
         m,
         n,
         &mut lu_data,
