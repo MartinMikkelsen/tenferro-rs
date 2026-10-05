@@ -1,281 +1,120 @@
-use num_complex::{Complex32, Complex64};
-use tlinalg_traits::IndexWorkspace;
-
-use tenferro_cpu::linalg_interop::{BufferPool, PoolScalar};
+use tenferro_cpu::linalg_interop::BufferPool;
 use tenferro_tensor::TypedTensor;
+use tlinalg_blas::svd::{SvdMode, SvdOutputs};
+use tlinalg_blas::Op;
 
 use super::helpers::{
-    batch_element_count, checked_product, has_zero_dim, matrix_with_batch_shape, pooled_copy,
-    pooled_zeroed, release_scratch, split_core_and_batch_result, tensor_from_vec_with_template,
-    vector_with_batch_shape,
+    checked_product, has_zero_dim, matrix_with_batch_shape, pooled_output, provider,
+    release_scratch, split_core_and_batch_result, tensor_from_vec_with_template,
+    vector_with_batch_shape, LapackLinalg,
 };
 
-/// Which singular factors a batched SVD computes.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum SvdMode {
-    /// Thin factors: `U` is `m x k` and `Vt` is `k x n`.
-    Thin,
-    /// Full factors: `U` is `m x m` and `Vt` is `n x n`, so the trailing
-    /// columns and rows span the left and right nullspaces.
-    Full,
-    /// Singular values only.
-    Values,
-}
+/// The pooled `(values, U, Vt)` buffers one batched SVD fills.
+type SvdBuffers<T> = (Vec<<T as LapackLinalg>::RealScalar>, Vec<T>, Vec<T>);
 
-impl SvdMode {
-    /// `(U columns, Vt rows)` of one factor pair; zero in values-only mode.
-    fn factor_dims(self, m: usize, n: usize) -> (usize, usize) {
-        let k = m.min(n);
-        match self {
-            Self::Thin => (k, k),
-            Self::Full => (m, n),
-            Self::Values => (0, 0),
-        }
-    }
-}
-
-pub(crate) trait LapackSvd:
-    Clone + Copy + Default + PoolScalar + tlinalg_blas::LapackScalar
-{
-    /// The multiplicative unit, used to build the identity factor a full
-    /// decomposition still owes for an empty core dimension.
-    fn unit() -> Self;
-
-    /// Real singular values in this scalar type, reusing the buffer when the
-    /// scalar is real.
-    fn values_as_scalar(
-        buffers: &mut BufferPool,
-        values: Vec<<Self as tlinalg_blas::symbols::Symbols>::Real>,
-    ) -> Vec<Self>;
-}
-
-/// The real scalar of an SVD scalar.
-pub(crate) type SvdRealOf<T> = <T as tlinalg_blas::symbols::Symbols>::Real;
-
-/// The four pooled buffers one batched SVD fills: the destroyed input, the values, and the two
-/// factors.
-type SvdBuffers<T> = (Vec<T>, Vec<SvdRealOf<T>>, Vec<T>, Vec<T>);
-
-/// The real scalar of an SVD scalar, with every bound the outputs and the pooled scratch need.
-pub(crate) trait SvdReal:
-    Clone + Copy + Default + PoolScalar + tenferro_tensor::TensorScalar + tlinalg_traits::Scalar
-{
-}
-
-impl SvdReal for f32 {}
-impl SvdReal for f64 {}
-
-/// The scratch an SVD call needs, in the shape the extracted kernel asks for.
-///
-/// The kernel wants a workspace over the scalar, a workspace over its real scalar and an integer
-/// workspace. Naming them as associated types lets the generic wrappers below prove those bounds
-/// once instead of threading three where-clauses through every function that reaches the kernel.
-pub(crate) trait SvdScratch: LapackSvd {
-    /// The workspace type for one call.
-    type Workspace<'a>: tlinalg_traits::Workspace<Self>
-        + tlinalg_traits::Workspace<<Self as tlinalg_blas::symbols::Symbols>::Real>
-        + IndexWorkspace;
-
-    /// Wrap the session's pool for one call.
-    fn workspace(pool: &mut BufferPool) -> Self::Workspace<'_>;
-}
-
-macro_rules! impl_svd_scratch {
-    ($scalar:ty) => {
-        impl SvdScratch for $scalar {
-            type Workspace<'a> = crate::cpu::tlinalg_workspace::TlinalgWorkspace<'a>;
-
-            fn workspace(pool: &mut BufferPool) -> Self::Workspace<'_> {
-                crate::cpu::tlinalg_workspace::TlinalgWorkspace::new(pool)
-            }
-        }
-    };
-}
-
-impl_svd_scratch!(f32);
-impl_svd_scratch!(f64);
-impl_svd_scratch!(Complex32);
-impl_svd_scratch!(Complex64);
-
-macro_rules! impl_real_svd {
-    ($scalar:ty) => {
-        impl LapackSvd for $scalar {
-            fn unit() -> Self {
-                1.0
-            }
-
-            fn values_as_scalar(_buffers: &mut BufferPool, values: Vec<Self>) -> Vec<Self> {
-                values
-            }
-        }
-    };
-}
-
-macro_rules! impl_complex_svd {
-    ($complex:ty, $real:ty) => {
-        impl LapackSvd for $complex {
-            fn unit() -> Self {
-                <$complex>::new(1.0, 0.0)
-            }
-
-            fn values_as_scalar(buffers: &mut BufferPool, values: Vec<$real>) -> Vec<Self> {
-                let mut converted = buffers.acquire_with_capacity::<$complex>(values.len());
-                converted.extend(values.iter().map(|&value| <$complex>::new(value, 0.0)));
-                release_scratch(buffers, values);
-                converted
-            }
-        }
-    };
-}
-
-impl_real_svd!(f32);
-impl_real_svd!(f64);
-impl_complex_svd!(Complex32, f32);
-impl_complex_svd!(Complex64, f64);
-
-/// Pooled factor buffers for a batched SVD in `mode`, returned as
-/// `(a copy, values, U, Vt)`.
-#[allow(clippy::type_complexity)]
-/// The extracted kernel's spelling of a mode.
-fn tlinalg_svd_mode(mode: SvdMode) -> tlinalg_blas::svd::SvdMode {
-    match mode {
-        SvdMode::Thin => tlinalg_blas::svd::SvdMode::Thin,
-        SvdMode::Full => tlinalg_blas::svd::SvdMode::Full,
-        SvdMode::Values => tlinalg_blas::svd::SvdMode::Values,
-    }
-}
-
-fn svd_buffers<T: SvdScratch>(
+/// Run one batched SVD in `mode`, returning `(values, U, Vt)` in pooled buffers.
+fn svd_buffers<T: LapackLinalg>(
     buffers: &mut BufferPool,
-    op: tlinalg_traits::Op,
+    op: Op,
     mode: SvdMode,
-    m: usize,
-    n: usize,
-    batch_shape: &[usize],
     input: &TypedTensor<T>,
-) -> tenferro_tensor::Result<SvdBuffers<T>>
-where
-    <T as tlinalg_blas::symbols::Symbols>::Real: SvdReal,
-{
+    shapes: [&[usize]; 3],
+) -> tenferro_tensor::Result<SvdBuffers<T>> {
     let op_name = op.as_str();
-    let batch = batch_element_count(op_name, batch_shape)?;
-    let (u_cols, vt_rows) = mode.factor_dims(m, n);
-    let s_len = checked_product(op_name, "singular values", &[m.min(n), batch])?;
-    let u_len = checked_product(op_name, "left singular vectors", &[m, u_cols, batch])?;
-    let vt_len = checked_product(op_name, "right singular vectors", &[vt_rows, n, batch])?;
-    let mut a = pooled_copy(buffers, input.host_data()?);
-    let mut s = pooled_zeroed::<SvdRealOf<T>>(buffers, s_len);
-    let mut u = pooled_zeroed::<T>(buffers, u_len);
-    let mut vt = pooled_zeroed::<T>(buffers, vt_len);
-    tlinalg_blas::svd::svd_batch(
+    let [s_shape, u_shape, vt_shape] = shapes;
+    let mut s = pooled_output::<T::RealScalar>(buffers, op_name, "singular values", s_shape)?;
+    let mut u = pooled_output::<T>(buffers, op_name, "left singular vectors", u_shape)?;
+    let mut vt = pooled_output::<T>(buffers, op_name, "right singular vectors", vt_shape)?;
+    let view = input.as_view();
+    T::svd(
+        buffers,
         op,
-        tlinalg_svd_mode(mode),
-        m,
-        n,
-        &mut a,
-        &mut s,
-        &mut u,
-        &mut vt,
-        &mut T::workspace(buffers),
-        tlinalg_traits::Parallel::Sequential,
+        mode,
+        super::super::raw_view(op_name, &view)?,
+        SvdOutputs {
+            s: &mut s,
+            u: &mut u,
+            vt: &mut vt,
+        },
     )
-    .map_err(|error| crate::cpu::tlinalg_error::map_error(op, error))?;
-    Ok((a, s, u, vt))
+    .map_err(provider(op))?;
+    Ok((s, u, vt))
 }
 
-pub(crate) fn svd<T: SvdScratch>(
+pub(crate) fn svd<T: LapackLinalg>(
     buffers: &mut BufferPool,
     input: &TypedTensor<T>,
-) -> tenferro_tensor::Result<Vec<TypedTensor<T>>>
-where
-    <T as tlinalg_blas::symbols::Symbols>::Real: SvdReal,
-{
+) -> tenferro_tensor::Result<Vec<TypedTensor<T>>> {
     let (matrix_shape, batch_shape) = split_core_and_batch_result(input, 2, "svd")?;
     let (m, n) = (matrix_shape[0], matrix_shape[1]);
     let k = m.min(n);
+    let u_shape = matrix_with_batch_shape(m, k, batch_shape);
+    let s_shape = vector_with_batch_shape(k, batch_shape);
+    let vt_shape = matrix_with_batch_shape(k, n, batch_shape);
     if has_zero_dim(input.shape()) {
         return Ok(vec![
-            tensor_from_vec_with_template(
-                matrix_with_batch_shape(m, k, batch_shape),
-                Vec::new(),
-                input,
-            )?,
-            tensor_from_vec_with_template(
-                vector_with_batch_shape(k, batch_shape),
-                Vec::new(),
-                input,
-            )?,
-            tensor_from_vec_with_template(
-                matrix_with_batch_shape(k, n, batch_shape),
-                Vec::new(),
-                input,
-            )?,
+            tensor_from_vec_with_template(u_shape, Vec::new(), input)?,
+            tensor_from_vec_with_template(s_shape, Vec::new(), input)?,
+            tensor_from_vec_with_template(vt_shape, Vec::new(), input)?,
         ]);
     }
-    let (a, s, u, vt) = svd_buffers(
+    let (s, u, vt) = svd_buffers(
         buffers,
-        tlinalg_traits::Op::Svd,
+        Op::Svd,
         SvdMode::Thin,
-        m,
-        n,
-        batch_shape,
         input,
+        [&s_shape, &u_shape, &vt_shape],
     )?;
-    release_scratch(buffers, a);
+    // The public complex SVD reports real values; the internal output keeps them in the scalar
+    // type and the backend adapter takes the real part.
     let s = T::values_as_scalar(buffers, s);
     Ok(vec![
-        tensor_from_vec_with_template(matrix_with_batch_shape(m, k, batch_shape), u, input)?,
-        tensor_from_vec_with_template(vector_with_batch_shape(k, batch_shape), s, input)?,
-        tensor_from_vec_with_template(matrix_with_batch_shape(k, n, batch_shape), vt, input)?,
+        tensor_from_vec_with_template(u_shape, u, input)?,
+        tensor_from_vec_with_template(s_shape, s, input)?,
+        tensor_from_vec_with_template(vt_shape, vt, input)?,
     ])
 }
 
-pub(crate) fn svd_full<T: SvdScratch>(
+pub(crate) fn svd_full<T: LapackLinalg>(
     buffers: &mut BufferPool,
     input: &TypedTensor<T>,
-) -> tenferro_tensor::Result<Vec<TypedTensor<T>>>
-where
-    <T as tlinalg_blas::symbols::Symbols>::Real: SvdReal,
-{
+) -> tenferro_tensor::Result<Vec<TypedTensor<T>>> {
     let (matrix_shape, batch_shape) = split_core_and_batch_result(input, 2, "svd_full")?;
     let (m, n) = (matrix_shape[0], matrix_shape[1]);
+    let u_shape = matrix_with_batch_shape(m, m, batch_shape);
+    let s_shape = vector_with_batch_shape(m.min(n), batch_shape);
+    let vt_shape = matrix_with_batch_shape(n, n, batch_shape);
     if has_zero_dim(input.shape()) {
         return empty_full_svd_outputs("svd_full", m, n, batch_shape, input);
     }
-    let (a, s, u, vt) = svd_buffers(
+    let (s, u, vt) = svd_buffers(
         buffers,
-        tlinalg_traits::Op::SvdFull,
+        Op::SvdFull,
         SvdMode::Full,
-        m,
-        n,
-        batch_shape,
         input,
+        [&s_shape, &u_shape, &vt_shape],
     )?;
-    release_scratch(buffers, a);
     let s = T::values_as_scalar(buffers, s);
     Ok(vec![
-        tensor_from_vec_with_template(matrix_with_batch_shape(m, m, batch_shape), u, input)?,
-        tensor_from_vec_with_template(vector_with_batch_shape(m.min(n), batch_shape), s, input)?,
-        tensor_from_vec_with_template(matrix_with_batch_shape(n, n, batch_shape), vt, input)?,
+        tensor_from_vec_with_template(u_shape, u, input)?,
+        tensor_from_vec_with_template(s_shape, s, input)?,
+        tensor_from_vec_with_template(vt_shape, vt, input)?,
     ])
 }
 
 /// Full-SVD factors for an input with an empty core dimension.
 ///
-/// The full variant keeps its `m x m` and `n x n` output shapes even when the
-/// other core dimension is zero, so the factor for the non-empty dimension is
-/// the identity rather than an empty tensor. This mirrors the faer provider so
-/// one public call has one shape and unitarity contract.
-fn empty_full_svd_outputs<T: SvdScratch, U>(
+/// The full variant keeps its `m x m` and `n x n` output shapes even when the other core
+/// dimension is zero, so the factor for the non-empty dimension is the identity rather than an
+/// empty tensor. This mirrors the faer provider so one public call has one shape and unitarity
+/// contract.
+fn empty_full_svd_outputs<T: LapackLinalg, U>(
     op: &'static str,
     m: usize,
     n: usize,
     batch_shape: &[usize],
     template: &TypedTensor<U>,
-) -> tenferro_tensor::Result<Vec<TypedTensor<T>>>
-where
-    <T as tlinalg_blas::symbols::Symbols>::Real: SvdReal,
-{
+) -> tenferro_tensor::Result<Vec<TypedTensor<T>>> {
     let blocks = checked_product(op, "batch shape", batch_shape)?;
     Ok(vec![
         tensor_from_vec_with_template(
@@ -297,14 +136,11 @@ where
 }
 
 /// `blocks` column-major `dim x dim` identity matrices laid out back to back.
-fn identity_blocks<T: SvdScratch>(
+fn identity_blocks<T: LapackLinalg>(
     op: &'static str,
     dim: usize,
     blocks: usize,
-) -> tenferro_tensor::Result<Vec<T>>
-where
-    <T as tlinalg_blas::symbols::Symbols>::Real: SvdReal,
-{
+) -> tenferro_tensor::Result<Vec<T>> {
     let per_block = checked_product(op, "identity block", &[dim, dim])?;
     let len = checked_product(op, "identity stack", &[per_block, blocks])?;
     let mut data = vec![T::default(); len];
@@ -317,34 +153,24 @@ where
     Ok(data)
 }
 
-pub(crate) fn svd_values<T: SvdScratch>(
+pub(crate) fn svd_values<T: LapackLinalg>(
     buffers: &mut BufferPool,
     input: &TypedTensor<T>,
-) -> tenferro_tensor::Result<TypedTensor<SvdRealOf<T>>>
-where
-    <T as tlinalg_blas::symbols::Symbols>::Real: SvdReal,
-{
+) -> tenferro_tensor::Result<TypedTensor<T::RealScalar>> {
     let (matrix_shape, batch_shape) = split_core_and_batch_result(input, 2, "svd_values")?;
     let (m, n) = (matrix_shape[0], matrix_shape[1]);
-    let k = m.min(n);
+    let s_shape = vector_with_batch_shape(m.min(n), batch_shape);
     if has_zero_dim(input.shape()) {
-        return tensor_from_vec_with_template(
-            vector_with_batch_shape(k, batch_shape),
-            Vec::new(),
-            input,
-        );
+        return tensor_from_vec_with_template(s_shape, Vec::new(), input);
     }
-    let (a, s, u, vt) = svd_buffers(
+    let (s, u, vt) = svd_buffers(
         buffers,
-        tlinalg_traits::Op::SvdValues,
+        Op::SvdValues,
         SvdMode::Values,
-        m,
-        n,
-        batch_shape,
         input,
+        [&s_shape, &[0], &[0]],
     )?;
-    release_scratch(buffers, a);
     release_scratch(buffers, u);
     release_scratch(buffers, vt);
-    tensor_from_vec_with_template(vector_with_batch_shape(k, batch_shape), s, input)
+    tensor_from_vec_with_template(s_shape, s, input)
 }

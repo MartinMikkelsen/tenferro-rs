@@ -1,8 +1,9 @@
 use super::*;
+use num_complex::{Complex32, Complex64};
 
 fn check_batches<T>(make: impl Fn(f64) -> T, error: impl Fn(T, T) -> f64)
 where
-    T: LapackSolve + std::ops::Add<Output = T> + std::ops::Mul<Output = T>,
+    T: LapackLinalg + std::ops::Add<Output = T> + std::ops::Mul<Output = T>,
 {
     let mut buffers = BufferPool::new();
     for batch_shape in [vec![], vec![1], vec![2, 3]] {

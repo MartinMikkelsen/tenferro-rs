@@ -233,52 +233,61 @@ const F64_LU_CEILINGS: &[(&str, usize)] = &[
     ("blas/lu_factor/complex32", 6),
     // The SVD family, faer route: the next slice's pre-move baseline.
     ("faer/svd/48", 12),
-    ("faer/svdvals/48", 5),
+    ("faer/svdvals/48", 4),
     ("faer/svd/tall", 12),
-    ("faer/svdvals/tall", 5),
+    ("faer/svdvals/tall", 4),
     ("faer/svd/complex32", 14),
-    ("faer/svdvals/complex32", 5),
+    ("faer/svdvals/complex32", 4),
 ];
 
-/// Pre-move baselines for the families that follow SVD and packed LU out of `tenferro-linalg`,
-/// measured through the public tensor routes on both CPU kinds before either route switches.
+/// Baselines for the families that followed SVD and packed LU out of `tenferro-linalg`, measured
+/// through the public tensor routes on both CPU kinds. Recorded before the move and lowered where
+/// the batched providers allocate less; the few cases the move raised are marked with their cause.
 const REMAINING_FAMILY_CEILINGS: &[(&str, usize)] = &[
     ("faer/cholesky/48", 4),
     ("faer/triangular_solve/48", 2),
     ("faer/lu/48", 13),
     ("faer/full_piv_lu/48", 17),
-    ("faer/full_piv_lu_solve/48", 10),
-    ("faer/solve/48", 8),
+    // PROVIDER REGRESSION (+1, tracked for the tlinalg-rs PR): the provider solves into a lane work
+    // matrix and copies it out (one more n x nrhs buffer per lane).
+    ("faer/full_piv_lu_solve/48", 11),
+    // PROVIDER REGRESSION (+1, tracked for the tlinalg-rs PR): the provider's destination-aliasing
+    // check collects the axes into a Vec.
+    ("faer/solve/48", 9),
     ("faer/qr/48", 11),
     ("faer/qr/tall", 11),
     ("faer/householder_qr/tall", 73),
-    ("faer/rank_revealing_qr/tall", 15),
+    // PROVIDER REGRESSION (+1, tracked for the tlinalg-rs PR): the lane-reused usize pivot scratch
+    // and the i64 output are separate buffers; the per-item route converted its pivots in place.
+    ("faer/rank_revealing_qr/tall", 16),
     ("faer/eigh/48", 9),
-    ("faer/eigvalsh/48", 5),
+    ("faer/eigvalsh/48", 4),
     ("faer/eig/48", 10),
     ("faer/eigvals/48", 6),
-    ("faer/solve/complex32", 8),
+    // PROVIDER REGRESSION (+1, tracked for the tlinalg-rs PR): the provider's destination-aliasing
+    // check collects the axes into a Vec.
+    ("faer/solve/complex32", 9),
     ("faer/qr/complex32", 11),
     ("faer/eigh/complex32", 11),
     ("faer/eig/complex32", 9),
     ("blas/cholesky/48", 3),
     ("blas/triangular_solve/48", 2),
     ("blas/lu/48", 12),
-    ("blas/full_piv_lu/48", 16),
+    ("blas/full_piv_lu/48", 15),
     ("blas/full_piv_lu_solve/48", 5),
     ("blas/solve/48", 5),
-    ("blas/qr/48", 8),
-    ("blas/qr/tall", 8),
+    ("blas/qr/48", 7),
+    ("blas/qr/tall", 7),
     ("blas/householder_qr/tall", 4),
-    ("blas/rank_revealing_qr/tall", 14),
+    ("blas/rank_revealing_qr/tall", 13),
     ("blas/eigh/48", 7),
     ("blas/eigvalsh/48", 4),
-    ("blas/eig/48", 12),
-    ("blas/eigvals/48", 10),
+    ("blas/eig/48", 7),
+    ("blas/eigvals/48", 4),
     ("blas/solve/complex32", 5),
-    ("blas/qr/complex32", 8),
+    ("blas/qr/complex32", 7),
     ("blas/eigh/complex32", 8),
-    ("blas/eig/complex32", 11),
+    ("blas/eig/complex32", 8),
 ];
 
 fn ceiling(name: &str) -> usize {

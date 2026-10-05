@@ -1,21 +1,19 @@
-//! Adapter from tenferro's CPU session to the extracted `tlinalg` crate.
+//! Adapter from tenferro's CPU session to the extracted `tlinalg` (faer) provider.
 //!
-//! The host keeps policy: this module turns the session's resolved batch strategy into a lane
-//! plan, drives the outer fan-out, and owns the error mapping. `tlinalg` owns the kernels and
-//! their per-chunk scratch. Nothing here re-derives parallelism inside a lane — a lane child is
-//! `ParallelMode::Sequential`, so `parallel_from` returns `Sequential` for it by construction.
+//! The host keeps policy: this module turns the session's resolved batch strategy into a
+//! [`LanePlan`], derives the [`Parallel`] token from the entered context, describes tensors to the
+//! provider as borrowed strided operands, and owns the error mapping. `tlinalg` owns the kernels,
+//! their scratch, the batch loop and the batch-direction lane fan-out on the pool it is handed.
 //!
-//! Nothing in the packed-LU family takes pooled buffers: the operands are the caller's slices and
-//! the scratch is `tlinalg`'s own, so this adapter does not use `tlinalg_traits::Workspace`.
+//! Every family reaches the provider through one batched call: the provider never sees a tensor,
+//! and the host never loops over the batch itself.
 
 #![cfg(feature = "cpu-faer")]
 
-use std::sync::Mutex;
-
+use strided_view::RawStridedRef;
 use tenferro_cpu::{CpuBatchStrategy, CpuExecutionContext};
-use tlinalg::packed_lu::{factor_chunk, factor_solve_chunk, solve_prepared_chunk, FactorScratch};
-use tlinalg::FaerScalar;
-use tlinalg_traits::{LanePlan, Op, Parallel};
+use tlinalg::packed_lu::{factor, factor_solve, solve_prepared, validate_pivots};
+use tlinalg::{FaerScalar, LanePlan, Op, Parallel};
 
 use super::tlinalg_error::map_error;
 
@@ -36,9 +34,11 @@ pub(crate) fn parallel_from<'a>(ctx: &CpuExecutionContext<'a>) -> Parallel<'a> {
 
 /// Resolve the batch policy into a lane plan, rejecting strategies the implementation cannot serve.
 ///
-/// Mirrors the policy the faer provider applied before the extraction: forced `Sequential` and
-/// `ProviderItems` stay on one lane, forced `OuterParallel` needs a context that can fan out, and
-/// a vendor-batched strategy is unavailable because the implementation has no vendor batching.
+/// One policy for every batched faer family: forced `Sequential` and `ProviderItems` stay on one
+/// lane, forced `OuterParallel` needs a context that can fan out, and a vendor-batched strategy is
+/// unavailable because the implementation has no vendor batching. `Auto` fans out over the
+/// context's budget once the thresholds say the batch is large enough. A single matrix is not a
+/// batch, so the policy does not apply to it.
 pub(crate) fn lane_plan<'a>(
     ctx: &CpuExecutionContext<'a>,
     op: Op,
@@ -76,63 +76,21 @@ pub(crate) fn lane_plan<'a>(
         CpuBatchStrategy::OuterParallel => Err(unavailable(
             "the context cannot fan out (one thread, or a sequential or nested context)",
         )),
-        CpuBatchStrategy::Sequential => Ok(LanePlan {
-            lanes: 1,
-            item_parallel: Parallel::Sequential,
-        }),
-        CpuBatchStrategy::ProviderItems => Ok(LanePlan {
-            lanes: 1,
-            item_parallel: parallel,
-        }),
+        CpuBatchStrategy::Sequential => Ok(LanePlan::sequential()),
+        CpuBatchStrategy::ProviderItems => Ok(LanePlan::single(parallel)),
         _ => Err(unavailable(
             "the linalg provider has no vendor batched factorization",
         )),
     }
 }
 
-/// Run `body` once per contiguous chunk, in the order the faer provider used.
-///
-/// `chunk_len` is `batch.div_ceil(lanes)`, so the last chunk can be shorter; the same whole-matrix
-/// arithmetic applies to every buffer. The first failure wins and stops further work.
-fn for_each_chunk<'a, I, F>(
+/// The resolved `(Parallel, LanePlan)` pair one batched call takes.
+pub(crate) fn execution<'a>(
     ctx: &CpuExecutionContext<'a>,
-    jobs: I,
-    body: F,
-) -> tenferro_tensor::Result<()>
-where
-    I: IntoIterator,
-    I::IntoIter: Send,
-    I::Item: Send,
-    F: Fn(I::Item, Parallel<'a>) -> tenferro_tensor::Result<()> + Sync,
-{
-    let failure = Mutex::new(None::<tenferro_tensor::Error>);
-    let failed = |slot: &Mutex<Option<tenferro_tensor::Error>>| {
-        slot.lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .is_some()
-    };
-    // Each lane is a sequential child of the context's own fan-out, so the kernel runs with the
-    // sequential token and never nests a second fan-out.
-    ctx.with_outer_lanes(jobs, |job, lane| {
-        if failed(&failure) {
-            return;
-        }
-        if let Err(error) = body(job, parallel_from(lane)) {
-            let mut slot = failure
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            if slot.is_none() {
-                *slot = Some(error);
-            }
-        }
-    });
-    match failure
-        .into_inner()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-    {
-        Some(error) => Err(error),
-        None => Ok(()),
-    }
+    op: Op,
+    batch: usize,
+) -> tenferro_tensor::Result<(Parallel<'a>, LanePlan<'a>)> {
+    Ok((parallel_from(ctx), lane_plan(ctx, op, batch)?))
 }
 
 /// Factor `batch` compact `m x n` matrices in place, honouring the resolved lane plan.
@@ -145,45 +103,8 @@ pub(crate) fn factor_batch<T: FaerScalar>(
     pivots: &mut [i32],
     parity: &mut [T],
 ) -> tenferro_tensor::Result<()> {
-    let k = m.min(n);
-    let matrix_len = m * n;
-    let batch = parity.len();
-    let plan = lane_plan(ctx, op, batch)?;
-    if plan.lanes > 1 {
-        let chunk_len = batch.div_ceil(plan.lanes);
-        return for_each_chunk(
-            ctx,
-            lu.chunks_mut(chunk_len * matrix_len)
-                .zip(pivots.chunks_mut(chunk_len * k))
-                .zip(parity.chunks_mut(chunk_len)),
-            |((lu_chunk, pivot_chunk), parity_chunk), par| {
-                let mut scratch = FactorScratch::<T>::new(m, n, par);
-                factor_chunk(
-                    op,
-                    m,
-                    n,
-                    lu_chunk,
-                    pivot_chunk,
-                    parity_chunk,
-                    par,
-                    &mut scratch,
-                )
-                .map_err(|error| map_error(op, error))
-            },
-        );
-    }
-    let mut scratch = FactorScratch::<T>::new(m, n, plan.item_parallel);
-    factor_chunk(
-        op,
-        m,
-        n,
-        lu,
-        pivots,
-        parity,
-        plan.item_parallel,
-        &mut scratch,
-    )
-    .map_err(|error| map_error(op, error))
+    let (par, plan) = execution(ctx, op, parity.len())?;
+    factor(op, m, n, lu, pivots, parity, par, plan).map_err(|error| map_error(op, error))
 }
 
 /// Solve `op(A) X = B` for `batch` compact systems from packed factors.
@@ -202,51 +123,37 @@ pub(crate) fn solve_prepared_batch<T: FaerScalar>(
     transpose_a: bool,
     conjugate_a: bool,
 ) -> tenferro_tensor::Result<()> {
-    let matrix_len = n * n;
-    let rhs_len = n * nrhs;
-    let batch = packed_lu.len() / matrix_len;
-    // The whole batch is validated before the batch is split, so an invalid pivot is reported
-    // before any chunk mutates its output and before a batch-strategy error can mask it. A
+    let batch = pivots.len().checked_div(n).unwrap_or(0);
+    // The whole batch is validated before the provider runs, so an invalid pivot is reported
+    // before any item mutates its output and before a batch-strategy error can mask it. A
     // zero-size solve returns before validation, as the previous implementation did.
-    if rhs_len > 0 {
-        tlinalg::packed_lu::validate_pivots(Op::LuSolvePrepared, n, pivots)
+    let has_rhs = n > 0 && nrhs > 0;
+    if has_rhs {
+        validate_pivots(Op::LuSolvePrepared, n, pivots)
             .map_err(|error| map_error(Op::LuSolvePrepared, error))?;
     }
-    let plan = lane_plan(ctx, op, batch)?;
-    if plan.lanes > 1 {
-        let chunk_len = batch.div_ceil(plan.lanes);
-        return for_each_chunk(
-            ctx,
-            packed_lu
-                .chunks(chunk_len * matrix_len)
-                .zip(pivots.chunks(chunk_len * n))
-                .zip(output.chunks_mut(chunk_len * rhs_len)),
-            |((matrix_chunk, ipiv_chunk), rhs_chunk), par| {
-                solve_prepared_chunk(
-                    op,
-                    n,
-                    nrhs,
-                    matrix_chunk,
-                    ipiv_chunk,
-                    rhs_chunk,
-                    transpose_a,
-                    conjugate_a,
-                    par,
-                )
-                .map_err(|error| map_error(op, error))
-            },
-        );
+    let (par, plan) = execution(ctx, op, batch)?;
+    if !has_rhs {
+        return Ok(());
     }
-    solve_prepared_chunk(
+    let lu_dims = [n, n, batch];
+    let lu_strides = compact_strides3(n, n);
+    let pivot_dims = [n, batch];
+    let pivot_strides = [1, n as isize];
+    let packed_lu = RawStridedRef::new(packed_lu, &lu_dims, &lu_strides, 0)
+        .map_err(|error| layout_error(op, error))?;
+    let pivots = RawStridedRef::new(pivots, &pivot_dims, &pivot_strides, 0)
+        .map_err(|error| layout_error(op, error))?;
+    solve_prepared(
         op,
-        n,
-        nrhs,
         packed_lu,
         pivots,
+        nrhs,
         output,
         transpose_a,
         conjugate_a,
-        plan.item_parallel,
+        par,
+        plan,
     )
     .map_err(|error| map_error(op, error))
 }
@@ -265,59 +172,19 @@ pub(crate) fn factor_solve_batch<T: FaerScalar>(
     pivots: &mut [i32],
     output: &mut [T],
 ) -> tenferro_tensor::Result<()> {
-    let matrix_len = n * n;
-    let rhs_len = n * nrhs;
-    let batch = packed_lu.len() / matrix_len;
-    let plan = lane_plan(ctx, op, batch)?;
-    if plan.lanes > 1 {
-        let chunk_len = batch.div_ceil(plan.lanes);
-        // A zero-column RHS has no output chunk, and `chunks_mut(0)` is not a valid split, so the
-        // zero-RHS case drives the lanes without an output buffer.
-        if rhs_len == 0 {
-            return for_each_chunk(
-                ctx,
-                packed_lu
-                    .chunks_mut(chunk_len * matrix_len)
-                    .zip(pivots.chunks_mut(chunk_len * n)),
-                |(lu_chunk, pivot_chunk), par| {
-                    let mut scratch = FactorScratch::<T>::new(n, n, par);
-                    factor_solve_chunk(op, n, 0, lu_chunk, pivot_chunk, &mut [], par, &mut scratch)
-                        .map_err(|error| map_error(op, error))
-                },
-            );
-        }
-        return for_each_chunk(
-            ctx,
-            packed_lu
-                .chunks_mut(chunk_len * matrix_len)
-                .zip(pivots.chunks_mut(chunk_len * n))
-                .zip(output.chunks_mut(chunk_len * rhs_len)),
-            |((lu_chunk, pivot_chunk), rhs_chunk), par| {
-                let mut scratch = FactorScratch::<T>::new(n, n, par);
-                factor_solve_chunk(
-                    op,
-                    n,
-                    nrhs,
-                    lu_chunk,
-                    pivot_chunk,
-                    rhs_chunk,
-                    par,
-                    &mut scratch,
-                )
-                .map_err(|error| map_error(op, error))
-            },
-        );
-    }
-    let mut scratch = FactorScratch::<T>::new(n, n, plan.item_parallel);
-    factor_solve_chunk(
-        op,
-        n,
-        nrhs,
-        packed_lu,
-        pivots,
-        output,
-        plan.item_parallel,
-        &mut scratch,
-    )
-    .map_err(|error| map_error(op, error))
+    let batch = pivots.len().checked_div(n).unwrap_or(0);
+    let (par, plan) = execution(ctx, op, batch)?;
+    factor_solve(op, n, nrhs, packed_lu, pivots, output, par, plan)
+        .map_err(|error| map_error(op, error))
+}
+
+/// Column-major strides of a compact `[rows, cols, batch]` stack.
+fn compact_strides3(rows: usize, cols: usize) -> [isize; 3] {
+    // INVARIANT: the caller's slice holds `rows * cols * batch` elements, so the per-matrix length
+    // fits `usize`, and every in-bounds stride fits `isize` (Rust allocations never exceed it).
+    [1, rows as isize, (rows * cols) as isize]
+}
+
+fn layout_error(op: Op, error: impl std::fmt::Display) -> tenferro_tensor::Error {
+    tenferro_tensor::Error::invalid_argument(op.as_str(), "layout", error.to_string())
 }

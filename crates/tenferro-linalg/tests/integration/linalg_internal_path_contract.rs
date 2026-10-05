@@ -426,50 +426,32 @@ fn backend_surface_has_hidden_hermitian_values_only_hook() {
 #[test]
 fn cpu_general_eig_values_only_paths_do_not_request_vectors() {
     let lapack_source = crate_source("src/cpu/linalg/lapack_linalg/eig.rs");
-    let lapack_real_values = source_section(
-        &lapack_source,
-        "macro_rules! impl_eig_values_real_2d",
-        "macro_rules! impl_eig_complex_2d",
+    let lapack_values = source_section(&lapack_source, "pub(crate) fn eig_values", "\n}\n");
+    assert!(
+        lapack_values.contains("eig_erased(buffers, input, false)"),
+        "LAPACK eig_values should ask the provider for no eigenvectors"
     );
-    let lapack_complex_values = source_section(
-        &lapack_source,
-        "macro_rules! impl_eig_values_complex_2d",
-        "impl_real_eig_to_complex_outputs!",
+    let lapack_typed = source_section(&lapack_source, "fn eig_typed", "fn eig_erased");
+    assert!(
+        lapack_typed.contains("vectors.then_some("),
+        "LAPACK eig should pass the eigenvector buffer only when vectors are requested"
     );
-
-    for section in [lapack_real_values, lapack_complex_values] {
-        assert!(
-            section.contains("b'N'"),
-            "LAPACK eig_values should request no left or right eigenvectors"
-        );
-        assert!(
-            !section.contains("b'V'"),
-            "LAPACK eig_values should not request eigenvectors"
-        );
-    }
 
     let faer_source = crate_source("src/cpu/linalg/faer_linalg.rs");
-    let faer_real_values = source_section(
+    let faer_dispatch = source_section(
         &faer_source,
-        "macro_rules! impl_eig_values_real_2d",
-        "macro_rules! impl_eig_complex_2d",
+        "macro_rules! impl_faer_eig",
+        "impl_faer_eig!(",
     );
-    let faer_complex_values = source_section(
-        &faer_source,
-        "macro_rules! impl_eig_values_complex_2d",
-        "impl_eig_real_2d!",
+    assert!(
+        faer_dispatch.contains("None => tlinalg::eig::eig_values("),
+        "Faer eig_values should call the provider's values-only entry point"
     );
-
-    for section in [faer_real_values, faer_complex_values] {
-        assert!(
-            section.contains("ComputeEigenvectors::No"),
-            "Faer eig_values should request no eigenvectors"
-        );
-        assert!(
-            !section.contains("ComputeEigenvectors::Yes"),
-            "Faer eig_values should not request eigenvectors"
-        );
-    }
+    let faer_values = source_section(&faer_source, "pub(crate) fn eig_values(", "\n}\n");
+    assert!(
+        faer_values.contains(", false)") && !faer_values.contains(", true)"),
+        "Faer eig_values should not request eigenvectors"
+    );
 }
 
 #[test]
@@ -561,20 +543,16 @@ fn backend_surface_does_not_expose_internal_lu_solve_mode_type() {
 }
 
 #[test]
-fn faer_batched_paths_reuse_pooled_scratch_inputs() {
+fn faer_routes_hand_whole_batches_to_tlinalg() {
     let source = crate_source("src/cpu/linalg/faer_linalg.rs");
 
     assert!(
-        source.contains("tensor_from_pooled_slice_with_template"),
-        "Faer batched paths should construct batch inputs from pooled scratch buffers"
+        !source.contains("host_data()[range].to_vec()") && !source.contains("for batch_idx in 0.."),
+        "Faer routes should hand the whole batch to tlinalg instead of looping per matrix"
     );
     assert!(
-        source.contains("refill_tensor_from_slice"),
-        "Faer batched paths should refill scratch tensors instead of reallocating per batch"
-    );
-    assert!(
-        !source.contains("host_data()[range].to_vec()"),
-        "Faer batched paths should not allocate a new Vec for every batch slice"
+        source.contains("execution(ctx, Op::"),
+        "Faer routes should resolve one lane plan per batched provider call"
     );
 }
 
