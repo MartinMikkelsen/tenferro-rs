@@ -19,11 +19,19 @@
 - The tprims linalg adapter in `ext/tenferro-cpu-tprims` is removed with its `tprims-linalg`
   dependency; the injectable-kernel slot itself (`cpu_kernels`) is unchanged.
 
+- Maintainer decision: under `Auto`, the families that did not fan out before (everything but
+  packed LU) fan out only when `max(rows, cols) <= 64` (`AUTO_FAN_OUT_MAX_ITEM_DIM`,
+  crate-private, not a `CpuBatchThresholds` knob). Lanes help many small items; for a large item
+  faer's parallelism inside the item is the better use of the budget, and item counts alone
+  cannot tell the cases apart, so above the guard `Auto` keeps the pre-change behaviour. The guard
+  is provisional pending the work-model thread policy for CPU linalg (#2000). Forced strategies
+  and packed LU are unchanged.
+
 ## Verification conclusions and constraints
 - Intended behaviour change: non-LU faer families now follow the batch policy, so `Auto` fans
-  them out over the context's lanes and an unservable forced strategy is a typed error for them.
-  Its timing effect is not measured here; small-matrix batch cases in tenferro-benchmark are the
-  follow-up evidence.
+  small-item batches out over the context's lanes and an unservable forced strategy is a typed
+  error for them. Its timing effect is not measured here; small-matrix batch cases in
+  tenferro-benchmark are the follow-up evidence.
 - Steady-state allocation ceilings (`tests/cpu_linalg_allocation.rs`) were recorded on the
   pre-move main and lowered where the batched providers allocate less. Four faer cases rose by
   one allocation, each caused inside the provider and marked in the ceiling table: the solve

@@ -116,8 +116,16 @@ typed error. `tlinalg` runs the lanes as tasks on the pool the context hands it,
 each lane sequential; it never calls back into tenferro from a lane, so it needs
 no outer-lane execution contexts. Before the extraction only packed LU/solve
 followed the policy and every other faer family looped over its batch serially;
-under `Auto` those families now fan out too, and a forced strategy the route
-cannot serve is now a typed error for them as well. On the LAPACK route the
+those families now follow it too, and a forced strategy the route cannot serve
+is now a typed error for them as well. Under `Auto` they fan out only when one
+item is small, `max(rows, cols) <= 64` (the crate-private
+`AUTO_FAN_OUT_MAX_ITEM_DIM`, wrapped around the plan by `lane_plan_for_item`):
+lanes pay off for many small matrices that cannot use the budget one at a time,
+while a large matrix is better served by faer's own parallelism within the item,
+and the item-count thresholds cannot tell the two apart. Above the guard `Auto`
+keeps the pre-extraction behaviour, one lane with the context's parallelism per
+item. The guard is provisional, pending a work-model thread policy for CPU
+linalg (#2000); forced strategies and the packed-LU family ignore it. On the LAPACK route the
 provider loops over the batch serially with one workspace query per call and
 vendor-owned threading; packed LU keeps its strategy admission and the other
 families ignore the policy, as before.

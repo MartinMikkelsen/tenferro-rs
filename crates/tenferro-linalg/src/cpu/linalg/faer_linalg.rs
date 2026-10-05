@@ -477,7 +477,7 @@ fn cholesky_impl<T: FaerLinalg>(
     }
     let batch = checked_product(OP, "batch shape", batch_shape)?;
     let mut l = pooled_output::<T>(buffers, OP, "matrix", &shape)?;
-    let (par, plan) = execution(ctx, Op::Cholesky, batch)?;
+    let (par, plan) = execution(ctx, Op::Cholesky, batch, n)?;
     tlinalg::cholesky::cholesky(Op::Cholesky, raw_view(OP, view)?, &mut l, par, plan)
         .map_err(provider(Op::Cholesky))?;
     tensor_from_vec_with_template(shape, l, view.placement())
@@ -524,7 +524,7 @@ pub(crate) fn cholesky_compact_data<T: FaerLinalg>(
     let descriptor = RawStridedRef::new(input, &dims, &strides, 0).map_err(|error| {
         tenferro_tensor::Error::invalid_argument("cholesky", "layout", error.to_string())
     })?;
-    let (par, plan) = execution(ctx, Op::Cholesky, 1)?;
+    let (par, plan) = execution(ctx, Op::Cholesky, 1, n)?;
     tlinalg::cholesky::cholesky(Op::Cholesky, descriptor, &mut l, par, plan)
         .map_err(provider(Op::Cholesky))?;
     Ok(l)
@@ -563,7 +563,7 @@ fn lu_impl<T: FaerLinalg>(
     let mut l = pooled_output::<T>(buffers, OP, "L", &l_shape)?;
     let mut u = pooled_output::<T>(buffers, OP, "U", &u_shape)?;
     let mut parity = buffers.acquire_with_capacity::<T>(batch);
-    let (par, plan) = execution(ctx, Op::Lu, batch)?;
+    let (par, plan) = execution(ctx, Op::Lu, batch, m.max(n))?;
     tlinalg::lu::lu(
         Op::Lu,
         raw_view(OP, view)?,
@@ -687,7 +687,7 @@ fn full_piv_lu_impl<T: FaerLinalg>(
     let mut u = pooled_output::<T>(buffers, OP, "U", &shape)?;
     let mut q = pooled_output::<T>(buffers, OP, "permutation matrix", &shape)?;
     let mut parity = buffers.acquire_with_capacity::<T>(batch);
-    let (par, plan) = execution(ctx, Op::FullPivLu, batch)?;
+    let (par, plan) = execution(ctx, Op::FullPivLu, batch, n)?;
     tlinalg::full_piv_lu::full_piv_lu(
         Op::FullPivLu,
         raw_view(OP, view)?,
@@ -770,14 +770,14 @@ pub(crate) fn full_piv_lu_solve<T: FaerLinalg>(
     transpose_a: bool,
 ) -> tenferro_tensor::Result<TypedTensor<T>> {
     const OP: &str = "full_piv_lu_solve";
-    let (_, _, batch_shape) = solve_shapes(OP, a.shape(), b.shape(), true)?;
+    let (n, nrhs, batch_shape) = solve_shapes(OP, a.shape(), b.shape(), true)?;
     if has_zero_dim(a.shape()) || has_zero_dim(b.shape()) {
         return tensor_from_vec_with_template(b.shape().to_vec(), Vec::new(), b.placement());
     }
     let batch = checked_product(OP, "batch shape", batch_shape)?;
     let mut x = pooled_output::<T>(buffers, OP, "solution", b.shape())?;
     let (a_view, b_view) = (a.as_view(), b.as_view());
-    let (par, plan) = execution(ctx, Op::FullPivLuSolve, batch)?;
+    let (par, plan) = execution(ctx, Op::FullPivLuSolve, batch, n.max(nrhs))?;
     tlinalg::full_piv_lu::full_piv_lu_solve(
         Op::FullPivLuSolve,
         raw_view(OP, &a_view)?,
@@ -803,7 +803,7 @@ pub(crate) fn solve<T: FaerLinalg>(
     transpose_a: bool,
 ) -> tenferro_tensor::Result<TypedTensor<T>> {
     const OP: &str = "solve";
-    let (_, _, batch_shape) = solve_shapes(OP, a.shape(), b.shape(), true)?;
+    let (n, nrhs, batch_shape) = solve_shapes(OP, a.shape(), b.shape(), true)?;
     if has_zero_dim(a.shape()) || has_zero_dim(b.shape()) {
         return tensor_from_vec_with_template(b.shape().to_vec(), Vec::new(), b.placement());
     }
@@ -814,7 +814,7 @@ pub(crate) fn solve<T: FaerLinalg>(
     output.extend_from_slice(b.host_data()?);
     let a_view = a.as_view();
     let b_view = b.as_view();
-    let (par, plan) = execution(ctx, Op::Solve, batch)?;
+    let (par, plan) = execution(ctx, Op::Solve, batch, n.max(nrhs))?;
     {
         // INVARIANT: `output` is a compact copy of `b`, so `b`'s own compact layout describes it.
         let out = RawStridedMut::new(&mut output, b_view.shape(), b_view.strides(), 0).map_err(
@@ -912,7 +912,7 @@ fn solve_in_place_view<T: FaerLinalg>(
     } else {
         None
     };
-    let (par, plan) = execution(ctx, Op::Solve, 1)?;
+    let (par, plan) = execution(ctx, Op::Solve, 1, n)?;
     let out = RawStridedMut::new(out.host_storage_mut()?, &out_dims, &out_strides, out_offset)
         .map_err(|error| tenferro_tensor::Error::invalid_argument(op, "out", error.to_string()))?;
     tlinalg::lu::solve(Op::Solve, a_descriptor, rhs, out, transpose_a, par, plan).map_err(|error| {
@@ -974,14 +974,14 @@ fn triangular_solve_impl<T: FaerLinalg>(
     flags: tlinalg::triangular_solve::TriangularSolveFlags,
 ) -> tenferro_tensor::Result<TypedTensor<T>> {
     const OP: &str = "triangular_solve";
-    let (_, _, batch_shape) = solve_shapes(OP, a.shape(), b.shape(), flags.left_side)?;
+    let (n, nrhs, batch_shape) = solve_shapes(OP, a.shape(), b.shape(), flags.left_side)?;
     let placement = b.placement();
     if has_zero_dim(a.shape()) || has_zero_dim(b.shape()) {
         return tensor_from_vec_with_template(b.shape().to_vec(), Vec::new(), placement);
     }
     let batch = checked_product(OP, "batch shape", batch_shape)?;
     let mut x = pooled_output::<T>(buffers, OP, "solution", b.shape())?;
-    let (par, plan) = execution(ctx, Op::TriangularSolve, batch)?;
+    let (par, plan) = execution(ctx, Op::TriangularSolve, batch, n.max(nrhs))?;
     tlinalg::triangular_solve::triangular_solve(
         Op::TriangularSolve,
         raw_view(OP, a)?,
@@ -1099,7 +1099,7 @@ fn svd_impl<T: FaerLinalg>(
     let mut u = pooled_output::<T>(buffers, "svd", "left singular vectors", &u_shape)?;
     let mut s = pooled_output::<T>(buffers, "svd", "singular values", &s_shape)?;
     let mut vt = pooled_output::<T>(buffers, "svd", "right singular vectors", &vt_shape)?;
-    let (par, plan) = execution(ctx, Op::Svd, batch)?;
+    let (par, plan) = execution(ctx, Op::Svd, batch, m.max(n))?;
     tlinalg::svd::svd(
         Op::Svd,
         raw_view(op, view)?,
@@ -1215,7 +1215,7 @@ fn svd_values_impl<T: FaerLinalg>(
     }
     let batch = checked_product(OP, "batch shape", batch_shape)?;
     let mut s = pooled_output::<T::RealScalar>(buffers, OP, "singular values", &shape)?;
-    let (par, plan) = execution(ctx, Op::SvdValues, batch)?;
+    let (par, plan) = execution(ctx, Op::SvdValues, batch, m.max(n))?;
     T::svd_values_into(raw_view(OP, view)?, &mut s, par, plan).map_err(provider(Op::SvdValues))?;
     tensor_from_vec_with_template(shape, s, view.placement())
 }
@@ -1261,7 +1261,7 @@ fn qr_impl<T: FaerLinalg>(
     let batch = checked_product(OP, "batch shape", batch_shape)?;
     let mut q = pooled_output::<T>(buffers, OP, "Q", &q_shape)?;
     let mut r = pooled_output::<T>(buffers, OP, "R", &r_shape)?;
-    let (par, plan) = execution(ctx, Op::Qr, batch)?;
+    let (par, plan) = execution(ctx, Op::Qr, batch, m.max(n))?;
     tlinalg::qr::qr(Op::Qr, raw_view(OP, view)?, &mut q, &mut r, par, plan)
         .map_err(provider(Op::Qr))?;
     Ok(vec![
@@ -1369,7 +1369,7 @@ fn rank_revealing_qr_impl<T: FaerLinalg>(
     let mut r = pooled_output::<T>(buffers, OP, "R", &r_shape)?;
     let mut permutation = Vec::with_capacity(checked_product(OP, "permutation", &p_shape)?);
     if batch > 0 && !(0..batch).any(is_zero) {
-        let (par, plan) = execution(ctx, Op::RankRevealingQr, batch)?;
+        let (par, plan) = execution(ctx, Op::RankRevealingQr, batch, m.max(n))?;
         tlinalg::qr::rank_revealing_qr(
             Op::RankRevealingQr,
             raw_view(OP, view)?,
@@ -1384,7 +1384,7 @@ fn rank_revealing_qr_impl<T: FaerLinalg>(
         // Some item is zero, and the provider is never asked to factor one: every other item is
         // factored on its own and the zero items get the canonical result, in batch order. Only
         // this rare case pays one provider call per item.
-        let (par, plan) = execution(ctx, Op::RankRevealingQr, 1)?;
+        let (par, plan) = execution(ctx, Op::RankRevealingQr, 1, m.max(n))?;
         let storage = view.host_storage()?;
         let dims = [m, n];
         let strides = [view.strides()[0], view.strides()[1]];
@@ -1487,7 +1487,7 @@ fn eigh_impl<T: FaerLinalg>(
     let batch = checked_product(OP, "batch shape", batch_shape)?;
     let mut values = pooled_output::<T>(buffers, OP, "eigenvalues", &values_shape)?;
     let mut vectors = pooled_output::<T>(buffers, OP, "eigenvectors", &vectors_shape)?;
-    let (par, plan) = execution(ctx, Op::Eigh, batch)?;
+    let (par, plan) = execution(ctx, Op::Eigh, batch, n)?;
     tlinalg::eigh::eigh(
         Op::Eigh,
         raw_view(OP, view)?,
@@ -1533,7 +1533,7 @@ fn eigh_values_impl<T: FaerLinalg>(
     }
     let batch = checked_product(OP, "batch shape", batch_shape)?;
     let mut values = pooled_output::<T::RealScalar>(buffers, OP, "eigenvalues", &shape)?;
-    let (par, plan) = execution(ctx, Op::EighValues, batch)?;
+    let (par, plan) = execution(ctx, Op::EighValues, batch, n)?;
     T::eigh_values_into(raw_view(OP, view)?, &mut values, par, plan)
         .map_err(provider(Op::EighValues))?;
     tensor_from_vec_with_template(shape, values, view.placement())
@@ -1602,7 +1602,7 @@ fn eig_impl<T: FaerEig>(
     } else {
         Vec::new()
     };
-    let (par, plan) = execution(ctx, provider_op, batch)?;
+    let (par, plan) = execution(ctx, provider_op, batch, n)?;
     T::eig_batch(
         raw_view(op, view)?,
         &mut values,
@@ -1760,7 +1760,7 @@ fn compact_factor_data<T: FaerLinalg>(
     cols: usize,
 ) -> tenferro_tensor::Result<Vec<T>> {
     let mut coeff = Vec::new();
-    let (par, plan) = execution(ctx, Op::HouseholderQr, 1)?;
+    let (par, plan) = execution(ctx, Op::HouseholderQr, 1, rows.max(cols))?;
     tlinalg::householder::compact_factor(
         Op::HouseholderQr,
         rows,
@@ -1789,7 +1789,7 @@ fn apply_reflectors_data<T: FaerLinalg>(
     k: usize,
     transpose: bool,
 ) -> tenferro_tensor::Result<()> {
-    let (par, plan) = execution(ctx, Op::HouseholderQr, 1)?;
+    let (par, plan) = execution(ctx, Op::HouseholderQr, 1, rows.max(a_cols).max(cols))?;
     tlinalg::householder::apply_reflectors(
         Op::HouseholderQr,
         tlinalg::householder::ReflectorShape {

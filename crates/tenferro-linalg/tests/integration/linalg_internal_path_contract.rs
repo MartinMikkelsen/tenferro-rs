@@ -449,7 +449,7 @@ fn cpu_general_eig_values_only_paths_do_not_request_vectors() {
     );
     let faer_values = source_section(&faer_source, "pub(crate) fn eig_values(", "\n}\n");
     assert!(
-        faer_values.contains(", false)") && !faer_values.contains(", true)"),
+        faer_values.contains("false") && !faer_values.contains("true"),
         "Faer eig_values should not request eigenvectors"
     );
 }

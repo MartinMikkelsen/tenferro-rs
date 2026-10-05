@@ -84,8 +84,53 @@ pub(crate) fn lane_plan<'a>(
     }
 }
 
-/// The resolved `(Parallel, LanePlan)` pair one batched call takes.
+/// Largest per-item matrix dimension, `max(rows, cols)`, for which `Auto` may fan a batch of the
+/// families other than packed LU out over lanes.
+///
+/// Provisional guard pending a work-model thread policy for CPU linalg
+/// (tensor4all/tenferro-rs#2000). Before the batched extraction only the packed-LU family fanned
+/// out; every other family ran its batch serially with the context's parallelism inside each item.
+/// Lane fan-out pays off for many small matrices, where one item cannot use the budget, but for a
+/// large matrix faer's own parallelism over one item is the better use of the threads, and the
+/// item-count thresholds alone cannot tell the two apart. So above this size `Auto` keeps exactly
+/// the pre-extraction behaviour. Forced strategies are unaffected.
+pub(crate) const AUTO_FAN_OUT_MAX_ITEM_DIM: usize = 64;
+
+/// [`lane_plan`] for a family whose `Auto` fan-out is limited to small items.
+///
+/// Under `Auto` an item with `max(rows, cols)` above [`AUTO_FAN_OUT_MAX_ITEM_DIM`] runs on one
+/// lane with the context's parallelism; every other case, including every forced strategy, is
+/// [`lane_plan`]'s. The packed-LU family keeps [`lane_plan`] itself.
+pub(crate) fn lane_plan_for_item<'a>(
+    ctx: &CpuExecutionContext<'a>,
+    op: Op,
+    batch: usize,
+    max_item_dim: usize,
+) -> tenferro_tensor::Result<LanePlan<'a>> {
+    let plan = lane_plan(ctx, op, batch)?;
+    let auto = batch <= 1 || ctx.batch_policy().strategy() == CpuBatchStrategy::Auto;
+    if auto && max_item_dim > AUTO_FAN_OUT_MAX_ITEM_DIM {
+        return Ok(LanePlan::single(parallel_from(ctx)));
+    }
+    Ok(plan)
+}
+
+/// The resolved `(Parallel, LanePlan)` pair one batched call of a non-packed-LU family takes;
+/// `max_item_dim` is `max(rows, cols)` of one item (see [`lane_plan_for_item`]).
 pub(crate) fn execution<'a>(
+    ctx: &CpuExecutionContext<'a>,
+    op: Op,
+    batch: usize,
+    max_item_dim: usize,
+) -> tenferro_tensor::Result<(Parallel<'a>, LanePlan<'a>)> {
+    Ok((
+        parallel_from(ctx),
+        lane_plan_for_item(ctx, op, batch, max_item_dim)?,
+    ))
+}
+
+/// The `(Parallel, LanePlan)` pair of the packed-LU family, which keeps [`lane_plan`] unchanged.
+fn packed_lu_execution<'a>(
     ctx: &CpuExecutionContext<'a>,
     op: Op,
     batch: usize,
@@ -103,7 +148,7 @@ pub(crate) fn factor_batch<T: FaerScalar>(
     pivots: &mut [i32],
     parity: &mut [T],
 ) -> tenferro_tensor::Result<()> {
-    let (par, plan) = execution(ctx, op, parity.len())?;
+    let (par, plan) = packed_lu_execution(ctx, op, parity.len())?;
     factor(op, m, n, lu, pivots, parity, par, plan).map_err(|error| map_error(op, error))
 }
 
@@ -132,7 +177,7 @@ pub(crate) fn solve_prepared_batch<T: FaerScalar>(
         validate_pivots(Op::LuSolvePrepared, n, pivots)
             .map_err(|error| map_error(Op::LuSolvePrepared, error))?;
     }
-    let (par, plan) = execution(ctx, op, batch)?;
+    let (par, plan) = packed_lu_execution(ctx, op, batch)?;
     if !has_rhs {
         return Ok(());
     }
@@ -173,7 +218,7 @@ pub(crate) fn factor_solve_batch<T: FaerScalar>(
     output: &mut [T],
 ) -> tenferro_tensor::Result<()> {
     let batch = pivots.len().checked_div(n).unwrap_or(0);
-    let (par, plan) = execution(ctx, op, batch)?;
+    let (par, plan) = packed_lu_execution(ctx, op, batch)?;
     factor_solve(op, n, nrhs, packed_lu, pivots, output, par, plan)
         .map_err(|error| map_error(op, error))
 }

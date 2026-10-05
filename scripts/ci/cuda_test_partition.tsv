@@ -1030,6 +1030,8 @@ host	tenferro-linalg	cpu::tests::faer_lanes::batched_faer_lanes_reproduce_the_se
 host	tenferro-linalg	cpu::tests::faer_lanes::batched_faer_lanes_report_a_singular_member
 host	tenferro-linalg	traced::tests::p_norm_rejects_zero_and_non_finite_orders
 host	tenferro-linalg	cpu::tests::faer_lanes::forced_batch_strategies_reproduce_the_serial_batch_or_fail_typed
+host	tenferro-linalg	cpu::tests::faer_lanes::auto_fans_out_only_small_items_outside_packed_lu
+host	tenferro-linalg	cpu::tests::faer_lanes::guarded_auto_batches_match_the_serial_results
 host	tenferro-linalg::integration	backend_errors::cholesky_rejects_rank_less_than_two_even_when_zero_dim
 host	tenferro-linalg::integration	backend_errors::cpu_linalg_rejects_backend_buffers_without_panicking_or_downloading
 host	tenferro-linalg::integration	backend_errors::cpu_linalg_rejects_backend_rhs_before_zero_dim_fast_paths
