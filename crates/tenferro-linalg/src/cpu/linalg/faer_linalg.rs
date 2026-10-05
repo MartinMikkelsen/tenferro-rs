@@ -35,7 +35,6 @@ pub(crate) trait FaerLinalg:
 
     fn parity_one() -> Self;
     fn is_finite(self) -> bool;
-    fn magnitude(self) -> f64;
     fn one() -> Self;
     fn r_phase(diagonal: Self) -> Self;
     fn q_phase(diagonal: Self) -> Self;
@@ -73,7 +72,6 @@ macro_rules! impl_faer_linalg {
         $faer_one:expr,
         |$d:ident| $r_phase:expr,
         |$q:ident| $q_phase:expr,
-        |$m:ident| $magnitude:expr,
         |$f:ident| $is_finite:expr,
         $to_faer:ident,
         $to_faer_mut:ident
@@ -88,11 +86,6 @@ macro_rules! impl_faer_linalg {
             fn is_finite(self) -> bool {
                 let $f = self;
                 $is_finite
-            }
-
-            fn magnitude(self) -> f64 {
-                let $m = self;
-                $magnitude
             }
 
             fn one() -> Self {
@@ -218,7 +211,6 @@ impl_faer_linalg!(
     1.0,
     |d| if d < 0.0 { -1.0 } else { 1.0 },
     |d| if d < 0.0 { -1.0 } else { 1.0 },
-    |value| value.abs() as f64,
     |value| value.is_finite(),
     same_slice,
     same_slice_mut
@@ -230,7 +222,6 @@ impl_faer_linalg!(
     1.0,
     |d| if d < 0.0 { -1.0 } else { 1.0 },
     |d| if d < 0.0 { -1.0 } else { 1.0 },
-    |value| value.abs(),
     |value| value.is_finite(),
     same_slice,
     same_slice_mut
@@ -256,7 +247,6 @@ impl_faer_linalg!(
             d / norm
         }
     },
-    |value| value.norm() as f64,
     |value| value.re.is_finite() && value.im.is_finite(),
     complex32_to_faer_slice,
     complex32_to_faer_slice_mut
@@ -282,7 +272,6 @@ impl_faer_linalg!(
             d / norm
         }
     },
-    |value| value.norm(),
     |value| value.re.is_finite() && value.im.is_finite(),
     complex64_to_faer_slice,
     complex64_to_faer_slice_mut
@@ -1287,63 +1276,13 @@ pub(crate) fn qr_view<T: FaerLinalg>(
     qr_impl(ctx, buffers, &view)
 }
 
-/// The storage offset of batch item `index` of a rank-`2 + B` view (first batch axis fastest).
-fn item_offset<T: 'static>(view: &TypedTensorView<'_, T>, index: usize) -> isize {
-    let mut rest = index;
-    let mut offset = view.offset();
-    for (&dim, &stride) in view.shape()[2..].iter().zip(&view.strides()[2..]) {
-        // INVARIANT: `index < batch` and every batch dim is nonzero here, so `rest % dim` is a
-        // valid index whose offset the view's own construction validated.
-        offset += (rest % dim) as isize * stride;
-        rest /= dim;
-    }
-    offset
-}
-
-/// Screen every item of a rank-revealing QR batch before it is factored.
-///
-/// A non-finite entry is an error for the lowest such item, as the per-item route reported it.
-/// The result records which items are entirely zero: those are not factored, because the canonical
-/// zero-rank result is defined for them. `None` means no item is zero, which needs no allocation.
-fn screen_rank_revealing_items<T: FaerLinalg>(
-    op: &'static str,
-    view: &TypedTensorView<'_, T>,
-    batch: usize,
-) -> tenferro_tensor::Result<Option<Vec<bool>>> {
-    let storage = view.host_storage()?;
-    let (m, n) = (view.shape()[0], view.shape()[1]);
-    let (row_stride, col_stride) = (view.strides()[0], view.strides()[1]);
-    let mut zero_items: Option<Vec<bool>> = None;
-    for index in 0..batch {
-        let base = item_offset(view, index);
-        let mut all_zero = true;
-        for col in 0..n {
-            for row in 0..m {
-                // INVARIANT: the view validated every reachable offset against its storage.
-                let value = storage
-                    [(base + row as isize * row_stride + col as isize * col_stride) as usize];
-                if !value.is_finite() {
-                    return Err(crate::error::into_tensor_error(
-                        op,
-                        crate::Error::NonFinite { op, role: "input" },
-                    ));
-                }
-                all_zero &= value.magnitude() == 0.0;
-            }
-        }
-        if all_zero {
-            zero_items.get_or_insert_with(|| vec![false; batch])[index] = true;
-        }
-    }
-    Ok(zero_items)
-}
-
 /// Column-pivoted QR with the host's rank decision.
 ///
-/// The host screens every item before the provider runs, as before the move: a non-finite entry is
-/// an error, and an all-zero item is not factored but gets the canonical zero-rank result (leading
-/// identity columns of `Q`, zero `R`, identity permutation, rank zero). The provider factors the
-/// batch in one call; the host then decides each rank from the `R` diagonal.
+/// The host screens every item for non-finite entries before the provider runs (the same screen
+/// the LAPACK route applies, so both report the same error first). The provider factors the whole
+/// batch in one call and gives an all-zero item the canonical zero-rank factors (leading identity
+/// columns of `Q`, zero `R`, identity permutation); the host then decides each rank from the `R`
+/// diagonal, which is zero for such an item.
 fn rank_revealing_qr_impl<T: FaerLinalg>(
     ctx: &CpuExecutionContext<'_>,
     buffers: &mut BufferPool,
@@ -1359,16 +1298,12 @@ fn rank_revealing_qr_impl<T: FaerLinalg>(
     let q_shape = matrix_with_batch_shape(m, k, batch_shape);
     let r_shape = matrix_with_batch_shape(k, n, batch_shape);
     let p_shape = vector_with_batch_shape(n, batch_shape);
-    let zero_items = screen_rank_revealing_items(OP, view, batch)?;
-    let is_zero = |index: usize| {
-        // An empty matrix is all zero by the same rule, so it is never factored either.
-        m == 0 || n == 0 || zero_items.as_ref().is_some_and(|zero| zero[index])
-    };
+    super::rank_revealing_qr::screen_non_finite(OP, view, batch, |value: T| value.is_finite())?;
 
     let mut q = pooled_output::<T>(buffers, OP, "Q", &q_shape)?;
     let mut r = pooled_output::<T>(buffers, OP, "R", &r_shape)?;
     let mut permutation = Vec::with_capacity(checked_product(OP, "permutation", &p_shape)?);
-    if batch > 0 && !(0..batch).any(is_zero) {
+    if batch > 0 {
         let (par, plan) = execution(ctx, Op::RankRevealingQr, batch, m.max(n))?;
         tlinalg::qr::rank_revealing_qr(
             Op::RankRevealingQr,
@@ -1380,61 +1315,10 @@ fn rank_revealing_qr_impl<T: FaerLinalg>(
             plan,
         )
         .map_err(provider(Op::RankRevealingQr))?;
-    } else if batch > 0 {
-        // Some item is zero, and the provider is never asked to factor one: every other item is
-        // factored on its own and the zero items get the canonical result, in batch order. Only
-        // this rare case pays one provider call per item.
-        let (par, plan) = execution(ctx, Op::RankRevealingQr, 1, m.max(n))?;
-        let storage = view.host_storage()?;
-        let dims = [m, n];
-        let strides = [view.strides()[0], view.strides()[1]];
-        let (mut item_q, mut item_r, mut item_p) = (Vec::new(), Vec::new(), Vec::new());
-        for index in 0..batch {
-            if is_zero(index) {
-                for col in 0..k {
-                    for row in 0..m {
-                        q.push(if row == col { T::one() } else { T::default() });
-                    }
-                }
-                r.resize(r.len() + k * n, T::default());
-                permutation.extend(super::rank_revealing_qr::identity_permutation(n)?);
-                continue;
-            }
-            let item = RawStridedRef::new(storage, &dims, &strides, item_offset(view, index))
-                .map_err(|error| {
-                    tenferro_tensor::Error::invalid_argument(OP, "layout", error.to_string())
-                })?;
-            tlinalg::qr::rank_revealing_qr(
-                Op::RankRevealingQr,
-                item,
-                &mut item_q,
-                &mut item_r,
-                &mut item_p,
-                par,
-                plan,
-            )
-            .map_err(provider(Op::RankRevealingQr))?;
-            q.extend_from_slice(&item_q);
-            r.extend_from_slice(&item_r);
-            permutation.extend_from_slice(&item_p);
-        }
     }
-    let mut ranks = Vec::with_capacity(batch);
-    // An empty `R` (k == 0 or n == 0) belongs to an all-zero item, whose rank is zero; it is also
-    // not a valid `chunks_exact` size.
-    if k > 0 && n > 0 {
-        for (index, r_item) in r.chunks_exact(k * n).enumerate() {
-            ranks.push(if is_zero(index) {
-                0
-            } else {
-                super::rank_revealing_qr::prefix_rank(
-                    (0..k).map(|diagonal| tlinalg::qr::magnitude(r_item[diagonal + diagonal * k])),
-                    options,
-                )?
-            });
-        }
-    }
-    ranks.resize(batch, 0);
+    let ranks = super::rank_revealing_qr::batch_ranks(&r, k, n, batch, options, |value: T| {
+        tlinalg::qr::magnitude(value)
+    })?;
     Ok(crate::RankRevealingQrResult {
         q: tensor_from_vec_with_template(q_shape, q, placement)?,
         r: tensor_from_vec_with_template(r_shape, r, placement)?,

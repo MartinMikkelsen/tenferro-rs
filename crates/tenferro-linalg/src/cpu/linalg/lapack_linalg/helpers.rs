@@ -36,6 +36,8 @@ pub(crate) trait LapackLinalg:
     fn q_phase(diagonal: Self) -> Self;
     /// `|x|`, as the rank decision compares it.
     fn rank_magnitude(self) -> f64;
+    /// Whether every component is finite (the rank-revealing QR input screen).
+    fn is_finite_value(self) -> bool;
     /// Real values in this scalar type, reusing the buffer when the scalar is real.
     fn values_as_scalar(buffers: &mut BufferPool, values: Vec<Self::RealScalar>) -> Vec<Self>;
     /// Wrap a general-eigendecomposition output as an erased tensor.
@@ -384,6 +386,10 @@ macro_rules! impl_real_lapack {
                 tlinalg_blas::magnitude(self)
             }
 
+            fn is_finite_value(self) -> bool {
+                self.is_finite()
+            }
+
             fn values_as_scalar(_buffers: &mut BufferPool, values: Vec<Self>) -> Vec<Self> {
                 values
             }
@@ -460,6 +466,10 @@ macro_rules! impl_complex_lapack {
 
             fn rank_magnitude(self) -> f64 {
                 tlinalg_blas::magnitude(self)
+            }
+
+            fn is_finite_value(self) -> bool {
+                self.re.is_finite() && self.im.is_finite()
             }
 
             fn values_as_scalar(buffers: &mut BufferPool, values: Vec<$real>) -> Vec<Self> {

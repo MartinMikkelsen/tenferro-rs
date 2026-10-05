@@ -103,7 +103,8 @@ the batch loop, and returns compact column-major, batch-contiguous outputs. The
 host keeps shape validation with tenferro's error shapes, empty and zero-batch
 results, pooled output allocation, tensor construction, negative-stride
 rejection (a borrowed operand with a negative stride is gathered once into a
-compact copy), the QR gauges, the rank decision of rank-revealing QR, and the
+compact copy), the QR gauges, the rank decision of rank-revealing QR and its
+non-finite input screen (both routes screen before the provider runs), and the
 compact Householder QR state compositions (append, from-factors, `R`,
 `Q` columns) built on the providers' reflector kernels.
 

@@ -371,8 +371,9 @@ pub(crate) fn qr<T: LapackLinalg>(
 
 /// Column-pivoted QR with the host's rank decision.
 ///
-/// The provider screens non-finite input, gives an all-zero item the canonical zero-rank factors
-/// and factors the rest in one batched call; the host decides each rank from the `R` diagonal.
+/// The host screens non-finite input first (as the faer route does, so both report it first); the
+/// provider gives an all-zero item the canonical zero-rank factors and factors the rest in one
+/// batched call; the host decides each rank from the `R` diagonal.
 pub(crate) fn rank_revealing_qr<T: LapackLinalg>(
     buffers: &mut BufferPool,
     input: &TypedTensor<T>,
@@ -387,12 +388,14 @@ pub(crate) fn rank_revealing_qr<T: LapackLinalg>(
     let r_shape = matrix_with_batch_shape(k, n, batch_shape);
     let p_shape = vector_with_batch_shape(n, batch_shape);
     let batch = checked_product(OP, "batch shape", batch_shape)?;
+    let view = input.as_view();
+    crate::cpu::linalg::rank_revealing_qr::screen_non_finite(OP, &view, batch, |value: T| {
+        value.is_finite_value()
+    })?;
     let mut q = pooled_output::<T>(buffers, OP, "Q", &q_shape)?;
     let mut r = pooled_output::<T>(buffers, OP, "R", &r_shape)?;
     let mut permutation = Vec::with_capacity(checked_product(OP, "permutation", &p_shape)?);
-    let mut ranks = Vec::with_capacity(batch);
     if batch > 0 {
-        let view = input.as_view();
         T::rank_revealing_qr(
             buffers,
             super::super::raw_view(OP, &view)?,
@@ -403,18 +406,15 @@ pub(crate) fn rank_revealing_qr<T: LapackLinalg>(
             },
         )
         .map_err(provider(Op::RankRevealingQr))?;
-        // An empty `R` (k == 0 or n == 0) belongs to an all-zero item, whose rank is zero; it is
-        // also not a valid `chunks_exact` size.
-        if k > 0 && n > 0 {
-            for r_item in r.chunks_exact(k * n) {
-                ranks.push(crate::cpu::linalg::rank_revealing_qr::prefix_rank(
-                    (0..k).map(|diagonal| r_item[diagonal + diagonal * k].rank_magnitude()),
-                    options,
-                )?);
-            }
-        }
-        ranks.resize(batch, 0);
     }
+    let ranks = crate::cpu::linalg::rank_revealing_qr::batch_ranks(
+        &r,
+        k,
+        n,
+        batch,
+        options,
+        |value: T| value.rank_magnitude(),
+    )?;
     Ok(crate::RankRevealingQrResult {
         q: tensor_from_vec_with_template(q_shape, q, input)?,
         r: tensor_from_vec_with_template(r_shape, r, input)?,
