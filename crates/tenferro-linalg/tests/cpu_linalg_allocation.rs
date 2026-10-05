@@ -3,7 +3,7 @@
 //! Every family that moves out of `tenferro-linalg` needs a recorded steady-state allocation
 //! baseline *before* it moves, or a move that quietly starts reacquiring scratch per call is
 //! invisible. The packed-LU family (`lu_factor`, `lu_solve_prepared`, `lu_factor_solve`) landed
-//! this way; the SVD family is next, so its faer route is measured here too.
+//! this way, then the SVD family; the remaining families are recorded below before they move.
 //!
 //! This target owns the process allocator, so it must stay a separate test binary. Counts are
 //! steady-state: the pool is primed by warm-up calls first, because a cold first call legitimately
@@ -21,7 +21,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use num_complex::Complex64;
 use tenferro_cpu::{with_cpu_exec_session, CpuBackend, CpuBackendKind};
-use tenferro_linalg::{LinalgBackend, TensorLinalgExt};
+use tenferro_linalg::{LinalgBackend, RankRevealingQrOptions, TensorLinalgExt};
 use tenferro_tensor::{BackendSession, BackendSessionHost, Tensor, TypedTensor};
 
 /// Counts allocations and live bytes while armed.
@@ -141,6 +141,36 @@ fn f64_tall(m: usize, n: usize) -> Tensor {
     Tensor::from_typed::<f64>(TypedTensor::from_vec_col_major(vec![m, n], data).unwrap())
 }
 
+/// A symmetric (Hermitian) positive-definite `n x n` matrix, for Cholesky and `eigh`.
+fn f64_spd(n: usize) -> Tensor {
+    let data = (0..n * n)
+        .map(|index| {
+            let (row, col) = (index % n, index / n);
+            if row == col {
+                n as f64 + 1.0
+            } else {
+                0.25 / (1.0 + row.abs_diff(col) as f64)
+            }
+        })
+        .collect();
+    Tensor::from_typed::<f64>(TypedTensor::from_vec_col_major(vec![n, n], data).unwrap())
+}
+
+/// A Hermitian matrix with a dominant real diagonal.
+fn c64_hermitian(n: usize) -> Tensor {
+    let data = (0..n * n)
+        .map(|index| {
+            let (row, col) = (index % n, index / n);
+            match row.cmp(&col) {
+                std::cmp::Ordering::Equal => Complex64::new(n as f64 + 1.0, 0.0),
+                std::cmp::Ordering::Less => Complex64::new(0.25, 0.125),
+                std::cmp::Ordering::Greater => Complex64::new(0.25, -0.125),
+            }
+        })
+        .collect();
+    Tensor::from_typed::<Complex64>(TypedTensor::from_vec_col_major(vec![n, n], data).unwrap())
+}
+
 fn c64_matrix(n: usize) -> Tensor {
     let data = sample_real(n)
         .into_iter()
@@ -210,9 +240,51 @@ const F64_LU_CEILINGS: &[(&str, usize)] = &[
     ("faer/svdvals/complex32", 5),
 ];
 
+/// Pre-move baselines for the families that follow SVD and packed LU out of `tenferro-linalg`,
+/// measured through the public tensor routes on both CPU kinds before either route switches.
+const REMAINING_FAMILY_CEILINGS: &[(&str, usize)] = &[
+    ("faer/cholesky/48", 4),
+    ("faer/triangular_solve/48", 2),
+    ("faer/lu/48", 13),
+    ("faer/full_piv_lu/48", 17),
+    ("faer/full_piv_lu_solve/48", 10),
+    ("faer/solve/48", 8),
+    ("faer/qr/48", 11),
+    ("faer/qr/tall", 11),
+    ("faer/householder_qr/tall", 73),
+    ("faer/rank_revealing_qr/tall", 15),
+    ("faer/eigh/48", 9),
+    ("faer/eigvalsh/48", 5),
+    ("faer/eig/48", 10),
+    ("faer/eigvals/48", 6),
+    ("faer/solve/complex32", 8),
+    ("faer/qr/complex32", 11),
+    ("faer/eigh/complex32", 11),
+    ("faer/eig/complex32", 9),
+    ("blas/cholesky/48", 3),
+    ("blas/triangular_solve/48", 2),
+    ("blas/lu/48", 12),
+    ("blas/full_piv_lu/48", 16),
+    ("blas/full_piv_lu_solve/48", 5),
+    ("blas/solve/48", 5),
+    ("blas/qr/48", 8),
+    ("blas/qr/tall", 8),
+    ("blas/householder_qr/tall", 4),
+    ("blas/rank_revealing_qr/tall", 14),
+    ("blas/eigh/48", 7),
+    ("blas/eigvalsh/48", 4),
+    ("blas/eig/48", 12),
+    ("blas/eigvals/48", 10),
+    ("blas/solve/complex32", 5),
+    ("blas/qr/complex32", 8),
+    ("blas/eigh/complex32", 8),
+    ("blas/eig/complex32", 11),
+];
+
 fn ceiling(name: &str) -> usize {
     F64_LU_CEILINGS
         .iter()
+        .chain(REMAINING_FAMILY_CEILINGS)
         .find(|(case, _)| *case == name)
         .map(|(_, ceiling)| *ceiling)
         .unwrap_or_else(|| panic!("no recorded allocation ceiling for {name}"))
@@ -357,6 +429,85 @@ fn cpu_linalg_routes_take_their_scratch_from_the_session_buffer_pool() {
         },
     );
 
+    assert!(
+        failures.is_empty(),
+        "CPU linalg routes allocate more per call than the recorded ceilings:\n{}",
+        failures.join("\n")
+    );
+}
+
+/// Every remaining family on one CPU kind, through the public tensor routes.
+fn check_remaining_families(host: &mut CpuBackend, kind: &str, failures: &mut Vec<String>) {
+    let a = f64_matrix(48);
+    let spd = f64_spd(48);
+    let tall = f64_tall(64, 24);
+    let c = c64_matrix(32);
+    let herm = c64_hermitian(32);
+    let name = |case: &str| format!("{kind}/{case}");
+    check(host, failures, &name("cholesky/48"), |session| {
+        spd.cholesky(session).unwrap();
+    });
+    check(host, failures, &name("triangular_solve/48"), |session| {
+        spd.triangular_solve(&a, true, true, false, false, session)
+            .unwrap();
+    });
+    check(host, failures, &name("lu/48"), |session| {
+        a.lu(session).unwrap();
+    });
+    check(host, failures, &name("full_piv_lu/48"), |session| {
+        a.full_piv_lu(session).unwrap();
+    });
+    check(host, failures, &name("full_piv_lu_solve/48"), |session| {
+        a.full_piv_lu_solve(&a, session).unwrap();
+    });
+    check(host, failures, &name("solve/48"), |session| {
+        a.solve(&a, session).unwrap();
+    });
+    check(host, failures, &name("qr/48"), |session| {
+        a.qr(session).unwrap();
+    });
+    check(host, failures, &name("qr/tall"), |session| {
+        tall.qr(session).unwrap();
+    });
+    check(host, failures, &name("householder_qr/tall"), |session| {
+        tall.householder_qr(session).unwrap();
+    });
+    check(host, failures, &name("rank_revealing_qr/tall"), |session| {
+        tall.rank_revealing_qr(RankRevealingQrOptions::default(), session)
+            .unwrap();
+    });
+    check(host, failures, &name("eigh/48"), |session| {
+        spd.eigh(session).unwrap();
+    });
+    check(host, failures, &name("eigvalsh/48"), |session| {
+        spd.eigvalsh(session).unwrap();
+    });
+    check(host, failures, &name("eig/48"), |session| {
+        a.eig(session).unwrap();
+    });
+    check(host, failures, &name("eigvals/48"), |session| {
+        a.eigvals(session).unwrap();
+    });
+    check(host, failures, &name("solve/complex32"), |session| {
+        c.solve(&c, session).unwrap();
+    });
+    check(host, failures, &name("qr/complex32"), |session| {
+        c.qr(session).unwrap();
+    });
+    check(host, failures, &name("eigh/complex32"), |session| {
+        herm.eigh(session).unwrap();
+    });
+    check(host, failures, &name("eig/complex32"), |session| {
+        c.eig(session).unwrap();
+    });
+}
+
+#[test]
+fn remaining_linalg_families_keep_their_steady_state_allocation_counts() {
+    let mut failures = Vec::new();
+    check_remaining_families(&mut faer_backend(), "faer", &mut failures);
+    #[cfg(feature = "cpu-blas")]
+    check_remaining_families(&mut blas_backend(), "blas", &mut failures);
     assert!(
         failures.is_empty(),
         "CPU linalg routes allocate more per call than the recorded ceilings:\n{}",
