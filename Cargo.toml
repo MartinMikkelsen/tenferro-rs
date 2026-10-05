@@ -119,4 +119,3 @@ strip = "symbols"
 [patch."https://github.com/tensor4all/tlinalg-rs.git"]
 tlinalg = { path = "../tlinalg-rs-rest/crates/tlinalg" }
 tlinalg-blas = { path = "../tlinalg-rs-rest/crates/tlinalg-blas" }
-
