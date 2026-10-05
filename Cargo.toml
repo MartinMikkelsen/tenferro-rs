@@ -113,9 +113,3 @@ incremental = true
 inherits = "test"
 incremental = false
 strip = "symbols"
-
-# LOCAL-DEV ONLY: build the tlinalg providers from the sibling tlinalg-rs checkout until the
-# tlinalg-rs PR merges; then drop this section and point both revs above at the merge commit.
-[patch."https://github.com/tensor4all/tlinalg-rs.git"]
-tlinalg = { path = "../tlinalg-rs-rest/crates/tlinalg" }
-tlinalg-blas = { path = "../tlinalg-rs-rest/crates/tlinalg-blas" }
