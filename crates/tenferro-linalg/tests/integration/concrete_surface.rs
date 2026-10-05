@@ -202,12 +202,15 @@ fn rank_revealing_qr_zero_and_batched_metadata() {
 
 /// Every compiled CPU provider kind, so a test runs on both the faer and LAPACK routes.
 fn rrqr_provider_backends() -> Vec<CpuBackend> {
-    let mut backends = Vec::new();
-    #[cfg(feature = "cpu-faer")]
-    backends.push(CpuBackend::with_kind(tenferro_cpu::CpuBackendKind::Faer).expect("faer backend"));
-    #[cfg(feature = "cpu-blas")]
-    backends.push(CpuBackend::with_kind(tenferro_cpu::CpuBackendKind::Blas).expect("BLAS backend"));
-    backends
+    [
+        #[cfg(feature = "cpu-faer")]
+        tenferro_cpu::CpuBackendKind::Faer,
+        #[cfg(feature = "cpu-blas")]
+        tenferro_cpu::CpuBackendKind::Blas,
+    ]
+    .into_iter()
+    .map(|kind| CpuBackend::with_kind(kind).expect("compiled CPU backend"))
+    .collect()
 }
 
 /// An all-zero item between nonzero items gets the canonical zero-rank factors from one batched
