@@ -255,9 +255,22 @@ the lowered inner graph.
 ## Planning
 
 `ContractionTree` records the pairwise contraction sequence, live operand
-labels, size dictionary, and compiled step plans. Automatic planning first asks
-omeco/TreeSA for a path. If omeco does not return one, the local self-greedy
-fallback chooses the pair with the smallest intermediate output size.
+labels, size dictionary, and compiled step plans. Automatic planning without an
+annealing schedule (`niters == 0` or empty `betas`, the default) runs the local
+deterministic greedy planner: it contracts the connected pair with the smallest
+intermediate output, breaks ties by the smallest operand index pair, and falls
+back to an outer product of the two smallest live operands only when no pair
+shares a label. This is omeco's greedy rule (`alpha = 0`, `temperature = 0`)
+with the ordering omeco adopted after 0.2.6; omeco 0.2.6 itself broke ties in
+per-process `HashMap` order, so the same spec produced different paths in
+different processes (#1963).
+
+Guarantee: for fixed subscripts, shapes and non-annealing options the planned
+path is identical in every process. `tests/integration/deterministic_path.rs`
+re-executes its test binary and compares the children's paths. With an
+annealing schedule the path comes from omeco/TreeSA, which carries no such
+guarantee until omeco's own greedy initializer is deterministic in a released
+version; if omeco returns no path, the local greedy planner is used.
 
 Planner invariants are checked with normal `Result` propagation:
 

@@ -23,6 +23,16 @@ pub(crate) struct ContractionStep {
 /// The default planner uses TreeSA with a greedy initializer and zero annealing
 /// iterations. This keeps the public API on a single optimizer family while
 /// making the default behavior effectively "greedy-only".
+///
+/// # Determinism
+///
+/// While annealing is disabled (`niters == 0` or empty `betas`, as in the
+/// default), the planned path is a function of the subscripts and shapes
+/// alone: the same spec yields the same path in every process and on every
+/// call. With an annealing schedule the path comes from omeco's TreeSA, whose
+/// annealing is seeded but whose greedy initializer (omeco 0.2.6) breaks ties
+/// in `HashMap` order, so annealed paths are not guaranteed to agree across
+/// processes.
 #[derive(Debug, Clone)]
 pub struct ContractionOptimizerOptions {
     /// Inverse-temperature schedule for TreeSA.
@@ -55,6 +65,11 @@ impl ContractionOptimizerOptions {
             Initializer::Greedy,
             self.score.clone(),
         )
+    }
+
+    /// Whether TreeSA would run any annealing iteration.
+    fn anneals(&self) -> bool {
+        self.niters > 0 && !self.betas.is_empty()
     }
 
     pub(crate) fn validate(&self) -> Result<()> {
@@ -123,11 +138,29 @@ impl ContractionTree {
     ///
     /// Uses a cost-based heuristic (greedy algorithm) to determine
     /// the pairwise contraction sequence that minimizes total operation count.
+    /// The path is deterministic: for fixed subscripts and shapes it is the
+    /// same in every process (see [`ContractionOptimizerOptions`]).
     ///
     /// # Arguments
     ///
     /// * `subscripts` — Einsum subscripts for all tensors
     /// * `shapes` — Shape of each input tensor
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_einsum::{ContractionTree, Subscripts};
+    ///
+    /// let subs = Subscripts::parse("abcdef,bf,cf,df,ef->f").unwrap();
+    /// let shapes = [&[2, 3, 2, 4, 3, 9][..], &[3, 9], &[2, 9], &[4, 9], &[3, 9]];
+    /// let tree = ContractionTree::optimize(&subs, &shapes).unwrap();
+    /// assert_eq!(tree.step_count(), 4);
+    /// // Equal-cost candidates are broken by operand index, never by hashing.
+    /// let again = ContractionTree::optimize(&subs, &shapes).unwrap();
+    /// for step in 0..tree.step_count() {
+    ///     assert_eq!(tree.step_pair(step), again.step_pair(step));
+    /// }
+    /// ```
     ///
     /// # Errors
     ///
@@ -141,10 +174,13 @@ impl ContractionTree {
     /// Automatically compute an optimized contraction order with explicit
     /// planner options.
     ///
-    /// For three or more operands, this routes planning through TreeSA using
-    /// the provided configuration. The default is greedy-initialized TreeSA
-    /// with zero annealing iterations. One or two operands need no ordering
-    /// search; their trees are built directly after validating the options.
+    /// For three or more operands with an annealing schedule (`niters > 0`
+    /// and non-empty `betas`), this routes planning through TreeSA using the
+    /// provided configuration. Without annealing, including the default
+    /// options, TreeSA would return its greedy initializer unchanged, so the
+    /// deterministic greedy planner runs directly and the path is identical in
+    /// every process. One or two operands need no ordering search; their trees
+    /// are built directly after validating the options.
     ///
     /// # Errors
     ///
@@ -166,12 +202,16 @@ impl ContractionTree {
         }
 
         let size_dict = build_size_dict(subscripts, shapes, None)?;
-        let pairs =
-            if let Some(omeco_pairs) = optimize_omeco_pairs(subscripts, &size_dict, options)? {
-                omeco_pairs
-            } else {
-                optimize_self_greedy_pairs(subscripts, &size_dict)?
-            };
+        // Without annealing TreeSA returns its greedy initializer unchanged,
+        // and omeco 0.2.6's greedy breaks ties in per-process `HashMap` order
+        // (#1963), so the deterministic greedy plans this case directly.
+        let pairs = if !options.anneals() {
+            optimize_self_greedy_pairs(subscripts, &size_dict)?
+        } else if let Some(omeco_pairs) = optimize_omeco_pairs(subscripts, &size_dict, options)? {
+            omeco_pairs
+        } else {
+            optimize_self_greedy_pairs(subscripts, &size_dict)?
+        };
         Self::from_pairs(subscripts, shapes, &pairs)
     }
 
@@ -635,52 +675,106 @@ fn candidate_contraction_cost(
     Ok(cost.max(1))
 }
 
+/// Deterministic greedy contraction order.
+///
+/// Each step contracts the connected pair (sharing at least one label) whose
+/// result is smallest, the size counting every label still needed after the
+/// pair: by another operand or by the output. Ties go to the smallest
+/// `(left, right)` operand index pair, where an intermediate takes the next
+/// index after all existing operands. When no remaining operands share a
+/// label, the two smallest indices form an outer product.
+///
+/// This is the greedy rule of omeco's `tree_greedy` with `alpha = 0` and
+/// `temperature = 0` (omeco, MIT, <https://github.com/GiggleLiu/omeco>, which
+/// ports `OMEinsumContractionOrders.jl`), with the deterministic vertex and
+/// tie ordering adopted upstream after omeco 0.2.6. omeco 0.2.6 iterates a
+/// `HashMap` to break ties, so its path differed between processes (#1963);
+/// tenferro plans its default (non-annealing) path here instead. Only the
+/// pairs whose operands changed are re-scored after each step, because the
+/// cost of any other pair is unaffected by the merge.
 fn optimize_self_greedy_pairs(
     subscripts: &Subscripts,
     size_dict: &HashMap<u32, usize>,
 ) -> Result<Vec<(usize, usize)>> {
+    use std::cmp::Reverse;
+    use std::collections::{BTreeMap, BTreeSet, BinaryHeap};
+
     #[cfg(test)]
     tests::SELF_GREEDY_CALLS.with(|count| count.set(count.get() + 1));
     let input_count = subscripts.inputs.len();
-    let mut available: Vec<usize> = (0..input_count).collect();
+    let available: Vec<usize> = (0..input_count).collect();
     let mut operand_subs: Vec<Vec<u32>> = subscripts.inputs.clone();
     let mut operand_label_sets = build_operand_label_sets(&operand_subs);
     let mut needed_label_counts =
         build_needed_label_counts(&subscripts.output, &available, &operand_label_sets);
+    let mut live: BTreeSet<usize> = available.into_iter().collect();
+    let mut label_owners: BTreeMap<u32, BTreeSet<usize>> = BTreeMap::new();
+    for (operand, labels) in operand_label_sets.iter().enumerate() {
+        for &label in labels {
+            label_owners.entry(label).or_default().insert(operand);
+        }
+    }
+
     let mut candidate_subs = Vec::new();
-    let mut pairs: Vec<(usize, usize)> = Vec::new();
+    let mut heap: BinaryHeap<Reverse<(usize, usize, usize)>> = BinaryHeap::new();
+    let mut score = |left: usize,
+                     right: usize,
+                     operand_subs: &[Vec<u32>],
+                     operand_label_sets: &[HashSet<u32>],
+                     needed_label_counts: &HashMap<u32, usize>|
+     -> Result<Reverse<(usize, usize, usize)>> {
+        let cost = candidate_contraction_cost(
+            &operand_subs[left],
+            &operand_subs[right],
+            left,
+            right,
+            CandidateCostContext {
+                operand_label_sets,
+                needed_label_counts,
+                size_dict,
+            },
+            &mut candidate_subs,
+        )?;
+        Ok(Reverse((cost, left, right)))
+    };
 
-    while available.len() > 1 {
-        let mut best_i = 0;
-        let mut best_j = 1;
-        let mut best_cost = usize::MAX;
-
-        for i in 0..available.len() {
-            for j in (i + 1)..available.len() {
-                let li = available[i];
-                let lj = available[j];
-                let cost = candidate_contraction_cost(
-                    &operand_subs[li],
-                    &operand_subs[lj],
-                    li,
-                    lj,
-                    CandidateCostContext {
-                        operand_label_sets: &operand_label_sets,
-                        needed_label_counts: &needed_label_counts,
-                        size_dict,
-                    },
-                    &mut candidate_subs,
-                )?;
-                if cost < best_cost {
-                    best_cost = cost;
-                    best_i = i;
-                    best_j = j;
-                }
+    let mut initial_pairs = BTreeSet::new();
+    for owners in label_owners.values() {
+        for &left in owners {
+            for &right in owners.range(left + 1..) {
+                initial_pairs.insert((left, right));
             }
         }
+    }
+    for (left, right) in initial_pairs {
+        heap.push(score(
+            left,
+            right,
+            &operand_subs,
+            &operand_label_sets,
+            &needed_label_counts,
+        )?);
+    }
 
-        let left = available[best_i];
-        let right = available[best_j];
+    let mut pairs: Vec<(usize, usize)> = Vec::with_capacity(input_count.saturating_sub(1));
+    while live.len() > 1 {
+        let mut chosen = None;
+        while let Some(Reverse((_, left, right))) = heap.pop() {
+            if live.contains(&left) && live.contains(&right) {
+                chosen = Some((left, right));
+                break;
+            }
+        }
+        let (left, right) = match chosen {
+            Some(pair) => pair,
+            None => {
+                let mut smallest = live.iter().copied();
+                match (smallest.next(), smallest.next()) {
+                    (Some(left), Some(right)) => (left, right),
+                    _ => break,
+                }
+            }
+        };
         pairs.push((left, right));
 
         let mut new_subs = Vec::new();
@@ -698,11 +792,33 @@ fn optimize_self_greedy_pairs(
         remove_labels_from_counts(&mut needed_label_counts, &operand_label_sets[left]);
         remove_labels_from_counts(&mut needed_label_counts, &operand_label_sets[right]);
         add_labels_to_counts(&mut needed_label_counts, &new_label_set);
+        for operand in [left, right] {
+            for label in &operand_label_sets[operand] {
+                if let Some(owners) = label_owners.get_mut(label) {
+                    owners.remove(&operand);
+                }
+            }
+        }
+        let mut neighbors = BTreeSet::new();
+        for &label in &new_subs {
+            let owners = label_owners.entry(label).or_default();
+            neighbors.extend(owners.iter().copied());
+            owners.insert(new_idx);
+        }
+        live.remove(&left);
+        live.remove(&right);
+        live.insert(new_idx);
         operand_subs.push(new_subs);
         operand_label_sets.push(new_label_set);
-        available.remove(best_j);
-        available.remove(best_i);
-        available.push(new_idx);
+        for neighbor in neighbors {
+            heap.push(score(
+                neighbor,
+                new_idx,
+                &operand_subs,
+                &operand_label_sets,
+                &needed_label_counts,
+            )?);
+        }
     }
 
     Ok(pairs)
