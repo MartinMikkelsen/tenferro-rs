@@ -126,7 +126,7 @@ public contract is the semantic graph plus runtime preparation and scheduling:
 
 - Elementwise: `Add`, `Multiply`, `Negate`, `Conj`, `Divide`, `Abs`, `Sign`,
   `Maximum`, `Minimum`, `Compare`, `Select`, `Clamp`, `Exp`, `Log`, `Sin`,
-  `Cos`, `Tanh`, `Sqrt`, `Rsqrt`, `Pow`, `Expm1`, `Log1p`
+  `Cos`, `Tanh`, `Sqrt`, `Rsqrt`, `Pow`, `Expm1`, `Log1p`, `Erf`
 - Structural: `Transpose`, `Reshape`, `BroadcastInDim`, `Convert`,
   `ExtractDiag`, `EmbedDiag`, `Tril`, `Triu`
 - Reductions: `ReduceSum`, `ReduceProd`, `ReduceMax`, `ReduceMin`

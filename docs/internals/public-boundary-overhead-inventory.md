@@ -3,7 +3,7 @@
 
 - Baseline revision: `0457a2ed0aeea21b14f4297f7f4731e09b3a0507`
 - Generation provenance: `source-derived from the current checkout; overlay/source digest is the freshness key`
-- Overlay/source digest: `3335f22b1d0997f9e8234e3e4d963551ba63e07df0a6abec7209a32613d08276`
+- Overlay/source digest: `f8eb9a937108c3cd83d3c0a623e783476df667dc8f9e6fb3af236f185a6abc09`
 
 | Family | Operation | Category | Surfaces (disposition) | Case contracts |
 |---|---|---|---|---|
@@ -40,6 +40,8 @@
 | core | `dynamic_update_slice` | indexing | concrete: follow-up, typed: follow-up, borrowed: follow-up, output_reuse: follow-up, eager: follow-up, traced: follow-up | core.dynamic_update_slice.prepared.traced |
 | core | `embed_diag` | structural | concrete: follow-up, typed: follow-up, borrowed: follow-up, output_reuse: follow-up, eager: follow-up, traced: follow-up | core.embed_diag.ordinary.concrete |
 | core | `embed_diag` | structural | concrete: follow-up, typed: follow-up, borrowed: follow-up, output_reuse: follow-up, eager: follow-up, traced: follow-up | core.embed_diag.prepared.traced |
+| core | `erf` | analytic | concrete: follow-up, typed: follow-up, borrowed: follow-up, output_reuse: follow-up, eager: follow-up, traced: follow-up | core.erf.ordinary.concrete |
+| core | `erf` | analytic | concrete: follow-up, typed: follow-up, borrowed: follow-up, output_reuse: follow-up, eager: follow-up, traced: follow-up | core.erf.prepared.traced |
 | core | `exp` | analytic | concrete: follow-up, typed: follow-up, borrowed: follow-up, output_reuse: follow-up, eager: follow-up, traced: follow-up | core.exp.ordinary.concrete |
 | core | `exp` | analytic | concrete: follow-up, typed: follow-up, borrowed: follow-up, output_reuse: follow-up, eager: follow-up, traced: follow-up | core.exp.prepared.traced |
 | core | `expm1` | analytic | concrete: follow-up, typed: follow-up, borrowed: follow-up, output_reuse: follow-up, eager: follow-up, traced: follow-up | core.expm1.ordinary.concrete |

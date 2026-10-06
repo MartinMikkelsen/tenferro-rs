@@ -46,6 +46,9 @@ subset are rejected before PJRT is called. If an operation-family API expands
 to supported standard ops, as fixed-shape N-ary einsum can, the resulting graph
 can still lower through this path.
 
+`Erf` is rejected explicitly: StableHLO has no error function (it is the CHLO
+op `chlo.erf`), so graphs using `erf`, including the exact `gelu`, do not lower.
+
 `Compare`, `Select`, `Maximum`, `Minimum`, `Clamp`, `Sign`, `Conj`, integer
 dtypes, `Bool`, and complex dtypes remain outside Phase 1. They need additional
 dtype plumbing or explicit NaN/edge-case parity tests before being enabled.

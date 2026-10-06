@@ -84,6 +84,12 @@ surfaces — see Section 10.
 | `exp` `log` `sin` `cos` `tanh` `sqrt` `rsqrt` | ✅ | ✅ |
 | `expm1` (`expm`) | ✅ | ✅ |
 | `log1p` | ✅ | ✅ |
+| `erf` | ✅ | ✅ |
+| `sigmoid` `silu` `softplus` `gelu` `gelu_tanh` | ✅ | ✅ |
+
+`erf` is real-only. The activations are composites (also on the concrete-session
+surface); their formulation and edge-case policy are specified in
+[`tensor-semantics.md`](tensor-semantics.md) Section VIII.
 
 **Parallelism.** The elementwise categories (2 and 3) are embarrassingly parallel.
 Their CPU kernels are data-parallel via rayon behind the `parallel` feature (the
@@ -96,7 +102,9 @@ parallelize automatically. For user-supplied closures, parallelism is explicit:
 | Operation | Eager | Traced |
 |---|---|---|
 | `reduce_sum` `reduce_prod` `reduce_max` `reduce_min` | ✅ | ✅ |
-| `mean` | · | · |
+| `reduce_mean` | ✅ | ✅ |
+| `softmax` `log_softmax` `masked_softmax` `masked_log_softmax` | ✅ | ✅ |
+| `layer_norm` `rms_norm` | ✅ | ✅ |
 | `argmax` / `argmin` | · | · |
 
 Reduction axes use one convention on the eager and traced surfaces:
@@ -140,6 +148,7 @@ identity.
 | `dynamic_slice` | ✅ | ✅ | |
 | `dynamic_update_slice` | · | · | |
 | `gather` | ✅ | ✅ | |
+| `take_along_axis` | ✅ | ✅ | NumPy semantics over `gather`; batch-varying indices |
 | `scatter` | ✅ | ✅ | |
 | `take` | · | · | |
 | `extract_diag` / `embed_diag` | ✅ | ✅ | |

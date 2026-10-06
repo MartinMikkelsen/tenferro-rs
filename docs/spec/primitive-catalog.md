@@ -333,6 +333,7 @@ contract; integer domain failures remain typed errors.
 | `Pow` | `x^y` |
 | `Expm1` | `exp(x) - 1` |
 | `Log1p` | `log(1 + x)` |
+| `Erf` | error function `erf(x)`; real `F32`/`F64` only |
 
 The table above is the canonical analytic seed set. Additional analytic ops
 may be added later, but they are not part of the current required list unless

@@ -52,6 +52,7 @@
           "id": "core.analytic",
           "operations": [
             "cos",
+            "erf",
             "exp",
             "expm1",
             "log",
