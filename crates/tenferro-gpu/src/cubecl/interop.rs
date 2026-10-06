@@ -875,8 +875,22 @@ fn fill_zero_span<T: 'static>(
         crate::Error::invalid_argument(FILL_ZERO_OP, "shape", "destination byte length overflows")
     })?;
     rt.set_current_cuda_context(FILL_ZERO_OP)?;
-    let ptr = offset_device_ptr::<T>(rt, prepared, offset, FILL_ZERO_OP)?;
-    rt.flush_cubecl(FILL_ZERO_OP)?;
+    let offset = usize::try_from(offset).map_err(|_| {
+        crate::Error::invalid_argument(FILL_ZERO_OP, "layout", "view offset must be nonnegative")
+    })?;
+    let offset_bytes = offset
+        .checked_mul(std::mem::size_of::<T>())
+        .ok_or_else(|| {
+            crate::Error::invalid_argument(FILL_ZERO_OP, "layout", "view byte offset overflows")
+        })?;
+    // Resolve the destination and submit pending CubeCL work in one hand-off:
+    // the memset below must not overtake queued launches that may still use
+    // memory this allocation reuses.
+    let base = rt.resolve_and_flush(prepared.into_handle(), FILL_ZERO_OP)?;
+    let addr = base.checked_add(offset_bytes as u64).ok_or_else(|| {
+        crate::Error::invalid_argument(FILL_ZERO_OP, "layout", "view device address overflows")
+    })?;
+    let ptr = cuda_device_ptr_from_addr(addr, FILL_ZERO_OP)?;
     let stream = rt.raw_cuda_stream()?;
     let cross_stream = if rt.is_current_stream_slot(&handle) {
         Vec::new()

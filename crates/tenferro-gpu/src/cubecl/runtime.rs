@@ -583,6 +583,36 @@ impl CudaRuntime {
             .download_scalar_bytes(device_addr, out, op, retained)
     }
 
+    /// Resolve `handle`'s device address on the current stream, then flush
+    /// pending CubeCL work, in one device-thread hand-off.
+    ///
+    /// This is exactly `client().get_resource(handle)` followed by
+    /// `flush_cubecl`, in that order and on the same stream, so the ordering a
+    /// raw vendor enqueue relies on is unchanged; it only saves the second
+    /// blocking round trip (#1887). It does not publish a write (that remains
+    /// tensor4all/cubecl#16).
+    pub(crate) fn resolve_and_flush(
+        &self,
+        handle: cubecl_runtime::server::Handle,
+        op: &'static str,
+    ) -> crate::Result<u64> {
+        use cubecl_runtime::server::ComputeServer;
+
+        let stream_id = StreamId::current();
+        let binding = handle.binding();
+        let resolved = self
+            .inner
+            .client
+            .with_server(move |server| {
+                let resource = server.get_resource(binding, stream_id);
+                server.flush(stream_id).map(|()| resource)
+            })
+            .ok_or_else(|| crate::Error::runtime_state(op, "CubeCL server is unavailable"))?
+            .map_err(|err| crate::Error::backend_source(op, err))?
+            .map_err(|err| crate::Error::backend_source(op, err))?;
+        Ok(resolved.resource().ptr)
+    }
+
     /// Copy `len` bytes of a CubeCL allocation into caller-owned host memory.
     ///
     /// See `CudaRuntimeState::download_into_host` for the ordering and
