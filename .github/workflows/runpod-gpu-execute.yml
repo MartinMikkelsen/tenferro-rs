@@ -33,6 +33,15 @@ on:
         required: true
       GH_APP_PRIVATE_KEY:
         required: true
+    outputs:
+      paid_path_decision:
+        description: >-
+          run (tests ran on a pod), reuse (an earlier paid gate for this tested
+          ref passed), or skip (closed PR, local GPU label, or no GPU needed)
+        value: ${{ jobs.start-runpod.outputs.paid_path_decision }}
+      reused_check_url:
+        description: The earlier successful CI GPU gate a reuse decision relied on
+        value: ${{ jobs.start-runpod.outputs.reused_check_url }}
 
 concurrency:
   group: runpod-tenferro-gpu-refs/heads/main
@@ -90,6 +99,8 @@ jobs:
       # True when this PR must not spend: merged or closed, a recorded local GPU
       # run, or a change classification that does not need GPU validation.
       paid_path_skipped: ${{ steps.paid_path.outputs.run_paid_path == 'false' }}
+      paid_path_decision: ${{ steps.paid_path.outputs.decision }}
+      reused_check_url: ${{ steps.paid_path.outputs.reused_check_url }}
 
     steps:
       - name: Require trusted parent context
@@ -106,6 +117,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ inputs.pr_number }}
+          TARGET_HEAD_SHA: ${{ inputs.target_head_sha }}
+          TESTED_REF: ${{ inputs.tenferro_ref }}
         run: |
           set -euo pipefail
           # Job-level `if`s in a called workflow do not see the caller's inputs
@@ -115,18 +128,21 @@ jobs:
           # defaults to running the paid path, which keeps validation fail-safe.
           if [ "${PR_NUMBER}" = "0" ]; then
             echo "run_paid_path=true" >> "${GITHUB_OUTPUT}"
+            echo "decision=run" >> "${GITHUB_OUTPUT}"
             echo "Trusted manual revision validation: running the paid path."
             exit 0
           fi
           pr_state="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" --jq .state)"
           if [ "${pr_state}" != "open" ]; then
             echo "run_paid_path=false" >> "${GITHUB_OUTPUT}"
+            echo "decision=skip" >> "${GITHUB_OUTPUT}"
             echo "PR #${PR_NUMBER} is ${pr_state}: skipping every paid step."
             exit 0
           fi
           if gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/labels" \
             --jq '.[].name' | grep -Fxq "gpu-validated-locally"; then
             echo "run_paid_path=false" >> "${GITHUB_OUTPUT}"
+            echo "decision=skip" >> "${GITHUB_OUTPUT}"
             echo "Label gpu-validated-locally is set: skipping every paid step."
             exit 0
           fi
@@ -141,8 +157,37 @@ jobs:
             fi
           done < "${changed_paths}"
           run_gpu="$(python3 scripts/ci/change_policy.py "${policy_args[@]}" | jq -r '.run_gpu')"
-          echo "run_paid_path=${run_gpu}" >> "${GITHUB_OUTPUT}"
           echo "Change classification requires GPU validation: ${run_gpu}."
+          if [ "${run_gpu}" != "true" ]; then
+            echo "run_paid_path=${run_gpu}" >> "${GITHUB_OUTPUT}"
+            echo "decision=skip" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+          # Repeated workflow_run deliveries pin the same merge ref (#2002).
+          # Decided here, inside the paid lock and right before spending: if
+          # the newest CI GPU gate for exactly this tested ref is a paid
+          # success, reuse it instead of provisioning again. Any lookup error
+          # answers reuse=false, so the paid path keeps running.
+          reuse_file=/tmp/paid-path-gate-reuse.txt
+          : > "${reuse_file}"
+          python3 scripts/ci/gpu_gate_reuse.py \
+            --repository "${GITHUB_REPOSITORY}" \
+            --head-sha "${TARGET_HEAD_SHA}" \
+            --tested-ref "${TESTED_REF}" \
+            --output "${reuse_file}" \
+            || echo "::warning::CI GPU gate reuse lookup crashed; the paid path runs."
+          reused_url="$(sed -n 's/^reused_check_url=//p' "${reuse_file}" | tail -1)"
+          if grep -Fxq "reuse=true" "${reuse_file}" && [ -n "${reused_url}" ]; then
+            {
+              echo "run_paid_path=false"
+              echo "decision=reuse"
+              echo "reused_check_url=${reused_url}"
+            } >> "${GITHUB_OUTPUT}"
+            echo "Tested ref ${TESTED_REF} already passed: ${reused_url}. Skipping every paid step."
+            exit 0
+          fi
+          echo "run_paid_path=true" >> "${GITHUB_OUTPUT}"
+          echo "decision=run" >> "${GITHUB_OUTPUT}"
 
       - name: Revalidate queued PR before provisioning
         # Skipping every paid step must not leave a failing job behind: this
@@ -211,6 +256,9 @@ jobs:
           PROVISION_RUNNER_LABEL: ${{ steps.vars.outputs.runner_label }}
           PROVISION_RUNNER_GROUP_ID: ${{ vars.RUNPOD_RUNNER_GROUP_ID || '1' }}
           PROVISION_KEEP_FAILED_PODS: ${{ inputs.keep_failed_pods || 'false' }}
+          # Block-buffered output stamped every provision line with the flush
+          # time, not the event time (#2002); paid sessions must be timeable.
+          PYTHONUNBUFFERED: "1"
         run: |
           set -euo pipefail
 
@@ -283,6 +331,9 @@ jobs:
           # the "SHA-256 Checksums" section of the release body).
           # Keep this pin current: GitHub rejects deprecated runner versions
           # before they can receive a job, even after CUDA smoke succeeds.
+          # .github/workflows/runner-pin-check.yml checks this pin daily
+          # against actions/runner releases; the bump procedure is the
+          # "Runner pin runbook" in docs/design/runpod-gpu-provisioning.md.
           RUNNER_VERSION="2.337.0"
           RUNNER_SHA256="70920811a4f8ad4328818682bca5c6469c1c942fab52448868071d0063816613"
           RUNNER_TARBALL="actions-runner-linux-x64-${RUNNER_VERSION}.tar.gz"
@@ -386,6 +437,7 @@ jobs:
 
     steps:
       - name: Install pod-side build dependencies
+        timeout-minutes: 4
         # These are only needed after runner registration, so a rejected
         # candidate never pays for them. zstd must land before the
         # actions/cache restore step below: the cache version hash includes the
@@ -404,7 +456,15 @@ jobs:
             pkg-config \
             libssl-dev
 
+      # Setup bounds (#2002): every step before the tests carries its own
+      # timeout, so a stalled download or restore fails within minutes on the
+      # GPU clock instead of at the 45-minute job timeout (observed: a 34-min
+      # artifact download, a 25.8-min download plus a 10.3-min runtime
+      # restore). A normal setup takes about 2.5 minutes. The cache restores
+      # also abort a stalled segment after SEGMENT_DOWNLOAD_TIMEOUT_MINS and
+      # are non-blocking, because a miss already has a fallback.
       - name: Checkout tenferro-rs
+        timeout-minutes: 3
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           repository: ${{ env.TENFERRO_REPO }}
@@ -412,12 +472,17 @@ jobs:
           path: tenferro-rs
 
       - uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88 # master (2026-07-07)
+        timeout-minutes: 3
         with:
           toolchain: stable
 
       - name: Restore CUDA/PJRT test archives
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         id: cuda_archive_restore
+        timeout-minutes: 3
+        continue-on-error: true
+        env:
+          SEGMENT_DOWNLOAD_TIMEOUT_MINS: "2"
         with:
           path: |
             tenferro-rs/${{ env.CUDA_ARCHIVE }}
@@ -425,13 +490,28 @@ jobs:
             tenferro-rs/${{ env.CUDA_TUTORIAL_ARCHIVE }}
           key: ${{ inputs.archive_cache_key }}
 
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      # A stalled artifact download usually stalls on one connection; one
+      # bounded retry is cheaper than waiting it out (typical: 33 s).
+      - name: Download CUDA/PJRT test archives
+        id: archive_download
         if: steps.cuda_archive_restore.outputs.cache-hit != 'true'
+        timeout-minutes: 4
+        continue-on-error: true
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ inputs.archive_artifact_name }}
+          path: tenferro-rs
+
+      - name: Retry CUDA/PJRT test archive download
+        if: steps.cuda_archive_restore.outputs.cache-hit != 'true' && steps.archive_download.outcome != 'success'
+        timeout-minutes: 4
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: ${{ inputs.archive_artifact_name }}
           path: tenferro-rs
 
       - name: Log CUDA/PJRT archive source
+        timeout-minutes: 1
         run: |
           if [ "${{ steps.cuda_archive_restore.outputs.cache-hit }}" = "true" ]; then
             echo "Using CUDA/PJRT test archives restored from GitHub Actions cache."
@@ -441,10 +521,12 @@ jobs:
           ls -lh "tenferro-rs/${CUDA_ARCHIVE}" "tenferro-rs/${PJRT_ARCHIVE}" "tenferro-rs/${CUDA_TUTORIAL_ARCHIVE}"
 
       - uses: taiki-e/install-action@3ad7ed62b9acd4b43f91777bf240fac23e489eac # nextest (resolved 2026-07-07)
+        timeout-minutes: 2
         with:
           tool: nextest
 
       - name: Check machine
+        timeout-minutes: 1
         env:
           RUNPOD_GPU_TIER: ${{ needs.start-runpod.outputs.gpu_tier }}
           RUNPOD_GPU_TYPE_ID: ${{ needs.start-runpod.outputs.gpu_type_id }}
@@ -464,6 +546,7 @@ jobs:
 
       - name: Select CUDA runtime for driver
         id: select_cuda_runtime
+        timeout-minutes: 1
         run: |
           set -euo pipefail
           driver_version="$(nvidia-smi | sed -n 's/.*CUDA Version: \([0-9][0-9]*\.[0-9][0-9]*\).*/\1/p' | head -1)"
@@ -514,6 +597,10 @@ jobs:
       - name: Restore cuTENSOR redistributable
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         id: cutensor_cache
+        timeout-minutes: 3
+        continue-on-error: true
+        env:
+          SEGMENT_DOWNLOAD_TIMEOUT_MINS: "2"
         with:
           path: ${{ env.TENFERRO_CI_CACHE_ROOT }}/cutensor-${{ env.CUTENSOR_VERSION }}
           key: cutensor-${{ runner.os }}-x86_64-${{ env.CUTENSOR_VERSION }}-cuda12-v2
@@ -521,11 +608,16 @@ jobs:
       - name: Restore CUDA minimal runtime tree
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         id: cuda_runtime_cache
+        timeout-minutes: 3
+        continue-on-error: true
+        env:
+          SEGMENT_DOWNLOAD_TIMEOUT_MINS: "2"
         with:
           path: ${{ env.TENFERRO_CI_CACHE_ROOT }}/cuda-runtime-${{ steps.select_cuda_runtime.outputs.runtime_version }}
           key: cuda-runtime-${{ runner.os }}-x86_64-${{ steps.select_cuda_runtime.outputs.runtime_version }}-minimal-v6
 
       - name: Log pod cache restore status
+        timeout-minutes: 1
         env:
           CUTENSOR_HIT: ${{ steps.cutensor_cache.outputs.cache-hit }}
           CUDA_RUNTIME_HIT: ${{ steps.cuda_runtime_cache.outputs.cache-hit }}
@@ -535,6 +627,9 @@ jobs:
           echo "Misses fall back to direct downloads on the pod; publication is owned by ci-cache-publish on main."
 
       - name: Configure CUDA runtime libraries
+        # Includes the cache-miss fallback installs of the runtime tree and
+        # cuTENSOR.
+        timeout-minutes: 6
         env:
           CUDA_DRIVER_VERSION: ${{ steps.select_cuda_runtime.outputs.driver_version }}
           CUDA_RUNTIME_VERSION: ${{ steps.select_cuda_runtime.outputs.runtime_version }}
@@ -694,6 +789,7 @@ jobs:
           echo "TENFERRO_CUTENSOR_PATH=${cutensor_path}" >> "${GITHUB_ENV}"
 
       - name: Verify loaded NVRTC version
+        timeout-minutes: 1
         env:
           CUDA_DRIVER_VERSION: ${{ steps.select_cuda_runtime.outputs.driver_version }}
           CUDA_RUNTIME_VERSION: ${{ steps.select_cuda_runtime.outputs.runtime_version }}
@@ -748,6 +844,7 @@ jobs:
           PY
 
       - name: Link archive build workspace path
+        timeout-minutes: 1
         run: |
           set -euo pipefail
           archive_root="${ARCHIVE_WORKSPACE_ROOT}"
@@ -853,6 +950,39 @@ jobs:
     timeout-minutes: 10
 
     steps:
+      # Telemetry only: a failed checkout or report must never block the
+      # deletion below.
+      - name: Checkout trusted RunPod cost report
+        if: needs.start-runpod.outputs.pod_id != '' && needs.start-runpod.outputs.pod_id != 'null'
+        continue-on-error: true
+        timeout-minutes: 2
+        uses: actions/checkout@v5
+
+      - name: Report RunPod paid time and estimated cost
+        # Estimated paid cost observability (#1404, #2002): read the hourly
+        # price and start time from the pod record before deleting it.
+        if: needs.start-runpod.outputs.pod_id != '' && needs.start-runpod.outputs.pod_id != 'null'
+        continue-on-error: true
+        timeout-minutes: 2
+        env:
+          RUNPOD_API_KEY: ${{ secrets.RUNPOD_API_KEY }}
+          POD_ID: ${{ needs.start-runpod.outputs.pod_id }}
+        run: |
+          set -euo pipefail
+          pod_file=/tmp/runpod-pod.json
+          get_status="$(
+            curl -sS \
+              --url "https://rest.runpod.io/v1/pods/${POD_ID}" \
+              --header "Authorization: Bearer ${RUNPOD_API_KEY}" \
+              --output "$pod_file" \
+              --write-out "%{http_code}"
+          )" || get_status=000
+          if [ "$get_status" -lt 200 ] || [ "$get_status" -ge 300 ]; then
+            echo "::warning::RunPod pod record unavailable (HTTP ${get_status}); no cost estimate."
+            exit 0
+          fi
+          python3 scripts/ci/runpod_cost.py "$pod_file"
+
       - name: Delete RunPod pod
         # In a keep_failed_pods debug dispatch, a failed provision keeps its
         # rejected pods for console-log triage; only an ACCEPTED pod (the
@@ -867,36 +997,6 @@ jobs:
           if [ -z "${POD_ID}" ] || [ "${POD_ID}" = "null" ]; then
             echo "No POD_ID; nothing to delete"
             exit 0
-          fi
-
-          # Estimated paid cost observability (#1404): read hourly price and
-          # uptime from the pod record before deleting it.
-          pod_file=/tmp/runpod-pod.json
-          get_status="$(
-            curl -sS \
-              --url "https://rest.runpod.io/v1/pods/${POD_ID}" \
-              --header "Authorization: Bearer ${RUNPOD_API_KEY}" \
-              --output "$pod_file" \
-              --write-out "%{http_code}"
-          )" || get_status=000
-          if [ "$get_status" -ge 200 ] && [ "$get_status" -lt 300 ]; then
-            python3 - "$pod_file" <<'PY' || true
-          import datetime, json, sys
-          pod = json.load(open(sys.argv[1]))
-          cost = pod.get("adjustedCostPerHr") or pod.get("costPerHr")
-          started = pod.get("lastStartedAt")
-          if isinstance(cost, (int, float)) and isinstance(started, str):
-              begin = datetime.datetime.fromisoformat(started.replace("Z", "+00:00"))
-              hours = max(
-                  0.0,
-                  (datetime.datetime.now(datetime.timezone.utc) - begin).total_seconds()
-                  / 3600.0,
-              )
-              print(f"RunPod paid time: {hours:.2f}h at ${cost:.2f}/hr")
-              print(f"RunPod estimated paid cost: ${hours * cost:.2f}")
-          else:
-              print("RunPod cost data unavailable in pod record")
-          PY
           fi
 
           echo "Deleting RunPod pod: ${POD_ID}"

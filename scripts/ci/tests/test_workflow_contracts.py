@@ -34,7 +34,17 @@ class WorkflowContractTests(unittest.TestCase):
             parent.split("\nenv:\n", 1)[1].split("\njobs:\n", 1)[0],
             child.split("\nenv:\n", 1)[1].split("\njobs:\n", 1)[0],
         )
-        self.assertNotIn("\nconcurrency:", parent)
+        # The parent only collapses repeated deliveries for one PR head (#2002);
+        # it never joins the global paid queue and never cancels a running
+        # preparation.
+        parent_concurrency = parent.split("\nconcurrency:\n", 1)[1].split("\n\n", 1)[0]
+        self.assertIn(
+            "group: runpod-gpu-prepare-${{ github.event.workflow_run.head_sha || github.run_id }}",
+            parent_concurrency,
+        )
+        self.assertIn("cancel-in-progress: false", parent_concurrency)
+        self.assertNotIn("queue:", parent_concurrency)
+        self.assertNotIn("refs/heads/main", parent_concurrency)
         self.assertIn("group: runpod-tenferro-gpu-refs/heads/main", child)
         self.assertIn("cancel-in-progress: false\n  queue: max", child)
         call = parent.split("  gpu-execution:", 1)[1].split("  ci-gpu-gate:", 1)[0]
@@ -456,7 +466,8 @@ class WorkflowContractTests(unittest.TestCase):
         text = read(".github/workflows/runpod-gpu-test.yml")
         self.assertIn("gpu_cost_per_hr:", text)
         self.assertIn("RunPod hourly price:", text)
-        self.assertIn("RunPod estimated paid cost:", text)
+        self.assertIn("python3 scripts/ci/runpod_cost.py", text)
+        self.assertIn("RunPod estimated paid cost:", read("scripts/ci/runpod_cost.py"))
         # The job timeout must contain the worst-case provision budget so
         # the loop reaches its explicit exhaustion error instead of being
         # cancelled mid-attempt (60s deletion + 300s setup margins).

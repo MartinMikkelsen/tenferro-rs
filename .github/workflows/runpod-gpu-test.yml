@@ -84,7 +84,17 @@ on:
     # pre-runpod gate still waits for rustfmt and clippy before any paid pod.
     types: [in_progress]
 
-# Preparation is independent; only the reusable paid lifecycle is serialized.
+# GitHub delivers `in_progress` several times per upstream run (#2002: 3.0
+# RunPod runs per upstream run, up to three pods for one merge ref). One
+# preparation per PR head runs at a time; later deliveries for that head wait,
+# GitHub keeps only the newest waiting one, and it starts after the first run
+# has published its CI GPU gate, which the paid workflow then reuses for the
+# same tested ref instead of provisioning again. The first delivery starts
+# immediately, so early-start latency is unchanged. Manual dispatches keep a
+# group of their own. The global paid queue stays in runpod-gpu-execute.yml.
+concurrency:
+  group: runpod-gpu-prepare-${{ github.event.workflow_run.head_sha || github.run_id }}
+  cancel-in-progress: false
 
 permissions:
   checks: read
@@ -187,11 +197,14 @@ jobs:
             # evidence comment from a repository admin/maintainer, which the
             # gate job verifies before it publishes a passing check, so the
             # label alone cannot waive GPU validation.
+            # Written to GITHUB_OUTPUT: printed to stdout, the decision never
+            # reached the gate, which then passed a labelled PR without
+            # verifying the evidence comment.
             local_labels="$(gh api "repos/${GITHUB_REPOSITORY}/issues/${pr_number}/labels" --jq '.[].name')"
             if grep -Fxq "gpu-validated-locally" <<<"${local_labels}"; then
-              echo "local_gpu_validation=true"
+              echo "local_gpu_validation=true" >> "${GITHUB_OUTPUT}"
             else
-              echo "local_gpu_validation=false"
+              echo "local_gpu_validation=false" >> "${GITHUB_OUTPUT}"
             fi
           }
 
@@ -755,6 +768,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           EVENT_NAME: ${{ github.event_name }}
           TARGET_HEAD_SHA: ${{ needs.authorize.outputs.target_head_sha }}
+          TESTED_REF: ${{ needs.authorize.outputs.tenferro_ref }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           AUTHORIZE_RESULT: ${{ needs.authorize.result }}
           GPU_REQUIRED: ${{ needs.authorize.outputs.gpu_required }}
@@ -765,6 +779,8 @@ jobs:
           PRE_RUNPOD_RESULT: ${{ needs.pre-runpod-gate.result }}
           ARCHIVE_RESULT: ${{ needs.cuda-archive.result }}
           GPU_EXECUTION_RESULT: ${{ needs.gpu-execution.result }}
+          PAID_PATH_DECISION: ${{ needs.gpu-execution.outputs.paid_path_decision }}
+          REUSED_CHECK_URL: ${{ needs.gpu-execution.outputs.reused_check_url }}
         run: |
           set -euo pipefail
 
@@ -836,6 +852,11 @@ jobs:
               fi
             else
               record_result "gpu-execution (including cleanup)" "${GPU_EXECUTION_RESULT}"
+              if [ "${PAID_PATH_DECISION}" = "reuse" ] && [ -z "${REUSED_CHECK_URL}" ]; then
+                record_evidence_failure \
+                  "The paid path reused an earlier gate but named none." \
+                  "reused CI GPU gate: missing"
+              fi
             fi
           elif [ "${GPU_REQUIRED}" = false ]; then
             echo "GPU validation not required: ${POLICY_REASON}"
@@ -844,21 +865,40 @@ jobs:
             echo "- authorize policy: ${GPU_REQUIRED:-missing}" >> "${failures_file}"
           fi
 
+          # The gate kind goes into the check run's external_id together with
+          # the tested ref (scripts/ci/gpu_gate_reuse.py). Only `paid` and
+          # `reused` successes may be reused by a later delivery for the same
+          # ref; `skipped` covers a success whose paid decision is unknown.
           conclusion="success"
+          kind="skipped"
           title="RunPod CI GPU gate passed"
           summary="RunPod GPU validation completed successfully and owns CI GPU gate."
+          if [ "${PAID_PATH_DECISION}" = "run" ]; then
+            kind="paid"
+          elif [ "${PAID_PATH_DECISION}" = "reuse" ]; then
+            kind="reused"
+            title="RunPod CI GPU gate passed (reused)"
+            summary="Tested ref ${TESTED_REF} already passed the paid RunPod GPU validation: ${REUSED_CHECK_URL}. No pod was provisioned again."
+          fi
           if [ -n "${local_gpu_note}" ]; then
+            kind="local"
             title="RunPod CI GPU gate passed (local GPU validation)"
             summary="The paid RunPod path was skipped for this PR. ${local_gpu_note}"
           fi
           if [ "${GPU_REQUIRED}" = false ]; then
+            kind="not-required"
             title="RunPod CI GPU gate not required"
             summary="GPU validation not required for this change: ${POLICY_REASON}"
           fi
           if [ -s "${failures_file}" ]; then
             conclusion="failure"
+            kind="failed"
             title="RunPod CI GPU gate failed"
-            summary="$(printf 'RunPod GPU validation did not complete successfully.\\n\\n%s' "$(cat "${failures_file}")")"
+            summary="$(printf 'RunPod GPU validation did not complete successfully.\\n\\n%s\\n\\nRetry with `gh run rerun %s --failed`.' "$(cat "${failures_file}")" "${GITHUB_RUN_ID}")"
+          fi
+          external_id=""
+          if [ -n "${TESTED_REF}" ]; then
+            external_id="runpod-gpu-gate:v1:${TESTED_REF}:${kind}"
           fi
 
           target_sha="${TARGET_HEAD_SHA}"
@@ -872,6 +912,7 @@ jobs:
               --arg details_url "${RUN_URL}" \
               --arg title "${title}" \
               --arg summary "${summary}" \
+              --arg external_id "${external_id}" \
               '{
                 name: $name,
                 head_sha: $head_sha,
@@ -882,7 +923,7 @@ jobs:
                   title: $title,
                   summary: $summary
                 }
-              }' > /tmp/ci-gpu-gate-check.json
+              } + (if $external_id == "" then {} else {external_id: $external_id} end)' > /tmp/ci-gpu-gate-check.json
 
             gh api \
               --method POST \

@@ -1,9 +1,11 @@
 # RunPod GPU Provisioning: Cheapest Compatible Host
 
 Status: active. Implements issue #1404 under the #1401 CI performance
-umbrella. Companion code: `scripts/ci/runpod_pricing.py`,
-`scripts/ci/cuda_smoke_test.py`, `scripts/ci/runpod_provision.py`; contract
-tests in `scripts/ci/tests/`.
+umbrella; the paid-cost controls below implement #2002. Companion code:
+`scripts/ci/runpod_pricing.py`, `scripts/ci/cuda_smoke_test.py`,
+`scripts/ci/runpod_provision.py`, `scripts/ci/gpu_gate_reuse.py`,
+`scripts/ci/runpod_cost.py`, `scripts/ci/runner_pin_check.py`; contract tests
+in `scripts/ci/tests/`.
 
 ## Problem
 
@@ -103,6 +105,57 @@ only what registration and the smoke proof need:
   step of the cache path degrades to the normal download, so a missing,
   unwritable, or stale cache cannot fail startup.
 
+## One paid pod per tested merge ref
+
+`runpod-gpu-test.yml` subscribes to `workflow_run` `in_progress` so trusted
+preparation starts early, and GitHub delivers that event several times per
+upstream run (#2002 measured 3.0 RunPod runs per upstream run; 61% of the
+successful-pod spend re-tested a merge ref that had already been paid for).
+The exact delivery rule is not documented, so the fix does not depend on it:
+
+- The parent workflow has a concurrency group per PR head
+  (`runpod-gpu-prepare-<head sha>`, `cancel-in-progress: false`). The first
+  delivery starts at once, so early-start latency is unchanged. Later
+  deliveries for the same head wait; GitHub keeps only the newest waiting run,
+  and it starts after the first run has finished, gate included. Manual
+  dispatches use their own run id as the group.
+- The gate records what it validated: the `CI GPU gate` check run carries
+  `external_id = runpod-gpu-gate:v1:<tested ref>:<kind>`, where the tested ref
+  is the pinned merge SHA (or the dispatched ref) and the kind is `paid`,
+  `reused`, `failed`, `not-required`, `local`, or `skipped`.
+- `Decide whether the paid path runs`, inside the global paid lock and right
+  before any spend, asks `gpu_gate_reuse.py` for every gate on the PR head
+  (`filter=all`). If the newest completed gate for exactly this tested ref is a
+  `paid` or `reused` success, no pod is created and the gate publishes
+  "passed (reused)" with a link to that check. A moved base is a different
+  merge ref and is never reused; a newer failure for the ref re-enables the
+  paid path; gates published before this marker existed are never reused.
+- The lookup fails open toward validation: any API, parse, or script error
+  answers "run", which is the previous behavior.
+
+A failed paid gate is still retried by any later delivery for the same ref.
+Re-run a failed gate with `gh run rerun <run id> --failed` (the failure
+summary names it).
+
+## Bounded setup on the pod
+
+Before #2002 the setup steps of `run-gpu-tests` were bounded only by the
+45-minute job timeout; one artifact download took 34 minutes and another pod
+spent 25.8 minutes downloading plus 10.3 minutes restoring the CUDA runtime
+before it was cancelled without a test result. Every step before
+`Run CUDA tests from archive` now has its own `timeout-minutes` (40 minutes in
+total even if every step stalls; a normal setup takes about 2.5 minutes, and a
+single stall now costs at most 4 minutes plus one retry):
+
+- the cache restores abort a stalled segment after
+  `SEGMENT_DOWNLOAD_TIMEOUT_MINS=2` and are non-blocking, because every miss
+  already has a fallback (artifact download, pod-side install);
+- the archive artifact download is retried once with the same bound.
+
+Seeding the test archive onto the pod's persistent volume from a hosted job,
+and a hosted watchdog that deletes a pod whose test job never starts, are not
+implemented; see residual risks.
+
 ## Observability
 
 - Each attempt logs candidate name, GPU type, hourly price
@@ -115,7 +168,14 @@ only what registration and the smoke proof need:
   to the job summary and `gpu_cost_per_hr` output; the pod-side "Check
   machine" step echoes them next to `nvidia-smi`.
 - `cleanup-runpod` reads the pod record before deletion and logs paid time
-  and estimated cost for the whole run.
+  and estimated cost for the whole run (`runpod_cost.py`). RunPod's REST
+  `lastStartedAt` is Go's time format (`2026-10-04 11:09:24.633 +0000 UTC`),
+  not ISO-8601; the previous inline parser raised on it in every cleanup job
+  that had a pod (#2002). Both forms are parsed, an unreadable record prints a
+  `::warning::` with the raw value, and the report runs as a non-blocking step
+  before the deletion step, so telemetry can never keep a pod alive.
+- The provisioner runs with `PYTHONUNBUFFERED=1`, so each provision log line
+  carries its event time rather than the time a block buffer was flushed.
 
 ## Local GPU validation instead of provisioning
 
@@ -135,9 +195,42 @@ provisioning`, gated on `inputs.pr_number`, ran), so the decision is applied in 
 step: `start-runpod` reads the PR's label, publishes `paid_path_skipped`, skips
 the provisioning step, and `run-gpu-tests` refuses to wait for a runner that will
 never exist. A labelled PR therefore creates no pod, and `ci-gpu-gate` publishes
-success from the recorded evidence (verified end to end). The paid gate remains
+success from the recorded evidence. Until #2002, `authorize` printed the label
+decision to stdout instead of `GITHUB_OUTPUT`, so the gate never saw it and
+passed labelled PRs without checking the evidence comment; the decision now
+reaches the gate. The paid gate remains
 the required path whenever a runner is available, and #1907's early stop bounds
 the spend when the provider is down.
+
+## Runner pin runbook
+
+The pod registers a JIT runner from the `actions/runner` release pinned as
+`RUNNER_VERSION` / `RUNNER_SHA256` in `runpod-gpu-execute.yml`. GitHub stops
+queueing jobs to runners that fall too far behind; a rejected runner looks like
+a pod that passes the CUDA smoke proof and never registers, and the provision
+ladder pays for every candidate (#1921: 2.335.1 was rejected on 2026-09-24,
+29 days after 2.337.0 and 66 days after 2.336.0 shipped).
+
+`.github/workflows/runner-pin-check.yml` runs `runner_pin_check.py` daily (and on
+PRs that touch the pin or the check). It needs no secret. It fails when the pin
+is not a published stable release, when `RUNNER_SHA256` differs from the
+`linux-x64` checksum in the release notes, when two or more newer releases
+exist, or when a newer release is at least 14 days old; one younger newer
+release only warns. The check is not a required PR check.
+
+To bump the pin:
+
+1. `gh api repos/actions/runner/releases/latest --jq '.tag_name, .body'` and
+   take the `actions-runner-linux-x64-<version>.tar.gz` SHA-256 from the
+   "SHA-256 Checksums" section.
+2. Update `RUNNER_VERSION` and `RUNNER_SHA256` together in
+   `runpod-gpu-execute.yml`.
+3. `python3 scripts/ci/runner_pin_check.py` locally must print `verdict=ok`;
+   the PR also runs the check.
+4. Registration is proven by the next paid run: its `start-runpod` log shows
+   `Runner ... online` for the accepted pod. The persistent-volume tarball
+   cache is keyed by version and checksum, so the new tarball is downloaded
+   once and cached again.
 
 ## Security invariants (unchanged)
 
@@ -162,3 +255,11 @@ plane in `change_policy.py`, so changing them requires the GPU gate.
   dispatch input keeps rejected pods alive (billing!) so their console
   logs can be read in the RunPod dashboard when a smoke failure needs
   manual triage.
+- Step timeouts bound setup only once `run-gpu-tests` has started on the
+  accepted runner. A job that is never picked up by the online runner is still
+  bounded only by GitHub's queue timeout; a hosted watchdog holding
+  `RUNPOD_API_KEY` could delete such a pod, but it cannot be verified without a
+  paid run and is left as follow-up work, together with seeding the archive
+  onto the persistent volume.
+- The gate reuse and the parent concurrency group run from the default branch,
+  so they first execute live on the first RunPod run after they merge.

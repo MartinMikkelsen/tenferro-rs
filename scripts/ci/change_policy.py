@@ -99,6 +99,8 @@ _GPU_CONTROL_FILES = frozenset(
         "scripts/ci/runpod_pricing.py",
         "scripts/ci/runpod_provision.py",
         "scripts/ci/cuda_smoke_test.py",
+        "scripts/ci/gpu_gate_reuse.py",
+        "scripts/ci/runpod_cost.py",
     }
 )
 
