@@ -270,6 +270,12 @@ static PRIMITIVE_AD_RULES: [&'static dyn PrimitiveAdRule; PrimitiveOpKind::COUNT
         residual_mask: ResidualSpec::input(0),
     },
     &FunctionPrimitiveAdRule {
+        kind: PrimitiveOpKind::Erf,
+        linearize: linearize_erf,
+        transpose_rule: transpose_erf,
+        residual_mask: ResidualSpec::input(0),
+    },
+    &FunctionPrimitiveAdRule {
         kind: PrimitiveOpKind::DotGeneral,
         linearize: linearize_dot_general,
         transpose_rule: transpose_dot_general,
@@ -848,6 +854,16 @@ fn linearize_log1p(
 ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     analytic::linearize_log1p(builder, primal_in, tangent_in, ctx)
 }
+fn linearize_erf(
+    _op: &StdTensorOp,
+    builder: &mut dyn PrimitiveRuleBuilder,
+    primal_in: &[ValueKey<StdTensorOp>],
+    _primal_out: &[ValueKey<StdTensorOp>],
+    tangent_in: &[Option<LocalValueId>],
+    ctx: &mut ShapeGuardContext,
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
+    analytic::linearize_erf(builder, primal_in, tangent_in, ctx)
+}
 
 macro_rules! analytic_transpose {
     ($name:ident, $callee:path) => {
@@ -904,6 +920,17 @@ fn transpose_log1p(
 ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     let inputs = fixed_value_refs("log1p", inputs)?;
     analytic::transpose_log1p(builder, cotangent_out, &inputs, mode, ctx)
+}
+fn transpose_erf(
+    _op: &StdTensorOp,
+    builder: &mut dyn PrimitiveRuleBuilder,
+    cotangent_out: &[Option<LocalValueId>],
+    inputs: &[TransposeInputRef<'_>],
+    mode: &OperationRole,
+    ctx: &mut ShapeGuardContext,
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
+    let inputs = fixed_value_refs("erf", inputs)?;
+    analytic::transpose_erf(builder, cotangent_out, &inputs, mode, ctx)
 }
 
 fn linearize_dot_general(

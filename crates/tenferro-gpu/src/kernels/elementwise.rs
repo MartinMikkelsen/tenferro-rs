@@ -471,6 +471,13 @@ pub fn log1p_float<F: Float>(out: &mut Array<F>, input: &Array<F>) {
 }
 
 #[cube(launch_unchecked)]
+pub fn erf_float<F: Float>(out: &mut Array<F>, input: &Array<F>) {
+    if ABSOLUTE_POS < out.len() {
+        out[ABSOLUTE_POS] = input[ABSOLUTE_POS].erf();
+    }
+}
+
+#[cube(launch_unchecked)]
 pub fn abs_float<F: Float<WithScalar<F> = F>>(out: &mut Array<F>, input: &Array<F>) {
     if ABSOLUTE_POS < out.len() {
         let value = input[ABSOLUTE_POS];

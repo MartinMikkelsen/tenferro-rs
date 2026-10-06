@@ -105,6 +105,7 @@ macro_rules! primitive_ops {
             Pow, "pow", Analytic, SameNumeric, 2, 2, false;
             Expm1, "expm1", Analytic, SameFloatOrComplex, 1, 1, false;
             Log1p, "log1p", Analytic, SameFloatOrComplex, 1, 1, false;
+            Erf, "erf", Analytic, SameFloat, 1, 1, false;
             DotGeneral, "dot_general", Contraction, SameFloatOrComplex, 2, 2, false;
             ReduceSum, "reduce_sum", Reduction, SameNumeric, 1, 1, false;
             ReduceSumSquares, "reduce_sum_squares", Reduction, SameFloat, 1, 1, false;
@@ -296,6 +297,7 @@ macro_rules! define_std_tensor_op {
             Pow,
             Expm1,
             Log1p,
+            Erf,
 
             // Diagonal extraction / embedding (AD-closed pair)
             ExtractDiag {
@@ -413,6 +415,7 @@ macro_rules! define_std_tensor_op {
                     Self::Pow => $crate::PrimitiveOpKind::Pow,
                     Self::Expm1 => $crate::PrimitiveOpKind::Expm1,
                     Self::Log1p => $crate::PrimitiveOpKind::Log1p,
+                    Self::Erf => $crate::PrimitiveOpKind::Erf,
                     Self::ExtractDiag { .. } => $crate::PrimitiveOpKind::ExtractDiag,
                     Self::EmbedDiag { .. } => $crate::PrimitiveOpKind::EmbedDiag,
                     Self::Tril { .. } => $crate::PrimitiveOpKind::Tril,
@@ -494,6 +497,7 @@ macro_rules! define_std_tensor_op {
                     $crate::PrimitiveOpKind::Pow => Self::Pow,
                     $crate::PrimitiveOpKind::Expm1 => Self::Expm1,
                     $crate::PrimitiveOpKind::Log1p => Self::Log1p,
+                    $crate::PrimitiveOpKind::Erf => Self::Erf,
                     $crate::PrimitiveOpKind::ExtractDiag => Self::ExtractDiag {
                         axis_a: 0,
                         axis_b: 1,
@@ -585,6 +589,7 @@ macro_rules! define_elementwise_fusion_op {
             Pow,
             Expm1,
             Log1p,
+            Erf,
         }
 
         #[cfg(test)]
@@ -611,6 +616,7 @@ macro_rules! define_elementwise_fusion_op {
                     Self::Pow,
                     Self::Expm1,
                     Self::Log1p,
+                    Self::Erf,
                 ]
                 .into_iter()
             }
@@ -637,6 +643,7 @@ macro_rules! define_elementwise_fusion_op {
                     $crate::PrimitiveOpKind::Pow => Some(Self::Pow),
                     $crate::PrimitiveOpKind::Expm1 => Some(Self::Expm1),
                     $crate::PrimitiveOpKind::Log1p => Some(Self::Log1p),
+                    $crate::PrimitiveOpKind::Erf => Some(Self::Erf),
                     _ => None,
                 }
             }
@@ -663,6 +670,7 @@ macro_rules! define_elementwise_fusion_op {
                     Self::Pow => $crate::PrimitiveOpKind::Pow,
                     Self::Expm1 => $crate::PrimitiveOpKind::Expm1,
                     Self::Log1p => $crate::PrimitiveOpKind::Log1p,
+                    Self::Erf => $crate::PrimitiveOpKind::Erf,
                 }
             }
         }
@@ -742,6 +750,7 @@ macro_rules! define_exec_op {
             Pow,
             Expm1,
             Log1p,
+            Erf,
             Gather(GatherConfig),
             GatherDynamicSliceSizes {
                 offset_dims: Vec<usize>,
@@ -831,6 +840,7 @@ macro_rules! define_exec_op {
                     Self::Pow => $crate::PrimitiveOpKind::Pow,
                     Self::Expm1 => $crate::PrimitiveOpKind::Expm1,
                     Self::Log1p => $crate::PrimitiveOpKind::Log1p,
+                    Self::Erf => $crate::PrimitiveOpKind::Erf,
                     Self::Gather(_) => $crate::PrimitiveOpKind::Gather,
                     Self::GatherDynamicSliceSizes { .. } => {
                         $crate::PrimitiveOpKind::GatherDynamicSliceSizes
@@ -883,6 +893,7 @@ macro_rules! define_exec_op {
                     tenferro_ops::std_tensor_op::StdTensorOp::Pow => Self::Pow,
                     tenferro_ops::std_tensor_op::StdTensorOp::Expm1 => Self::Expm1,
                     tenferro_ops::std_tensor_op::StdTensorOp::Log1p => Self::Log1p,
+                    tenferro_ops::std_tensor_op::StdTensorOp::Erf => Self::Erf,
                     tenferro_ops::std_tensor_op::StdTensorOp::Transpose { perm } => {
                         Self::Transpose { perm: perm.clone() }
                     }
@@ -1013,6 +1024,7 @@ macro_rules! define_exec_op {
                     Self::Pow => Some(ElementwiseFusionOp::Pow),
                     Self::Expm1 => Some(ElementwiseFusionOp::Expm1),
                     Self::Log1p => Some(ElementwiseFusionOp::Log1p),
+                    Self::Erf => Some(ElementwiseFusionOp::Erf),
                     _ => None,
                 }
             }
@@ -1085,6 +1097,7 @@ macro_rules! define_exec_op {
                     $crate::PrimitiveOpKind::Pow => Self::Pow,
                     $crate::PrimitiveOpKind::Expm1 => Self::Expm1,
                     $crate::PrimitiveOpKind::Log1p => Self::Log1p,
+                    $crate::PrimitiveOpKind::Erf => Self::Erf,
                     $crate::PrimitiveOpKind::Gather => Self::Gather(GatherConfig {
                         offset_dims: vec![],
                         collapsed_slice_dims: vec![0],

@@ -13,6 +13,8 @@ use tenferro_tensor::{
     ValidationError,
 };
 
+use crate::composite;
+use crate::composite::session::{run_session_composite, typed_borrowed};
 use crate::{TypedTensorMaskSessionOpsExt, TypedTensorSessionOpsExt};
 use tenferro_tensor::TypedTensor;
 
@@ -145,6 +147,11 @@ impl<T: TensorScalar> TypedTensorSessionOpsExt<T> for TypedTensor<T> {
     fn log1p(&self, session: &mut dyn BackendSession) -> Result<TypedTensor<T>> {
         let out = session.log1p_read(T::tensor_read(self))?;
         into_typed_result("log1p", out)
+    }
+
+    fn erf(&self, session: &mut dyn BackendSession) -> Result<TypedTensor<T>> {
+        let out = session.erf_read(T::tensor_read(self))?;
+        into_typed_result("erf", out)
     }
 
     fn sin(&self, session: &mut dyn BackendSession) -> Result<TypedTensor<T>> {
@@ -317,6 +324,136 @@ impl<T: TensorScalar> TypedTensorSessionOpsExt<T> for TypedTensor<T> {
         let scalar = into_typed_result::<T>("scale_complex", scalar)?;
         TypedTensorSessionOpsExt::mul(self, &scalar, session)
     }
+
+    fn sigmoid(&self, session: &mut dyn BackendSession) -> Result<TypedTensor<T>> {
+        let out = run_session_composite(session, |ops| {
+            composite::sigmoid(ops, &typed_borrowed(self))
+        })?;
+        into_typed_result("sigmoid", out)
+    }
+
+    fn silu(&self, session: &mut dyn BackendSession) -> Result<TypedTensor<T>> {
+        let out =
+            run_session_composite(session, |ops| composite::silu(ops, &typed_borrowed(self)))?;
+        into_typed_result("silu", out)
+    }
+
+    fn softplus(&self, session: &mut dyn BackendSession) -> Result<TypedTensor<T>> {
+        let out = run_session_composite(session, |ops| {
+            composite::softplus(ops, &typed_borrowed(self))
+        })?;
+        into_typed_result("softplus", out)
+    }
+
+    fn gelu(&self, session: &mut dyn BackendSession) -> Result<TypedTensor<T>> {
+        let out =
+            run_session_composite(session, |ops| composite::gelu(ops, &typed_borrowed(self)))?;
+        into_typed_result("gelu", out)
+    }
+
+    fn gelu_tanh(&self, session: &mut dyn BackendSession) -> Result<TypedTensor<T>> {
+        let out = run_session_composite(session, |ops| {
+            composite::gelu_tanh(ops, &typed_borrowed(self))
+        })?;
+        into_typed_result("gelu_tanh", out)
+    }
+
+    fn reduce_mean(
+        &self,
+        axes: Option<&[usize]>,
+        session: &mut dyn BackendSession,
+    ) -> Result<TypedTensor<T>> {
+        let out = run_session_composite(session, |ops| {
+            composite::reduce_mean(ops, &typed_borrowed(self), axes)
+        })?;
+        into_typed_result("reduce_mean", out)
+    }
+
+    fn softmax(&self, axis: usize, session: &mut dyn BackendSession) -> Result<TypedTensor<T>> {
+        let out = run_session_composite(session, |ops| {
+            composite::softmax(ops, &typed_borrowed(self), axis)
+        })?;
+        into_typed_result("softmax", out)
+    }
+
+    fn log_softmax(&self, axis: usize, session: &mut dyn BackendSession) -> Result<TypedTensor<T>> {
+        let out = run_session_composite(session, |ops| {
+            composite::log_softmax(ops, &typed_borrowed(self), axis)
+        })?;
+        into_typed_result("log_softmax", out)
+    }
+
+    fn masked_softmax(
+        &self,
+        mask: &TypedTensor<bool>,
+        axis: usize,
+        session: &mut dyn BackendSession,
+    ) -> Result<TypedTensor<T>> {
+        let mask = typed_borrowed(mask);
+        let out = run_session_composite(session, |ops| {
+            composite::masked_softmax(ops, &typed_borrowed(self), &mask, axis)
+        })?;
+        into_typed_result("masked_softmax", out)
+    }
+
+    fn masked_log_softmax(
+        &self,
+        mask: &TypedTensor<bool>,
+        axis: usize,
+        session: &mut dyn BackendSession,
+    ) -> Result<TypedTensor<T>> {
+        let mask = typed_borrowed(mask);
+        let out = run_session_composite(session, |ops| {
+            composite::masked_log_softmax(ops, &typed_borrowed(self), &mask, axis)
+        })?;
+        into_typed_result("masked_log_softmax", out)
+    }
+
+    fn layer_norm(
+        &self,
+        axis: usize,
+        weight: Option<&TypedTensor<T>>,
+        bias: Option<&TypedTensor<T>>,
+        eps: f64,
+        session: &mut dyn BackendSession,
+    ) -> Result<TypedTensor<T>> {
+        let weight = weight.map(typed_borrowed);
+        let bias = bias.map(typed_borrowed);
+        let out = run_session_composite(session, |ops| {
+            composite::layer_norm(
+                ops,
+                &typed_borrowed(self),
+                axis,
+                weight.as_ref(),
+                bias.as_ref(),
+                eps,
+            )
+        })?;
+        into_typed_result("layer_norm", out)
+    }
+
+    fn rms_norm(
+        &self,
+        axis: usize,
+        weight: Option<&TypedTensor<T>>,
+        bias: Option<&TypedTensor<T>>,
+        eps: f64,
+        session: &mut dyn BackendSession,
+    ) -> Result<TypedTensor<T>> {
+        let weight = weight.map(typed_borrowed);
+        let bias = bias.map(typed_borrowed);
+        let out = run_session_composite(session, |ops| {
+            composite::rms_norm(
+                ops,
+                &typed_borrowed(self),
+                axis,
+                weight.as_ref(),
+                bias.as_ref(),
+                eps,
+            )
+        })?;
+        into_typed_result("rms_norm", out)
+    }
 }
 
 impl TypedTensorMaskSessionOpsExt for TypedTensor<bool> {
@@ -401,7 +538,7 @@ fn broadcast_ternary_in_read<'a, C: TensorScalar, T: TensorScalar>(
     ))
 }
 
-fn broadcast_error(err: BroadcastError) -> Error {
+pub(crate) fn broadcast_error(err: BroadcastError) -> Error {
     match err {
         BroadcastError::IncompatibleBinary { lhs, rhs } => {
             Error::shape_mismatch("broadcast", lhs, rhs)

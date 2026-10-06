@@ -139,6 +139,7 @@ fn emit_op(
         }
         ElementwiseFusionOp::Expm1 => emit_unary_arithmetic(scope, &inputs[0], Arithmetic::Expm1),
         ElementwiseFusionOp::Log1p => emit_unary_arithmetic(scope, &inputs[0], Arithmetic::Log1p),
+        ElementwiseFusionOp::Erf => emit_unary_arithmetic(scope, &inputs[0], Arithmetic::Erf),
         ElementwiseFusionOp::Remainder => {
             unreachable!("remainder fusion is rejected by classify before codegen")
         }

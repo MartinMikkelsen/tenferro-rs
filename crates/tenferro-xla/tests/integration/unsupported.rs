@@ -108,6 +108,26 @@ fn rejects_unsupported_static_op() {
 }
 
 #[test]
+fn rejects_erf_explicitly_instead_of_emitting_chlo() {
+    let x = TracedTensor::input_symbolic_shape(DType::F64, 1).unwrap();
+    let y = x.erf().unwrap();
+    let mut compiler = GraphCompiler::new();
+    let program = compiler
+        .compile_with_input_specs(&y, &[(&x, DType::F64, &[2])])
+        .unwrap();
+
+    let err = lower_to_stablehlo(program.program()).unwrap_err();
+
+    assert!(matches!(
+        err,
+        Error::UnsupportedOp {
+            op: "Erf",
+            reason
+        } if reason.contains("chlo.erf")
+    ));
+}
+
+#[test]
 fn rejects_extension_without_standard_op_lowering() {
     let x = TracedTensor::input_symbolic_shape(DType::F64, 1).unwrap();
     let outputs = apply(Arc::new(RuntimeOnlyExtension), &[&x]).unwrap();

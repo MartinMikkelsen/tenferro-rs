@@ -1730,16 +1730,42 @@ fn cuda_runtime_copy_read_into_consumes_transposed_source() {
 
 #[test]
 #[ignore = "requires CUDA 12.8+ GPU"]
-fn cuda_runtime_bool_materialization_reports_intentional_erased_limitation() {
+fn cuda_runtime_bool_materialization_copies_owned_tensors() {
     let mut gpu = gpu_backend();
-    let gpu_input = upload(&gpu, &tensor_bool(vec![2], vec![true, false]));
+    let gpu_input = upload(&gpu, &tensor_bool(vec![3], vec![true, false, true]));
 
-    let err = gpu
+    let out = gpu
         .with_backend_session(|__s| __s.to_contiguous_read(TensorRead::from_tensor(&gpu_input)))
         .unwrap()
-        .unwrap_err();
+        .unwrap();
 
-    assert_cuda_unsupported_dtype(&err, "CudaBackend::to_contiguous_read", DType::Bool);
+    let out = download(&gpu, &out);
+    assert_eq!(out.as_slice::<bool>().unwrap(), &[true, false, true]);
+
+    // A strided view (transposed [2, 3] -> [3, 2]) materializes through the
+    // same `u8` permutation kernel as the numeric dtypes.
+    let matrix = upload(
+        &gpu,
+        &tensor_bool(vec![2, 3], vec![true, false, false, true, true, true]),
+    );
+    let view = matrix
+        .as_typed::<bool>()
+        .unwrap()
+        .as_view()
+        .transpose_view([1, 0])
+        .unwrap();
+    let out = gpu
+        .with_backend_session(|__s| {
+            __s.to_contiguous_read(TensorRead::from_view(TensorView::Bool(view)))
+        })
+        .unwrap()
+        .unwrap();
+    let out = download(&gpu, &out);
+    assert_eq!(out.shape(), &[3, 2]);
+    assert_eq!(
+        out.as_slice::<bool>().unwrap(),
+        &[true, false, true, false, true, true]
+    );
 }
 
 #[test]

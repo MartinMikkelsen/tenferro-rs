@@ -46,7 +46,8 @@ pub(crate) fn gpu_descriptor(kind: PrimitiveOpKind) -> Option<GpuOpDescriptor> {
         | PrimitiveOpKind::Sqrt
         | PrimitiveOpKind::Rsqrt
         | PrimitiveOpKind::Expm1
-        | PrimitiveOpKind::Log1p => GpuLaunchKind::UnaryFloatOnly,
+        | PrimitiveOpKind::Log1p
+        | PrimitiveOpKind::Erf => GpuLaunchKind::UnaryFloatOnly,
         PrimitiveOpKind::Compare => GpuLaunchKind::CompareFloatIntToBool,
         PrimitiveOpKind::Select => GpuLaunchKind::SelectBoolFloatInt,
         PrimitiveOpKind::Clamp => GpuLaunchKind::ClampFloat,

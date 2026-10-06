@@ -578,6 +578,7 @@ delegate_ops!(TensorAnalytic {
     fn pow_read(lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor>;
     fn expm1_read(input: TensorRead<'_>) -> crate::Result<Tensor>;
     fn log1p_read(input: TensorRead<'_>) -> crate::Result<Tensor>;
+    fn erf_read(input: TensorRead<'_>) -> crate::Result<Tensor>;
 });
 
 delegate_ops!(TensorStructural {

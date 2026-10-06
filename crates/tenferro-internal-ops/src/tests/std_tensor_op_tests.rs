@@ -1008,6 +1008,24 @@ fn test_std_tensor_op_analytic_linearize_emits_ops_for_remaining_variants() {
         log1p_graph.operations().last().unwrap().operation,
         StdTensorOp::Div
     );
+
+    // d erf(x) = (2/sqrt(pi) * exp(-x^2)) * dx: a fixed coefficient times the tangent.
+    let (erf_result, erf_graph) = run_linearize_case(StdTensorOp::Erf, 1, 0, &[true]);
+    assert!(erf_result[0].is_some());
+    let erf_ops: Vec<_> = erf_graph
+        .operations()
+        .iter()
+        .map(|node| node.operation.clone())
+        .collect();
+    assert_eq!(erf_ops.last(), Some(&StdTensorOp::Mul));
+    assert!(erf_ops.contains(&StdTensorOp::Exp));
+    assert!(erf_ops.iter().any(|op| matches!(
+        op,
+        StdTensorOp::Constant { dtype: DType::F64, bytes }
+            if bytes.as_slice() == std::f64::consts::FRAC_2_SQRT_PI.to_le_bytes()
+    )));
+    let (erf_none, _) = run_linearize_case(StdTensorOp::Erf, 1, 0, &[false]);
+    assert_eq!(erf_none, vec![None]);
 }
 
 #[test]
@@ -1169,6 +1187,17 @@ fn test_std_tensor_op_analytic_transpose_rule_emits_ops_for_remaining_variants()
         log1p_graph.operations().last().unwrap().operation,
         StdTensorOp::Div
     );
+
+    let (erf_result, _, erf_graph) = run_transpose_case(StdTensorOp::Erf, 1, &[true], true);
+    assert!(erf_result[0].is_some());
+    assert_eq!(
+        erf_graph.operations().last().unwrap().operation,
+        StdTensorOp::Mul
+    );
+    let (erf_inactive, _, _) = run_transpose_case(StdTensorOp::Erf, 1, &[false], true);
+    assert_eq!(erf_inactive, vec![None]);
+    let (erf_no_cotangent, _, _) = run_transpose_case(StdTensorOp::Erf, 1, &[true], false);
+    assert_eq!(erf_no_cotangent, vec![None]);
 }
 
 #[test]

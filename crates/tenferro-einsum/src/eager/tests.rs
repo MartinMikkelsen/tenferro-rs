@@ -392,6 +392,11 @@ impl TensorAnalytic for NoBroadcastMaterializationBackend {
         let _ = tenferro_tensor::backend::read_owned_tensor("log1p", input)?;
         Err(unexpected("log1p"))
     }
+
+    fn erf_read(&mut self, input: tenferro_tensor::TensorRead<'_>) -> Result<Tensor> {
+        let _ = tenferro_tensor::backend::read_owned_tensor("erf", input)?;
+        Err(unexpected("erf"))
+    }
 }
 
 impl TensorStructural for NoBroadcastMaterializationBackend {

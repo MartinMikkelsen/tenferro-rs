@@ -2622,6 +2622,34 @@ pub trait TensorAnalytic {
     /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
     /// backend execution or storage access cannot provide the requested result.
     fn log1p_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor>;
+
+    /// Elementwise error function `erf(x) = 2/sqrt(pi) * integral_0^x exp(-t^2) dt`.
+    ///
+    /// Defined for real `F32` and `F64` input only; the result has the input
+    /// dtype and shape. `erf(+-0) = +-0`, `erf(+-inf) = +-1`, and `NaN` stays
+    /// `NaN`.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::{TensorAnalytic, Tensor, TensorRead};
+    ///
+    /// fn erf_read_in_session<B: TensorAnalytic>(
+    ///     backend: &mut B,
+    ///     input: TensorRead<'_>,
+    /// ) -> tenferro_tensor::Result<Tensor> {
+    ///     backend.erf_read(input)
+    /// }
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::UnsupportedDType`] for a complex, integer, or `Bool`
+    /// input dtype, [`crate::Error::Validation`] with a typed `ValidationError`
+    /// source for invalid shapes or output metadata, and
+    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
+    /// backend execution or storage access cannot provide the requested result.
+    fn erf_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor>;
 }
 
 /// Shape, layout, and dtype transformation operations.
@@ -2646,8 +2674,8 @@ pub trait TensorStructural {
     ///
     /// Backend overrides may also accept backend-owned strided views. CUDA
     /// accepts numeric and complex views on its active device, including
-    /// arbitrary valid strides, but currently reports an explicit
-    /// unsupported-dtype error for `Bool`.
+    /// arbitrary valid strides; for `Bool` it copies owned tensors but
+    /// reports an explicit unsupported-dtype error for strided views.
     ///
     /// # Examples
     ///

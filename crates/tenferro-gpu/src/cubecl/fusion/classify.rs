@@ -91,6 +91,7 @@ impl FusionElement for f32 {
                 | ElementwiseFusionOp::Pow
                 | ElementwiseFusionOp::Expm1
                 | ElementwiseFusionOp::Log1p
+                | ElementwiseFusionOp::Erf
         )
     }
 }

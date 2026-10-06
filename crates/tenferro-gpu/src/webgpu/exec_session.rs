@@ -365,6 +365,11 @@ impl TensorAnalytic for WebGpuExecSession<'_> {
         let _ = tenferro_tensor::backend::read_owned_tensor("log1p", input)?;
         unsupported!("webgpu_log1p")
     }
+
+    fn erf_read(&mut self, input: tenferro_tensor::TensorRead<'_>) -> crate::Result<Tensor> {
+        let _ = tenferro_tensor::backend::read_owned_tensor("erf", input)?;
+        unsupported!("webgpu_erf")
+    }
 }
 
 impl TensorStructural for WebGpuExecSession<'_> {

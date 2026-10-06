@@ -153,6 +153,7 @@ impl PartialEq for StdTensorOp {
             | (Self::Pow, Self::Pow)
             | (Self::Expm1, Self::Expm1)
             | (Self::Log1p, Self::Log1p)
+            | (Self::Erf, Self::Erf)
             | (Self::DynamicUpdateSlice, Self::DynamicUpdateSlice) => true,
             (Self::DotGeneral { config: a }, Self::DotGeneral { config: b }) => a == b,
             (Self::Transpose { perm: a }, Self::Transpose { perm: b }) => a == b,
@@ -279,7 +280,8 @@ impl Hash for StdTensorOp {
             | Self::Rsqrt
             | Self::Pow
             | Self::Expm1
-            | Self::Log1p => {}
+            | Self::Log1p
+            | Self::Erf => {}
             Self::DotGeneral { config } => {
                 config.hash(state);
             }
@@ -405,7 +407,8 @@ impl GraphOperation for StdTensorOp {
             | Self::Sqrt
             | Self::Rsqrt
             | Self::Expm1
-            | Self::Log1p => 1,
+            | Self::Log1p
+            | Self::Erf => 1,
             Self::Select | Self::Clamp => 3,
             Self::Compare(_) => 2,
             Self::Extension(op) => ExtensionOp::input_count(op.as_ref()),
@@ -446,6 +449,7 @@ impl GraphOperation for StdTensorOp {
             | Self::Pow
             | Self::Expm1
             | Self::Log1p
+            | Self::Erf
             | Self::ExtractDiag { .. }
             | Self::EmbedDiag { .. }
             | Self::Tril { .. }

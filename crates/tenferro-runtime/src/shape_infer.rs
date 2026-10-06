@@ -190,6 +190,7 @@ pub(crate) fn infer_output_dtype_at(
         | StdTensorOp::Rsqrt
         | StdTensorOp::Expm1
         | StdTensorOp::Log1p
+        | StdTensorOp::Erf
         | StdTensorOp::Transpose { .. }
         | StdTensorOp::Reshape { .. }
         | StdTensorOp::BroadcastInDim { .. }
@@ -292,6 +293,7 @@ pub fn infer_output_shapes(
         | StdTensorOp::Pow
         | StdTensorOp::Expm1
         | StdTensorOp::Log1p
+        | StdTensorOp::Erf
         | StdTensorOp::Convert { .. }
         | StdTensorOp::Tril { .. }
         | StdTensorOp::Triu { .. }

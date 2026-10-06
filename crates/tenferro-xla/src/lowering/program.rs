@@ -223,6 +223,15 @@ fn lower_semantic_operation(
         SemanticOpRef::Core(CoreSemanticOp::Log1p) => {
             lower_unary("stablehlo.log_plus_one", &input_values, &output_ty, emitter)?
         }
+        SemanticOpRef::Core(CoreSemanticOp::Erf) => {
+            // StableHLO has no erf; it lives in the CHLO dialect, which this
+            // StableHLO-only emitter does not produce.
+            return Err(Error::UnsupportedOp {
+                op: op_name,
+                reason:
+                    "erf is a CHLO operation (chlo.erf); the StableHLO lowering does not emit CHLO",
+            });
+        }
         SemanticOpRef::Core(CoreSemanticOp::Convert { to, .. }) => {
             lower_convert(*to, &input_values, &output_ty, emitter)?
         }
@@ -604,6 +613,7 @@ fn semantic_op_name(op: SemanticOpRef<'_>) -> &'static str {
             CoreSemanticOp::Pow => "Pow",
             CoreSemanticOp::Expm1 => "Expm1",
             CoreSemanticOp::Log1p => "Log1p",
+            CoreSemanticOp::Erf => "Erf",
             CoreSemanticOp::ExtractDiag { .. } => "ExtractDiag",
             CoreSemanticOp::EmbedDiag { .. } => "EmbedDiag",
             CoreSemanticOp::Tril { .. } => "Tril",

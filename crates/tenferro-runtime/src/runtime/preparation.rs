@@ -1638,7 +1638,8 @@ fn required_core_capability(op: &CoreSemanticOp) -> CoreCapabilityKind {
         | CoreSemanticOp::Rsqrt
         | CoreSemanticOp::Pow
         | CoreSemanticOp::Expm1
-        | CoreSemanticOp::Log1p => CoreCapabilityKind::Elementwise,
+        | CoreSemanticOp::Log1p
+        | CoreSemanticOp::Erf => CoreCapabilityKind::Elementwise,
     }
 }
 
@@ -2268,6 +2269,7 @@ fn exec_op_retained_bytes(op: &ExecOp) -> Option<usize> {
         | ExecOp::Pow
         | ExecOp::Expm1
         | ExecOp::Log1p
+        | ExecOp::Erf
         | ExecOp::DynamicUpdateSlice
         | ExecOp::Concatenate { .. }
         | ExecOp::ShapeOf { .. }

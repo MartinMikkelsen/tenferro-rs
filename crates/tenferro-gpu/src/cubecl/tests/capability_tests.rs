@@ -337,6 +337,10 @@ fn run_supported_case(
             b.with_backend_session(|__s| __s.log1p_read(TensorRead::from_tensor(x)))
                 .unwrap()
         }),
+        PrimitiveOpKind::Erf => assert_unary_matches(cpu, gpu, entry, |b, x| {
+            b.with_backend_session(|__s| __s.erf_read(TensorRead::from_tensor(x)))
+                .unwrap()
+        }),
         PrimitiveOpKind::ReduceSum => assert_reduction_matches(cpu, gpu, entry, |b, x, axes| {
             b.with_backend_session(|__s| __s.reduce_sum_read(TensorRead::from_tensor(x), axes))
                 .unwrap()
@@ -601,6 +605,9 @@ fn run_cpu_unary(
             .unwrap(),
         PrimitiveOpKind::Log1p => cpu
             .with_backend_session(|__s| __s.log1p_read(TensorRead::from_tensor(input)))
+            .unwrap(),
+        PrimitiveOpKind::Erf => cpu
+            .with_backend_session(|__s| __s.erf_read(TensorRead::from_tensor(input)))
             .unwrap(),
         _ => panic!("not a unary smoke op: {op:?}"),
     }

@@ -400,6 +400,12 @@ impl TensorAnalytic for DefaultReadBackend {
         self.calls.push("log1p");
         Ok(marker())
     }
+
+    fn erf_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
+        let _ = crate::backend::read_owned_tensor("erf", input)?;
+        self.calls.push("erf");
+        Ok(marker())
+    }
 }
 
 impl TensorStructural for DefaultReadBackend {

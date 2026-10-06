@@ -149,6 +149,7 @@ impl TensorAnalytic for CountingDotSession<'_> {
         pow_read(lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> tenferro_tensor::Result<Tensor>;
         expm1_read(input: TensorRead<'_>) -> tenferro_tensor::Result<Tensor>;
         log1p_read(input: TensorRead<'_>) -> tenferro_tensor::Result<Tensor>;
+        erf_read(input: TensorRead<'_>) -> tenferro_tensor::Result<Tensor>;
     }
 }
 

@@ -479,6 +479,7 @@ fn backend_dispatch_cases() -> Vec<(ExecOp, PrimitiveOpKind)> {
         (ExecOp::Pow, PrimitiveOpKind::Pow),
         (ExecOp::Expm1, PrimitiveOpKind::Expm1),
         (ExecOp::Log1p, PrimitiveOpKind::Log1p),
+        (ExecOp::Erf, PrimitiveOpKind::Erf),
         (ExecOp::Gather(gather_config()), PrimitiveOpKind::Gather),
         (
             ExecOp::GatherDynamicSliceSizes {

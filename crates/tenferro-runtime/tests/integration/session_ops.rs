@@ -1393,6 +1393,11 @@ macro_rules! panic_analytic {
                 panic!("log1p should not be called in this test")
             }
 
+            fn erf_read(&mut self, input: TensorRead<'_>) -> TensorResult {
+                let _ = tenferro_tensor::backend::read_owned_tensor("erf", input)?;
+                panic!("erf should not be called in this test")
+            }
+
             // Reproduce the previous read-half default: delegate an owned tensor and
             // reject a borrowed view.
             fn pow_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> TensorResult {
@@ -1716,6 +1721,11 @@ impl TensorAnalytic for WrongDTypeSessionBackend {
     fn log1p_read(&mut self, input: tenferro_tensor::TensorRead<'_>) -> TensorResult {
         let _ = tenferro_tensor::backend::read_owned_tensor("log1p", input)?;
         panic!("log1p should not be called in this test")
+    }
+
+    fn erf_read(&mut self, input: tenferro_tensor::TensorRead<'_>) -> TensorResult {
+        let _ = tenferro_tensor::backend::read_owned_tensor("erf", input)?;
+        panic!("erf should not be called in this test")
     }
 }
 

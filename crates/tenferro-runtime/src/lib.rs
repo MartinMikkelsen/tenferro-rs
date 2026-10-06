@@ -41,6 +41,8 @@
 pub mod ad_support;
 mod checkpoint;
 mod compiler;
+#[doc(hidden)]
+pub mod composite;
 pub mod error;
 mod exec;
 pub mod extension;

@@ -1807,6 +1807,41 @@ impl TracedTensor {
         self.apply_same_shape_unary(StdTensorOp::Log1p)
     }
 
+    /// Elementwise error function `erf(x)`, for real `F32`/`F64` tensors.
+    ///
+    /// `erf(+-0) = +-0`, `erf(+-inf) = +-1`, and `NaN` stays `NaN`. The
+    /// derivative is `2/sqrt(pi) * exp(-x^2)`.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// # use tenferro_runtime::TracedTensor;
+    /// let x = TracedTensor::from_vec_col_major(vec![2], vec![0.0_f64, 1.0])?;
+    /// let y = x.erf()?;
+    /// assert_eq!(y.dtype(), tenferro_runtime::DType::F64);
+    /// # Ok::<(), tenferro_runtime::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Unsupported`] (phase `GraphBuild`) for complex,
+    /// integer, or `Bool` input, or [`Error::RuntimeStateSource`] when the
+    /// graph metadata registry is unavailable or poisoned while recording the
+    /// unary result.
+    pub fn erf(&self) -> Result<TracedTensor> {
+        if !matches!(self.dtype, DType::F32 | DType::F64) {
+            return Err(Error::unsupported(
+                "TracedTensor::erf",
+                ErrorPhase::GraphBuild,
+                format!(
+                    "erf is defined for real F32/F64 tensors, got {:?}",
+                    self.dtype
+                ),
+            ));
+        }
+        self.apply_same_shape_unary(StdTensorOp::Erf)
+    }
+
     /// Convert the tensor to a different dtype using checked conversion.
     ///
     /// Use [`cast`](Self::cast) when a lossy dtype projection is intended.
@@ -3416,6 +3451,8 @@ impl TracedTensor {
         roots
     }
 }
+
+mod composite_ops;
 
 #[cfg(test)]
 mod tests;

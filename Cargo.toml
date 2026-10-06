@@ -50,6 +50,8 @@ rand = "0.8"
 half = "2.7"
 num-complex = "0.4"
 num-traits = "0.2"
+# Scalar `erf`/`erff` for the CPU analytic kernels (`f64::erf` is unstable in std).
+libm = "0.2.16"
 thiserror = "2"
 smallvec = { version = "1", features = ["union"] }
 rayon = "1"

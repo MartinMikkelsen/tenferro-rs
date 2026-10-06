@@ -106,16 +106,26 @@ fn strided_fused_op(op: ElementwiseFusionOp) -> FusedOp {
         ElementwiseFusionOp::Pow => FusedOp::Pow,
         ElementwiseFusionOp::Expm1 => FusedOp::Expm1,
         ElementwiseFusionOp::Log1p => FusedOp::Log1p,
-        ElementwiseFusionOp::Remainder => {
-            unreachable!("remainder must be filtered before CPU elementwise fusion")
+        // INVARIANT: `plan_uses_unfused_op` declines every plan containing
+        // these ops before a strided plan is built; strided_fused has no
+        // remainder or `erf` instruction.
+        ElementwiseFusionOp::Remainder | ElementwiseFusionOp::Erf => {
+            unreachable!("ops without a strided_fused instruction are declined before CPU fusion")
         }
     }
 }
 
+/// Whether the plan contains an op that `strided_fused` cannot replay.
+///
+/// `erf` has no `FusedOp` instruction yet, so a region containing it is
+/// declined and its ops run unfused.
 fn plan_uses_unfused_op(plan: &ElementwiseFusionPlan) -> bool {
-    plan.ops()
-        .iter()
-        .any(|inst| inst.op() == ElementwiseFusionOp::Remainder)
+    plan.ops().iter().any(|inst| {
+        matches!(
+            inst.op(),
+            ElementwiseFusionOp::Remainder | ElementwiseFusionOp::Erf
+        )
+    })
 }
 
 fn plan_uses_ordered_op(plan: &ElementwiseFusionPlan) -> bool {

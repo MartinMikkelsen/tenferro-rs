@@ -68,6 +68,7 @@ pub enum CoreSemanticOp {
     Pow,
     Expm1,
     Log1p,
+    Erf,
     ExtractDiag {
         axis_a: usize,
         axis_b: usize,
@@ -196,6 +197,7 @@ impl TryFrom<&StdTensorOp> for CoreSemanticOp {
             StdTensorOp::Pow => Self::Pow,
             StdTensorOp::Expm1 => Self::Expm1,
             StdTensorOp::Log1p => Self::Log1p,
+            StdTensorOp::Erf => Self::Erf,
             StdTensorOp::ExtractDiag { axis_a, axis_b } => Self::ExtractDiag {
                 axis_a: *axis_a,
                 axis_b: *axis_b,
@@ -295,6 +297,7 @@ impl From<&CoreSemanticOp> for StdTensorOp {
             CoreSemanticOp::Pow => Self::Pow,
             CoreSemanticOp::Expm1 => Self::Expm1,
             CoreSemanticOp::Log1p => Self::Log1p,
+            CoreSemanticOp::Erf => Self::Erf,
             CoreSemanticOp::ExtractDiag { axis_a, axis_b } => Self::ExtractDiag {
                 axis_a: *axis_a,
                 axis_b: *axis_b,

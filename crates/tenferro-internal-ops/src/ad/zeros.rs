@@ -70,6 +70,31 @@ pub(super) fn build_one_like(
     build_scalar_like(builder, dtype, one_bytes(dtype), anchor, anchor_rank)
 }
 
+/// Broadcast the real constant `value` in a real floating `dtype` to the anchor's shape.
+///
+/// Returns `None` for a dtype that is not `F32` or `F64`; rules that need a
+/// real constant are defined only on the real floating dtypes.
+pub(super) fn build_real_float_like(
+    builder: &mut dyn PrimitiveRuleBuilder,
+    dtype: DType,
+    value: f64,
+    anchor: ValueRef<StdTensorOp>,
+    anchor_rank: usize,
+) -> Option<LocalValueId> {
+    let bytes = match dtype {
+        DType::F32 => (value as f32).to_le_bytes().to_vec(),
+        DType::F64 => value.to_le_bytes().to_vec(),
+        _ => return None,
+    };
+    Some(build_scalar_like(
+        builder,
+        dtype,
+        bytes,
+        anchor,
+        anchor_rank,
+    ))
+}
+
 fn build_scalar_like(
     builder: &mut dyn PrimitiveRuleBuilder,
     dtype: DType,

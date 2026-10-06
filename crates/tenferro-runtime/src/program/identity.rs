@@ -401,6 +401,8 @@ fn encode_core_op(encoder: &mut CanonicalEncoder, op: &CoreSemanticOp) {
         CoreSemanticOp::Pow => encoder.u8(28),
         CoreSemanticOp::Expm1 => encoder.u8(29),
         CoreSemanticOp::Log1p => encoder.u8(30),
+        // Appended after the last tag; existing tags are cache-key stable.
+        CoreSemanticOp::Erf => encoder.u8(51),
         CoreSemanticOp::ExtractDiag { axis_a, axis_b } => {
             encoder.u8(31);
             encoder.usize(*axis_a);
