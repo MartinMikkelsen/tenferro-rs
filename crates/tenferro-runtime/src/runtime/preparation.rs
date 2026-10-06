@@ -354,7 +354,12 @@ impl PreparedProgramRoot {
             transfer_registry,
         )?);
         let regions: Arc<[super::region::ElementwiseRegion]> =
-            super::region::plan_elementwise_regions(&staging, &schedule).into();
+            super::region::plan_elementwise_regions(
+                &staging,
+                &schedule,
+                root_location.witness().max_fused_region_inputs(),
+            )
+            .into();
         let logical_retained_bytes = prepared_program_root_retained_bytes(
             &identity,
             &semantic,

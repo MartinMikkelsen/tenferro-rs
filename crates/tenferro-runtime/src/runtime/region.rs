@@ -104,10 +104,13 @@ impl ElementwiseRegion {
 /// Regions are skipped when the segmentation only yields a candidate that the
 /// shared eligibility check rejects, or when the candidate does not map to
 /// consecutive scheduled operation nodes: those keep the per-instruction
-/// dispatch path.
+/// dispatch path. A candidate reading more than `max_inputs` external inputs
+/// (the root engine's fused-kernel limit, when it reports one) is skipped too,
+/// because the backend would decline that fusion on every execution.
 pub(crate) fn plan_elementwise_regions(
     staging: &ExecProgram,
     schedule: &ScheduledGraph,
+    max_inputs: Option<usize>,
 ) -> Vec<ElementwiseRegion> {
     let node_of_instruction: HashMap<usize, usize> = schedule
         .nodes()
@@ -136,7 +139,7 @@ pub(crate) fn plan_elementwise_regions(
         };
         let start = cursor;
         cursor += instructions.len();
-        if instructions.len() < 2 {
+        if instructions.len() < 2 || max_inputs.is_some_and(|limit| input_slots.len() > limit) {
             continue;
         }
         let Some(plan) = build_elementwise_fusion_plan(&instructions, &input_slots, &output_slots)

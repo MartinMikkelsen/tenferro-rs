@@ -822,6 +822,56 @@ fn prepared_elementwise_region_falls_back_when_fusion_is_declined() {
     }
 }
 
+/// Regression for #1968: the CPU engine reports the fused kernel's input
+/// limit, so a region reading more inputs is not planned at all. It runs
+/// instruction by instruction, without a fusion attempt the backend would
+/// decline on every execution, and still matches the unprepared path.
+#[test]
+fn prepared_elementwise_region_above_cpu_input_limit_is_not_planned() {
+    let runtime = cpu_runtime();
+    let n = 16 * 1024usize;
+    let inputs = (0..5)
+        .map(|_| TracedTensor::input_concrete_shape(DType::F64, &[n]).unwrap())
+        .collect::<Vec<_>>();
+    let mut sum = (&inputs[0] + &inputs[1]).unwrap();
+    for input in &inputs[2..] {
+        sum = (&sum + input).unwrap();
+    }
+    let shape = [n];
+    let specs = inputs
+        .iter()
+        .map(|input| (input, DType::F64, &shape[..]))
+        .collect::<Vec<_>>();
+    let program = GraphCompiler::new()
+        .compile_with_input_specs(&sum, &specs)
+        .unwrap();
+    let data = (0..5)
+        .map(|k| {
+            Tensor::from_vec_col_major(
+                vec![n],
+                (0..n).map(|i| (k + 1) as f64 + (i % 7) as f64).collect(),
+            )
+            .unwrap()
+        })
+        .collect::<Vec<_>>();
+    let refs = data.iter().collect::<Vec<_>>();
+    let prepared = runtime.prepare_compiled(&program, &refs).unwrap();
+    assert_eq!(
+        prepared.elementwise_region_summary(),
+        (0, 0),
+        "a five-input region exceeds the CPU fused kernel's input limit"
+    );
+
+    let mut prepared_out = runtime.run_prepared(&prepared, &refs).unwrap();
+    assert_eq!(prepared.elementwise_region_execution_counts(), (0, 0));
+    let actual = prepared_out.pop().unwrap();
+    let actual = actual.as_slice::<f64>().unwrap();
+    for (i, value) in actual.iter().enumerate() {
+        let expected = 15.0 + 5.0 * (i % 7) as f64;
+        assert_eq!(*value, expected);
+    }
+}
+
 /// Stage 1: a region with several live-outs publishes every one of them.
 ///
 /// Both `y` and `z` are program outputs of one elementwise region.
