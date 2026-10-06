@@ -421,6 +421,25 @@ The WebGPU backend is experimental. It uses the same tensor APIs as CUDA and
 CPU, but its operation coverage is intentionally much narrower. Unsupported
 rows return explicit errors and do not fall back to CPU.
 
+**WebGPU/Metal versus CUDA at a glance.** In practice the WebGPU/Metal surface
+is transfers, `F32`/`C32` contraction (`dot_general`, binary einsum), `F32`/`I32`
+transpose and compaction, and the Apple Metal FFT. Elementwise and analytic
+math, reductions, reshape/broadcast, indexing (`gather`, `slice`, `pad`, ...),
+and linear algebra are CUDA-only today (see the CUDA coverage table above).
+A model that needs any of those ops on an Apple GPU does not run on WebGPU yet;
+plan for the CPU backend (or CUDA) for those steps, with explicit transfers.
+
+| Family | CUDA | WebGPU/Metal |
+| --- | --- | --- |
+| Upload/download | Explicit, all dtypes | Explicit, all dtypes |
+| `dot_general`, einsum | `F32`, `F64`, `C32`, `C64` | `F32`, `C32` |
+| Elementwise, analytic, comparison/selection | Yes, per-op dtypes in the table above | No |
+| Reductions | Yes, per-op dtypes in the table above | No |
+| Reshape, broadcast, indexing, padding, concatenation | Yes | No (only `transpose` and `to_contiguous_read` for `F32`/`I32`) |
+| Linear algebra | cuSOLVER/cuBLAS families above | No |
+| FFT | cuFFT 1D | CubeK on Apple Metal (power-of-two lengths) |
+| Fused elementwise regions | Yes | No |
+
 | Operation or family | WebGPU dtype support | Notes |
 | --- | --- | --- |
 | Allocation, upload, download | `F32`, `F64`, `I32`, `I64`, `Bool`, `C32`, `C64` | Explicit CPU/WebGPU transfer only |

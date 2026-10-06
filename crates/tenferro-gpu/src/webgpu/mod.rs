@@ -1,4 +1,11 @@
 //! CubeCL WebGPU provider runtime and backend skeleton.
+//!
+//! The WebGPU/Metal backend is experimental and implements a narrow operation
+//! subset: explicit transfers, `F32`/`C32` `dot_general` (and the einsum paths
+//! that lower to it), `F32`/`I32` transpose and compaction, and the Apple Metal
+//! FFT. Elementwise math, reductions, reshape/broadcast, indexing and linear
+//! algebra return typed unsupported errors instead of falling back to CPU. The
+//! devices-and-gpu guide compares this subset with CUDA.
 
 use cubecl::prelude::{CubeCount, CubeDim, CubeElement, CubeType, Sequence, TensorBinding};
 use cubecl_wgpu::WgpuRuntime;
