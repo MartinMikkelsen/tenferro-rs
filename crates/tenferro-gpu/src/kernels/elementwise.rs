@@ -167,11 +167,11 @@ macro_rules! axpby_strided_source_kernel {
             y: &mut Array<E>,
             x: &Array<E>,
             coefficients: &Array<E>,
-            #[comptime] dims: Sequence<usize>,
-            #[comptime] x_strides: Sequence<i64>,
+            dims: Sequence<usize>,
+            x_strides: Sequence<i64>,
             x_offset: i64,
             y_offset: i64,
-            #[comptime] len: usize,
+            len: usize,
             #[comptime] rank: usize,
         ) {
             if ABSOLUTE_POS < len {
@@ -179,11 +179,10 @@ macro_rules! axpby_strided_source_kernel {
                 let mut x_index = x_offset;
                 #[unroll]
                 for axis in 0..rank {
-                    let dim = comptime! { *dims.index(axis) };
+                    let dim = dims[axis];
                     let coordinate = flat % dim;
                     flat /= dim;
-                    let x_stride = comptime! { *x_strides.index(axis) };
-                    x_index += (coordinate as i64) * x_stride;
+                    x_index += (coordinate as i64) * x_strides[axis];
                 }
                 let y_index = usize::cast_from(y_offset) + ABSOLUTE_POS;
                 y[y_index] =

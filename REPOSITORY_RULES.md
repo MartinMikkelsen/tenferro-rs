@@ -702,6 +702,11 @@ Tests follow implementation ownership.
   shape/stride metadata conventions, launch configuration rules, and device
   transfer behavior; any change to those conventions updates it in the same
   PR.
+- Tensor extents, strides, offsets, lengths, slice starts, paddings,
+  slice/window sizes and running axis offsets are runtime kernel arguments,
+  never `#[comptime]` (each value compiles a new module); a new compile-time
+  parameter must be classified in `kernel_metadata_contract.rs`
+  ([GPU design rule](docs/design/gpu-backend-design.md)).
 - CUDA operation paths whose accepted implementation is an NVIDIA vendor
   library must fail with typed load or provider errors when the required
   NVIDIA library is unavailable or lacks support. They must not silently fall

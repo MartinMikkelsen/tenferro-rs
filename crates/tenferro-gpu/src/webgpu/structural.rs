@@ -133,7 +133,7 @@ where
                     // SAFETY: The tiled classification proves a compact 2D
                     // transpose. Bounds guards cover edge tiles and every unit
                     // reaches the shared-memory barrier.
-                    crate::kernels::structural::tiled_transpose_kernel::launch_unchecked::<
+                    crate::kernels::structural::tiled_transpose_comptime_layout_kernel::launch_unchecked::<
                         T,
                         WgpuRuntime,
                     >(
@@ -170,7 +170,10 @@ where
     unsafe {
         // SAFETY: `NativePermutationPlan` validated source/destination bounds,
         // destination non-overlap, shape products, and disjoint allocations.
-        crate::kernels::structural::materialize_strided_kernel::launch_unchecked::<T, WgpuRuntime>(
+        crate::kernels::structural::materialize_strided_comptime_layout_kernel::launch_unchecked::<
+            T,
+            WgpuRuntime,
+        >(
             backend.runtime().client(),
             cube_count_for_len(plan.len)?,
             cube_dim_1d(),

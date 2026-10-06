@@ -44,11 +44,11 @@ use tenferro_tensor::backend::{
 use tenferro_tensor::{ContractionScalar, DType, TensorRead, TensorWrite};
 
 use super::dispatch::{
-    alloc_output, comptime_sequence, cube_count_for_len, cube_dim_1d, cubecl_buffer,
-    cubecl_view_buffer, cubecl_view_mut_buffer, ensure_resident_on_runtime,
-    ensure_view_mut_resident_on_runtime, ensure_view_resident_on_runtime, prepared_view_access,
-    prepared_view_mut_access, typed_tensor_array_arg, typed_tensor_mut_array_arg,
-    typed_view_array_arg, typed_view_mut_array_arg,
+    alloc_output, cube_count_for_len, cube_dim_1d, cubecl_buffer, cubecl_view_buffer,
+    cubecl_view_mut_buffer, ensure_resident_on_runtime, ensure_view_mut_resident_on_runtime,
+    ensure_view_resident_on_runtime, prepared_view_access, prepared_view_mut_access,
+    runtime_sequence, typed_tensor_array_arg, typed_tensor_mut_array_arg, typed_view_array_arg,
+    typed_view_mut_array_arg,
 };
 use super::error::unsupported_dtype;
 use super::gemm::{typed_device_ptr, write_device_ptr};
@@ -767,8 +767,8 @@ macro_rules! impl_cublas_scalar {
                     y,
                     x,
                     coefficients,
-                    comptime_sequence(dims),
-                    comptime_sequence(x_strides),
+                    runtime_sequence(dims),
+                    runtime_sequence(x_strides),
                     x_offset,
                     y_offset,
                     len,

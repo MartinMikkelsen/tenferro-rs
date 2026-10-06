@@ -9,7 +9,7 @@ use crate::kernels::helpers::{
 fn strided_view_offset_from_tensor<E: CubePrimitive>(
     mut flat: usize,
     logical: &Tensor<E>,
-    #[comptime] strides: Sequence<i64>,
+    strides: &Sequence<i64>,
     base_offset: i64,
     #[comptime] rank: usize,
 ) -> usize {
@@ -19,8 +19,7 @@ fn strided_view_offset_from_tensor<E: CubePrimitive>(
         let dim = logical.shape(axis);
         let coordinate = flat % dim;
         flat /= dim;
-        let stride = comptime! { *strides.index(axis) };
-        offset += (coordinate as i64) * stride;
+        offset += (coordinate as i64) * strides[axis];
     }
     usize::cast_from(offset)
 }
@@ -34,13 +33,17 @@ pub fn fill_zero_kernel<E: CubePrimitive>(out: &mut Array<E>) {
 
 /// Write an exact zero to every logical coordinate of a strided destination
 /// region, leaving the elements the region does not address untouched.
+///
+/// The region's extents, strides, offset and length are runtime scalar
+/// arguments: only the rank is compile-time, so one module serves every layout
+/// of a given rank.
 #[cube(launch_unchecked)]
 pub fn fill_zero_view_kernel<E: CubePrimitive>(
     out: &mut Array<E>,
-    #[comptime] dims: Sequence<usize>,
-    #[comptime] strides: Sequence<i64>,
+    dims: Sequence<usize>,
+    strides: Sequence<i64>,
     base_offset: i64,
-    #[comptime] len: usize,
+    len: usize,
     #[comptime] rank: usize,
 ) {
     if ABSOLUTE_POS < len {
@@ -48,11 +51,10 @@ pub fn fill_zero_view_kernel<E: CubePrimitive>(
         let mut index = base_offset;
         #[unroll]
         for axis in 0..rank {
-            let dim = comptime! { *dims.index(axis) };
+            let dim = dims[axis];
             let coordinate = flat % dim;
             flat /= dim;
-            let stride = comptime! { *strides.index(axis) };
-            index += (coordinate as i64) * stride;
+            index += (coordinate as i64) * strides[axis];
         }
         out[usize::cast_from(index)] = zero_value::<E>();
     }
@@ -83,8 +85,43 @@ pub fn scale_in_place_complex_kernel<C: ComplexCore>(out: &mut Array<C>, factor:
     }
 }
 
+/// Gather a strided source view into a compact destination (CUDA).
+///
+/// The view's extents, signed strides, offset and length are runtime scalar
+/// arguments, so one module serves every layout of a given rank.
 #[cube(launch_unchecked)]
 pub fn materialize_strided_kernel<E: CubePrimitive>(
+    dst: &mut Array<E>,
+    src: &Array<E>,
+    dims: Sequence<usize>,
+    src_strides: Sequence<i64>,
+    src_offset: i64,
+    len: usize,
+    #[comptime] rank: usize,
+) {
+    if ABSOLUTE_POS < len {
+        let mut flat = ABSOLUTE_POS;
+        let mut src_index = src_offset;
+        #[unroll]
+        for axis in 0..rank {
+            let dim = dims[axis];
+            let coordinate = flat % dim;
+            flat /= dim;
+            src_index += (coordinate as i64) * src_strides[axis];
+        }
+        dst[ABSOLUTE_POS] = src[usize::cast_from(src_index)];
+    }
+}
+
+/// WebGPU/Metal twin of [`materialize_strided_kernel`] that bakes the fused
+/// native-permutation layout into the module.
+///
+/// INVARIANT: this compile-time layout is the documented WebGPU/Metal exception
+/// in `docs/design/gpu-backend-design.md` (raw source/destination arrays carry no
+/// logical layout, and raw-array runtime metadata packing is ambiguous on Metal).
+/// CUDA launches [`materialize_strided_kernel`] instead.
+#[cube(launch_unchecked)]
+pub fn materialize_strided_comptime_layout_kernel<E: CubePrimitive>(
     dst: &mut Array<E>,
     src: &Array<E>,
     #[comptime] dims: Sequence<usize>,
@@ -108,8 +145,77 @@ pub fn materialize_strided_kernel<E: CubePrimitive>(
     }
 }
 
+/// Shared-memory tiled 2D (optionally batched) transpose of a compact source
+/// into a compact destination (CUDA).
+///
+/// The batch stride and both fast extents are runtime scalar arguments; only
+/// the tile shape, block rows, shared-memory padding and vector width are
+/// compile-time algorithm configuration.
 #[cube(launch_unchecked)]
 pub fn tiled_transpose_kernel<E: CubePrimitive>(
+    dst: &mut Array<E>,
+    src: &Array<E>,
+    src_offset: usize,
+    batch_stride: usize,
+    dst_fast_extent: usize,
+    src_fast_extent: usize,
+    #[comptime] tile: usize,
+    #[comptime] block_rows: usize,
+    #[comptime] padding: usize,
+    #[comptime] vector_width: usize,
+) {
+    let pitch = tile + padding;
+    let mut shared = SharedMemory::<E>::new(tile * pitch);
+    let unit_x = UNIT_POS_X as usize;
+    let unit_y = UNIT_POS_Y as usize;
+    // The destination tiles advance along `x`, so a block's neighbours along the
+    // fastest-varying grid axis stream the destination instead of striding
+    // through it one tile at a time.
+    let tile_dst_fast = CUBE_POS_X as usize * tile;
+    let tile_src_fast = CUBE_POS_Y as usize * tile;
+    let batch_base = CUBE_POS_Z as usize * batch_stride;
+
+    let mut row = unit_y;
+    while row < tile {
+        let dst_fast = tile_dst_fast + row;
+        #[unroll]
+        for lane in 0..vector_width {
+            let local_src_fast = unit_x * vector_width + lane;
+            let src_fast = tile_src_fast + local_src_fast;
+            if dst_fast < dst_fast_extent && src_fast < src_fast_extent {
+                let src_index = src_offset + batch_base + dst_fast * src_fast_extent + src_fast;
+                shared[row * pitch + local_src_fast] = src[src_index];
+            }
+        }
+        row += block_rows;
+    }
+
+    sync_cube();
+
+    row = unit_y;
+    while row < tile {
+        let src_fast = tile_src_fast + row;
+        #[unroll]
+        for lane in 0..vector_width {
+            let local_dst_fast = unit_x * vector_width + lane;
+            let dst_fast = tile_dst_fast + local_dst_fast;
+            if dst_fast < dst_fast_extent && src_fast < src_fast_extent {
+                let dst_index = batch_base + dst_fast + src_fast * dst_fast_extent;
+                dst[dst_index] = shared[local_dst_fast * pitch + row];
+            }
+        }
+        row += block_rows;
+    }
+}
+
+/// WebGPU/Metal twin of [`tiled_transpose_kernel`] with the batch stride and
+/// fast extents baked into the module.
+///
+/// INVARIANT: the documented WebGPU/Metal native-permutation exception (see
+/// [`materialize_strided_comptime_layout_kernel`]); CUDA launches
+/// [`tiled_transpose_kernel`] instead.
+#[cube(launch_unchecked)]
+pub fn tiled_transpose_comptime_layout_kernel<E: CubePrimitive>(
     dst: &mut Array<E>,
     src: &Array<E>,
     src_offset: usize,
@@ -169,13 +275,13 @@ pub fn tiled_transpose_kernel<E: CubePrimitive>(
 pub fn contiguous_to_view_kernel<E: CubePrimitive>(
     dst: &mut Array<E>,
     src: &Tensor<E>,
-    #[comptime] strides: Sequence<i64>,
+    strides: Sequence<i64>,
     base_offset: i64,
     #[comptime] rank: usize,
 ) {
     if ABSOLUTE_POS < src.len() {
         let dst_offset =
-            strided_view_offset_from_tensor(ABSOLUTE_POS, src, strides, base_offset, rank);
+            strided_view_offset_from_tensor(ABSOLUTE_POS, src, &strides, base_offset, rank);
         dst[dst_offset] = src[ABSOLUTE_POS];
     }
 }
@@ -184,12 +290,12 @@ pub fn contiguous_to_view_kernel<E: CubePrimitive>(
 pub fn strided_to_strided_kernel<E: CubePrimitive>(
     dst: &mut Array<E>,
     src: &Array<E>,
-    #[comptime] dims: Sequence<usize>,
-    #[comptime] src_strides: Sequence<i64>,
-    #[comptime] dst_strides: Sequence<i64>,
+    dims: Sequence<usize>,
+    src_strides: Sequence<i64>,
+    dst_strides: Sequence<i64>,
     src_offset: i64,
     dst_offset: i64,
-    #[comptime] len: usize,
+    len: usize,
     #[comptime] rank: usize,
 ) {
     if ABSOLUTE_POS < len {
@@ -198,13 +304,11 @@ pub fn strided_to_strided_kernel<E: CubePrimitive>(
         let mut dst_index = dst_offset;
         #[unroll]
         for axis in 0..rank {
-            let dim = comptime! { *dims.index(axis) };
+            let dim = dims[axis];
             let coordinate = flat % dim;
             flat /= dim;
-            let src_stride = comptime! { *src_strides.index(axis) };
-            let dst_stride = comptime! { *dst_strides.index(axis) };
-            src_index += (coordinate as i64) * src_stride;
-            dst_index += (coordinate as i64) * dst_stride;
+            src_index += (coordinate as i64) * src_strides[axis];
+            dst_index += (coordinate as i64) * dst_strides[axis];
         }
         dst[usize::cast_from(dst_index)] = src[usize::cast_from(src_index)];
     }
@@ -460,7 +564,7 @@ pub fn concatenate_copy_kernel<E: CubePrimitive>(
     out: &mut Tensor<E>,
     input: &Tensor<E>,
     #[comptime] axis: usize,
-    #[comptime] axis_offset: usize,
+    axis_offset: usize,
     #[comptime] rank: usize,
 ) {
     if ABSOLUTE_POS < input.len() {

@@ -143,6 +143,20 @@ where
     out
 }
 
+/// Pass per-axis layout values (extents, strides, starts, paddings) as runtime
+/// scalar kernel arguments.
+///
+/// A runtime `Sequence` contributes only its length to the kernel's compile-time
+/// key, so the module is specialized per rank and not per layout value, and the
+/// values travel with the launch's scalar arguments instead of a device upload.
+/// Use [`comptime_sequence`] only for operation attributes such as axis maps.
+pub(crate) fn runtime_sequence<T>(values: &[T]) -> SequenceArg<CubeclCudaRuntime, T>
+where
+    T: LaunchArg<RuntimeArg<CubeclCudaRuntime> = T> + Copy,
+{
+    values.iter().copied().collect()
+}
+
 pub(crate) fn cubecl_buffer<'a, T: 'static>(
     tensor: &'a TypedTensor<T, impl TensorRank>,
     op: &'static str,

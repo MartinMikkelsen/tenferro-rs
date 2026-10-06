@@ -6,6 +6,11 @@ use tenferro_gpu::cuda::{
 use tenferro_runtime::BackendSessionHost;
 use tenferro_tensor::{Tensor, TensorRead};
 
+// The direct cuBLAS example (#1940) runs here so the GPU CI lane, which executes
+// this binary, also executes it.
+#[path = "cuda_vendor_interop.rs"]
+mod cuda_vendor_interop;
+
 const TUTORIAL_SKIP_MARKER: &str = "TENFERRO_TUTORIAL_SKIP:";
 
 fn skip_or_fail(
@@ -48,5 +53,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let sum = download_tensor(backend.runtime(), &gpu_sum)?;
     assert_eq!(sum.as_slice::<f64>()?, &[4.0, 6.0]);
     println!("cuda_tutorial: upload -> session -> download passed");
+    cuda_vendor_interop::run(&mut backend)?;
     Ok(())
 }

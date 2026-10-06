@@ -190,7 +190,8 @@ where
     T: CubeElement + TensorScalar + Clone + Send + Sync + 'static,
 {
     let byte_len = T::as_bytes(&data).len();
-    let handle = rt.client().create_from_slice(T::as_bytes(&data));
+    // `data` is owned: hand its allocation to CubeCL instead of staging a copy.
+    let handle = rt.client().create(cubecl::bytes::Bytes::from_elems(data));
     dispatch::typed_from_cubecl(
         shape,
         crate::CubeclBuffer::new(
@@ -222,12 +223,23 @@ where
     if tensor.n_elements() == 0 {
         return TypedTensor::from_vec_col_major(tensor.shape().to_vec(), Vec::new());
     }
-    rt.synchronize()?;
-    let bytes = rt
-        .client()
-        .read_one(prepared.into_handle())
-        .map_err(|err| crate::Error::backend_source(op, err))?;
-    TypedTensor::from_vec_col_major(tensor.shape().to_vec(), T::from_bytes(&bytes).to_vec())
+    let handle = prepared.into_handle();
+    let len = tensor.n_elements();
+    let byte_len = len.checked_mul(std::mem::size_of::<T>()).ok_or_else(|| {
+        crate::Error::invalid_argument(op, "shape", "download byte length overflows")
+    })?;
+    let data = if handle.size_in_used() == byte_len as u64 {
+        // Copy straight into the vector the host tensor will own (#2009).
+        super::memory::download_owned_vec::<T>(rt, handle, len, byte_len, op)?
+    } else {
+        rt.synchronize()?;
+        let bytes = rt
+            .client()
+            .read_one(handle)
+            .map_err(|err| crate::Error::backend_source(op, err))?;
+        T::from_bytes(&bytes).to_vec()
+    };
+    TypedTensor::from_vec_col_major(tensor.shape().to_vec(), data)
 }
 
 /// Allocate a CubeCL-owned byte workspace and return its CUDA pointer.
@@ -863,8 +875,22 @@ fn fill_zero_span<T: 'static>(
         crate::Error::invalid_argument(FILL_ZERO_OP, "shape", "destination byte length overflows")
     })?;
     rt.set_current_cuda_context(FILL_ZERO_OP)?;
-    let ptr = offset_device_ptr::<T>(rt, prepared, offset, FILL_ZERO_OP)?;
-    rt.flush_cubecl(FILL_ZERO_OP)?;
+    let offset = usize::try_from(offset).map_err(|_| {
+        crate::Error::invalid_argument(FILL_ZERO_OP, "layout", "view offset must be nonnegative")
+    })?;
+    let offset_bytes = offset
+        .checked_mul(std::mem::size_of::<T>())
+        .ok_or_else(|| {
+            crate::Error::invalid_argument(FILL_ZERO_OP, "layout", "view byte offset overflows")
+        })?;
+    // Resolve the destination and submit pending CubeCL work in one hand-off:
+    // the memset below must not overtake queued launches that may still use
+    // memory this allocation reuses.
+    let base = rt.resolve_and_flush(prepared.into_handle(), FILL_ZERO_OP)?;
+    let addr = base.checked_add(offset_bytes as u64).ok_or_else(|| {
+        crate::Error::invalid_argument(FILL_ZERO_OP, "layout", "view device address overflows")
+    })?;
+    let ptr = cuda_device_ptr_from_addr(addr, FILL_ZERO_OP)?;
     let stream = rt.raw_cuda_stream()?;
     let cross_stream = if rt.is_current_stream_slot(&handle) {
         Vec::new()
@@ -932,8 +958,8 @@ where
             count,
             dim,
             output_arg,
-            dispatch::comptime_sequence(&dims),
-            dispatch::comptime_sequence(&strides),
+            dispatch::runtime_sequence(&dims),
+            dispatch::runtime_sequence(&strides),
             offset,
             len,
             rank,

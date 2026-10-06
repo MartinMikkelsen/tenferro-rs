@@ -658,6 +658,12 @@ gpu	tenferro-gpu	cubecl::tests::indexing_tests::test_cubecl_scatter_accumulates_
 gpu	tenferro-gpu	cubecl::tests::indexing_tests::test_cubecl_scatter_skips_invalid_windows_like_cpu
 gpu	tenferro-gpu	cubecl::tests::indexing_tests::test_cubecl_signed_pad_cropping_matches_cpu_values
 gpu	tenferro-gpu	cubecl::tests::indexing_tests::test_cubecl_slice_dynamic_slice_and_pad_match_cpu
+gpu	tenferro-gpu	cubecl::tests::kernel_specialization_tests::axpby_strided_source_kernel_compiles_once_per_rank
+gpu	tenferro-gpu	cubecl::tests::kernel_specialization_tests::fill_zero_view_kernel_compiles_once_per_rank
+gpu	tenferro-gpu	cubecl::tests::kernel_specialization_tests::indexing_kernels_compile_once_per_rank
+gpu	tenferro-gpu	cubecl::tests::kernel_specialization_tests::materialize_strided_kernel_compiles_once_per_rank
+gpu	tenferro-gpu	cubecl::tests::kernel_specialization_tests::strided_copy_kernels_compile_once_per_rank
+gpu	tenferro-gpu	cubecl::tests::kernel_specialization_tests::tiled_transpose_kernel_compiles_once_per_tile_configuration
 host	tenferro-gpu	cubecl::tests::memoized_addr_tests::every_in_place_launch_helper_invalidates_the_memoized_address
 host	tenferro-gpu	cubecl::tests::memoized_addr_tests::every_write_binding_helper_invalidates_the_memoized_address
 host	tenferro-gpu	cubecl::tests::memoized_addr_tests::owned_raw_vendor_writes_use_the_round_trip_path
@@ -771,6 +777,10 @@ gpu	tenferro-gpu	cubecl::tests::structural_tests::test_cubecl_i64_structural_ops
 gpu	tenferro-gpu	cubecl::tests::structural_tests::test_cubecl_structural_ops_match_cpu
 gpu	tenferro-gpu	cubecl::tests::structural_tests::test_cuda_explicit_cast_matrix_matches_cpu
 gpu	tenferro-gpu	cubecl::tests::structural_tests::test_cuda_read_entry_points_accept_borrowed_views
+gpu	tenferro-gpu	cubecl::tests::transfer_tests::caller_may_overwrite_the_source_as_soon_as_upload_returns
+gpu	tenferro-gpu	cubecl::tests::transfer_tests::download_observes_queued_device_writes_on_this_and_other_streams
+gpu	tenferro-gpu	cubecl::tests::transfer_tests::owned_upload_and_offset_allocations_round_trip
+gpu	tenferro-gpu	cubecl::tests::transfer_tests::transfers_round_trip_every_dtype_and_size_class_bit_exactly
 host	tenferro-gpu	event_retirement::tests::explicit_retirement_then_drop_invokes_retirement_once
 host	tenferro-gpu	event_retirement::tests::implicit_drop_invokes_retirement_once
 host	tenferro-gpu	event_retirement::tests::implicit_retirement_contains_provider_panic
@@ -862,7 +872,9 @@ host	tenferro-gpu::integration	cubecl_launch_contract::scatter_update_window_inv
 host	tenferro-gpu::integration	kernel_metadata_contract::float_max_min_kernels_propagate_nan_across_lanes_and_planes
 host	tenferro-gpu::integration	kernel_metadata_contract::fused_float_max_min_codegen_propagates_nan_before_native_extrema
 host	tenferro-gpu::integration	kernel_metadata_contract::integer_kernels_route_user_arithmetic_through_wrapping_helpers
-host	tenferro-gpu::integration	kernel_metadata_contract::logical_kernels_do_not_take_tensor_shapes_as_comptime_parameters
+host	tenferro-gpu::integration	kernel_metadata_contract::comptime_parameter_inventory_attributes_macro_and_helper_parameters
+host	tenferro-gpu::integration	kernel_metadata_contract::documented_comptime_layout_exception_is_webgpu_only
+host	tenferro-gpu::integration	kernel_metadata_contract::every_comptime_kernel_parameter_is_classified
 host	tenferro-gpu::integration	kernel_metadata_contract::reduction_kernels_do_not_hide_unbounded_axis_work_in_one_worker
 host	tenferro-gpu::integration	kernel_metadata_contract::scatter_kernel_inventory_discovers_unreviewed_definitions
 host	tenferro-gpu::integration	kernel_metadata_contract::scatter_kernels_are_not_single_thread_fallbacks

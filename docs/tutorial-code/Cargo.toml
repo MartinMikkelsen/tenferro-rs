@@ -175,6 +175,11 @@ path = "src/bin/cuda_tutorial.rs"
 required-features = ["cuda"]
 
 [[bin]]
+name = "cuda_vendor_interop"
+path = "src/bin/cuda_vendor_interop.rs"
+required-features = ["cuda"]
+
+[[bin]]
 name = "custom_cuda_kernels"
 path = "src/bin/custom_cuda_kernels.rs"
 required-features = ["cuda"]

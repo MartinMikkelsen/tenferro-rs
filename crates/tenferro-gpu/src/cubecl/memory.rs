@@ -134,6 +134,8 @@ fn upload_typed<T: CubeElement + TensorScalar + Clone + Send + Sync + 'static>(
         }
     };
 
+    // The host buffer is borrowed, so CubeCL stages exactly one copy of it: the
+    // device write runs after this call returns (#2009).
     let handle = client.create_from_slice(T::as_bytes(host_data));
     let byte_len = T::as_bytes(host_data).len();
     TypedTensor::from_buffer_col_major(
@@ -214,17 +216,55 @@ fn download_typed<T: CubeElement + TensorScalar + Clone + 'static>(
         );
     }
 
-    rt.synchronize()?;
-    let bytes = rt
-        .client()
-        .read_one(handle)
-        .map_err(|err| crate::Error::backend_source("download", err))?;
-    let data = T::from_bytes(&bytes).to_vec();
+    let data = if handle.size_in_used() == byte_len as u64 {
+        download_owned_vec::<T>(rt, handle, typed.n_elements(), byte_len, "download")?
+    } else {
+        // A handle that does not span exactly the tensor's elements keeps the
+        // whole-allocation read and its element-count validation below.
+        rt.synchronize()?;
+        let bytes = rt
+            .client()
+            .read_one(handle)
+            .map_err(|err| crate::Error::backend_source("download", err))?;
+        T::from_bytes(&bytes).to_vec()
+    };
     TypedTensor::from_buffer_col_major(
         typed.shape().to_vec(),
         StorageBuffer::Host(data),
         Placement::default(),
     )
+}
+
+/// Download a whole allocation of `len` elements into a freshly owned `Vec<T>`.
+///
+/// The device copies straight into the vector the host tensor will own, so the
+/// payload crosses host memory once instead of being staged by CubeCL and then
+/// copied again (#2009). The vector is allocated with its final element type,
+/// so its alignment is `T`'s, and it is only exposed after the copy completed.
+pub(super) fn download_owned_vec<T: CubeElement>(
+    rt: &CudaRuntime,
+    handle: cubecl_runtime::server::Handle,
+    len: usize,
+    byte_len: usize,
+    op: &'static str,
+) -> crate::Result<Vec<T>> {
+    let mut data = Vec::<T>::with_capacity(len);
+    // SAFETY: the spare capacity of `data` holds `len` elements, i.e.
+    // `byte_len` bytes, and `data` outlives the call. On error the device may
+    // still write into it, so it is leaked below rather than freed.
+    let copied = unsafe { rt.download_into_host(handle, data.as_mut_ptr().cast(), byte_len, op) };
+    match copied {
+        Ok(()) => {
+            // SAFETY: the completed copy initialized all `len` elements, and
+            // `T: CubeElement` is `Pod`, so any byte pattern is a valid `T`.
+            unsafe { data.set_len(len) };
+            Ok(data)
+        }
+        Err(err) => {
+            std::mem::forget(data);
+            Err(err)
+        }
+    }
 }
 
 fn upload_bool(
@@ -246,12 +286,14 @@ fn upload_bool(
     };
 
     let bytes: Vec<u8> = host_data.iter().map(|&value| u8::from(value)).collect();
-    let handle = client.create_from_slice(&bytes);
+    let byte_len = bytes.len();
+    // The converted bytes are owned: hand them to CubeCL without a staging copy.
+    let handle = client.create(cubecl::bytes::Bytes::from_elems(bytes));
     TypedTensor::from_buffer_col_major(
         typed.shape().to_vec(),
         StorageBuffer::Backend(Box::new(CubeclBuffer::new(
             handle,
-            bytes.len(),
+            byte_len,
             rt.device_ordinal(),
             rt.allocation_domain_id(),
         ))),

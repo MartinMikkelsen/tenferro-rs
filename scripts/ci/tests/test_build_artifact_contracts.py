@@ -139,9 +139,10 @@ class BuildArtifactContracts(unittest.TestCase):
         manifest = tomllib.loads((ROOT / "Cargo.toml").read_text())
         dependencies = manifest["workspace"]["dependencies"]
 
-        # Published as `t4a-cubecl* 0.10.1`; see the CUDA complex-cast fix and
-        # the complex plane warp-reduce shuffle fix.
-        revision = "ffc017d5440b34a293f3bcd47e93e7fc51f1d733"
+        # Published as `t4a-cubecl* 0.10.2`: the CUDA complex-cast and complex
+        # plane warp-reduce shuffle fixes, plus the upload copy removal and the
+        # loaded-kernel-id diagnostic (#2009, #2010).
+        revision = "eb2c8894d585d2d119a1b76fcc3094bc44b73deb"
         for name in (
             "cubecl",
             "cubecl-cuda",

@@ -20,6 +20,7 @@ mod fusion_tests;
 mod gemm_accum_tests;
 mod gemm_tests;
 mod indexing_tests;
+mod kernel_specialization_tests;
 mod memoized_addr_tests;
 mod metadata_tests;
 mod plan_cache_tests;
@@ -29,6 +30,7 @@ mod reduction_tests;
 mod runtime_tests;
 mod shared_workspace_tests;
 mod structural_tests;
+mod transfer_tests;
 
 /// Enter a CUDA execution session through the erased backend-session surface.
 ///

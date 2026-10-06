@@ -467,17 +467,43 @@ and no implicit global shape state.
   attributes, axis sets, reduce strategy, and kernel blueprints. Different
   attribute values may compile as different CubeCL specializations.
 - Do not pass tensor shape extents, strides, buffer lengths, flattened products,
-  or other runtime tensor sizes as `#[comptime]` parameters. The WebGPU
+  or other runtime tensor sizes as `#[comptime]` parameters. The same holds for
+  every value derived from a tensor layout or from an operation's position
+  inside one: element offsets, slice starts, edge and interior padding amounts,
+  slice and window sizes (`slice_sizes`), and running axis offsets (the
+  concatenation offset of each input). CubeCL compiles one module per distinct
+  compile-time value (about 40 ms of NVRTC per new layout on an A100, against a
+  sub-0.1 ms warm call) and keeps every module for the process lifetime, so a
+  workload that visits many layouts pays the compile on each and grows the
+  module cache without bound (#1885 §3.4, #2010).
+- Pass such values at run time: through `TensorBinding` metadata for logical
+  tensors, as a runtime `Sequence<usize>` / `Sequence<i64>` kernel argument for
+  per-axis values (built with `runtime_sequence`; only the sequence length,
+  that is the rank, enters the compile-time key and the values travel as
+  launch scalars, with no device upload), or as plain scalar arguments for a
+  fixed small count. Keep the rank as the only compile-time bound. The WebGPU
   `dot_general` pack kernels pass only axis-role lists and rank as compile-time
   launch attributes; shape and stride values are read from `TensorBinding`
   metadata inside the kernel.
-- Native permutation materialization is the narrow exception: its validated,
-  bilaterally fused affine plan is encoded as compile-time metadata because the
-  raw source/destination arrays do not carry logical layouts. Fusion limits the
-  specialization rank. The logical length is also compile-time metadata to
-  avoid ambiguous raw-Array runtime metadata packing on Metal. Tile size,
-  block rows, padding, and vector width are algorithm configuration and must
-  remain compile-time parameters.
+- Every `#[comptime]` parameter in `tenferro-gpu` is classified in review:
+  `every_comptime_kernel_parameter_is_classified`
+  (`tests/integration/kernel_metadata_contract.rs`) parses all of them and
+  requires each `(kernel, parameter)` to be listed with a category (`rank`,
+  `axis-mapping`, `algorithm-config` or `documented-exception`). The CUDA tests
+  in `src/cubecl/tests/kernel_specialization_tests.rs` launch each
+  layout-indexed kernel over several layouts and fail if a new module is
+  compiled at the same rank.
+- Native permutation materialization on **WebGPU/Metal** is the narrow
+  exception: `materialize_strided_comptime_layout_kernel` and
+  `tiled_transpose_comptime_layout_kernel` encode the validated, bilaterally
+  fused affine plan (extents, strides, logical length, batch stride and fast
+  extents) as compile-time metadata, because the raw source/destination arrays
+  do not carry logical layouts and raw-Array runtime metadata packing is
+  ambiguous on Metal. Fusion limits the specialization rank. CUDA does not use
+  this exception: it launches `materialize_strided_kernel` and
+  `tiled_transpose_kernel`, which take the same plan as runtime arguments. In
+  both variants tile size, block rows, padding, and vector width are algorithm
+  configuration and remain compile-time parameters.
 - Permute-like operations should canonicalize their launch attributes where the
   transformation is mathematically identical. In particular, adjacent axes that
   stay contiguous in column-major layout should be fused before choosing the
@@ -569,6 +595,33 @@ let gpu_c = backend.with_backend_session(|session| {
 })??;
 let cpu_c = download_tensor(backend.runtime(), &gpu_c)?;
 ```
+
+### CUDA transfer copies
+
+Each explicit transfer crosses host memory once on the host side (#2009):
+
+- **Borrowed upload** (`upload_tensor(&Tensor)`): CubeCL's `create_from_slice`
+  copies the caller's buffer exactly once, into an owned aligned staging buffer,
+  before the asynchronous device write is queued. That staging copy is the
+  lifetime guarantee that lets the caller reuse or drop its buffer as soon as
+  the call returns, without a barrier. It is not removed until a
+  lifetime-safe alternative exists (a pinned staging pool, or a synchronous
+  upload that waits for the copy).
+- **Owned upload** (tenferro-internal paths that build their own host vector,
+  such as `upload_typed_tensor` and the `Bool` byte conversion): the vector's
+  allocation is handed to CubeCL with `ComputeClient::create(Bytes::from_elems)`
+  and nothing is copied on the host.
+- **Download** (`download_tensor`): payloads above the 16-byte pinned scalar
+  slot are copied by the driver straight into the `Vec<T>` that becomes the
+  host tensor's storage. The download flushes pending CubeCL work, resolves the
+  allocation on the current stream with `get_resource` (which orders writes
+  queued on other CubeCL streams, as `read_one` does), enqueues the copy on that
+  stream and synchronizes it. The vector is allocated with its final element
+  type, so it has `T`'s alignment, and it becomes visible only after the copy
+  completed; if the copy or barrier fails, both the vector and the source
+  allocation are leaked rather than freed while the device may still use them.
+  A handle that does not span exactly the tensor's elements keeps the
+  `read_one` path.
 
 The execution pipeline handles placement internally for compiled programs:
 constants are uploaded through `upload_host_tensor()`, metadata-only operations
