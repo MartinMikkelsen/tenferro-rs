@@ -61,6 +61,7 @@ impl CompositeOps for EagerComposite<'_, '_> {
             CompositeBinary::Sub => session.sub(lhs, rhs),
             CompositeBinary::Mul => session.mul(lhs, rhs),
             CompositeBinary::Div => session.div(lhs, rhs),
+            CompositeBinary::Maximum => session.maximum(lhs, rhs),
         }
     }
 
@@ -91,6 +92,7 @@ impl CompositeOps for EagerComposite<'_, '_> {
         match op {
             CompositeReduce::Sum => self.session.reduce_sum(value, Some(axes)),
             CompositeReduce::Max => self.session.reduce_max(value, Some(axes)),
+            CompositeReduce::SumSquares => self.session.reduce_sum_squares(value, Some(axes)),
         }
     }
 

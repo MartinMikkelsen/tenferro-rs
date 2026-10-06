@@ -144,6 +144,7 @@ impl<'a> CompositeOps for SessionComposite<'_, 'a> {
             CompositeBinary::Sub => session.sub_read(lhs, rhs),
             CompositeBinary::Mul => session.mul_read(lhs, rhs),
             CompositeBinary::Div => session.div_read(lhs, rhs),
+            CompositeBinary::Maximum => session.maximum_read(lhs, rhs),
         }?;
         Ok(ReadInput::Owned(out))
     }
@@ -198,6 +199,7 @@ impl<'a> CompositeOps for SessionComposite<'_, 'a> {
         let out = match op {
             CompositeReduce::Sum => self.session.reduce_sum_read(input, axes),
             CompositeReduce::Max => self.session.reduce_max_read(input, axes),
+            CompositeReduce::SumSquares => self.session.reduce_sum_squares_read(input, axes),
         }?;
         Ok(ReadInput::Owned(out))
     }

@@ -49,6 +49,8 @@ pub enum CompositeBinary {
     Sub,
     Mul,
     Div,
+    /// NaN-propagating elementwise maximum.
+    Maximum,
 }
 
 /// Reductions a composite may emit.
@@ -63,6 +65,8 @@ pub enum CompositeBinary {
 pub enum CompositeReduce {
     Sum,
     Max,
+    /// Sum of squares of a real tensor.
+    SumSquares,
 }
 
 /// The primitive vocabulary a public surface provides to the shared composites.
@@ -404,18 +408,51 @@ fn reduced_shape(shape: &[usize], axes: &[usize]) -> Vec<usize> {
         .collect()
 }
 
+/// The constant `value` of `dtype` broadcast to `shape`: one constant and one
+/// `broadcast_in_dim`, so the operands of the following binary ops already
+/// match and no per-op reshape/broadcast is emitted.
+fn splat<O: CompositeOps>(
+    ops: &mut O,
+    dtype: DType,
+    value: f64,
+    shape: &[usize],
+) -> Result<O::Value, O::Error> {
+    let scalar = ops.scalar(dtype, value)?;
+    if shape.is_empty() {
+        return Ok(scalar);
+    }
+    ops.broadcast_in_dim(&scalar, shape, &[])
+}
+
+/// `value * factor` with the factor splatted to `shape` (the value's shape).
+///
+/// The surfaces' `scale_real` multiplies by an unbroadcast rank-0 constant,
+/// which the traced and eager CUDA paths do not accept; a splatted factor is
+/// one constant and one broadcast on every surface.
+fn scale_by<O: CompositeOps>(
+    ops: &mut O,
+    value: &O::Value,
+    factor: f64,
+    shape: &[usize],
+) -> Result<O::Value, O::Error> {
+    let dtype = ops.dtype(value);
+    let factor = splat(ops, dtype, factor, shape)?;
+    ops.binary(CompositeBinary::Mul, value, &factor)
+}
+
 /// `(x > 0, m)` with `m = -|x|` written as `select(x > 0, -x, x)`.
 ///
 /// Unlike `-abs(x)`, the derivative of `m` at `x = 0` is `1` (the `x <= 0`
 /// branch), which gives `softplus'(0) = sigmoid(0) = 1/2` and
-/// `sigmoid'(0) = 1/4` through AD. `exp(m)` never overflows.
+/// `sigmoid'(0) = 1/4` through AD. `exp(m)` never overflows. `x > 0` is
+/// computed as `x > -x` (equal for every value, `NaN` and `+-0` included), so
+/// no zero constant is materialized.
 fn positive_and_neg_abs<O: CompositeOps>(
     ops: &mut O,
     x: &O::Value,
-    zero: &O::Value,
 ) -> Result<(O::Value, O::Value), O::Error> {
-    let positive = ops.compare(x, zero, CompareDir::Gt)?;
     let negated = ops.unary(CompositeUnary::Neg, x)?;
+    let positive = ops.compare(x, &negated, CompareDir::Gt)?;
     let neg_abs = ops.select(&positive, &negated, x)?;
     Ok((positive, neg_abs))
 }
@@ -442,12 +479,15 @@ fn positive_and_neg_abs<O: CompositeOps>(
 pub fn sigmoid<O: CompositeOps>(ops: &mut O, x: &O::Value) -> Result<O::Value, O::Error> {
     let dtype = ops.dtype(x);
     require_real_float("sigmoid", dtype)?;
-    let zero = ops.scalar(dtype, 0.0)?;
-    let one = ops.scalar(dtype, 1.0)?;
-    let (positive, neg_abs) = positive_and_neg_abs(ops, x, &zero)?;
+    let shape = ops.shape(x)?;
+    let (positive, neg_abs) = positive_and_neg_abs(ops, x)?;
     let e = ops.unary(CompositeUnary::Exp, &neg_abs)?;
+    drop(neg_abs);
+    let one = splat(ops, dtype, 1.0, &shape)?;
     let numerator = ops.select(&positive, &one, &e)?;
+    drop(positive);
     let denominator = ops.binary(CompositeBinary::Add, &one, &e)?;
+    drop((one, e));
     ops.binary(CompositeBinary::Div, &numerator, &denominator)
 }
 
@@ -489,12 +529,15 @@ pub fn silu<O: CompositeOps>(ops: &mut O, x: &O::Value) -> Result<O::Value, O::E
 pub fn softplus<O: CompositeOps>(ops: &mut O, x: &O::Value) -> Result<O::Value, O::Error> {
     let dtype = ops.dtype(x);
     require_real_float("softplus", dtype)?;
-    let zero = ops.scalar(dtype, 0.0)?;
-    let (positive, neg_abs) = positive_and_neg_abs(ops, x, &zero)?;
-    let relu = ops.select(&positive, x, &zero)?;
+    let (positive, neg_abs) = positive_and_neg_abs(ops, x)?;
     let e = ops.unary(CompositeUnary::Exp, &neg_abs)?;
+    drop(neg_abs);
     let tail = ops.unary(CompositeUnary::Log1p, &e)?;
-    ops.binary(CompositeBinary::Add, &relu, &tail)
+    drop(e);
+    // `x + tail` for x > 0, `tail` otherwise: `max(x, 0) + tail` without a
+    // zero constant.
+    let shifted = ops.binary(CompositeBinary::Add, x, &tail)?;
+    ops.select(&positive, &shifted, &tail)
 }
 
 /// Exact GELU `x/2 * (1 + erf(x / sqrt(2)))`.
@@ -515,14 +558,16 @@ pub fn softplus<O: CompositeOps>(ops: &mut O, x: &O::Value) -> Result<O::Value, 
 pub fn gelu<O: CompositeOps>(ops: &mut O, x: &O::Value) -> Result<O::Value, O::Error> {
     let dtype = ops.dtype(x);
     require_real_float("gelu", dtype)?;
-    let inv_sqrt2 = ops.scalar(dtype, std::f64::consts::FRAC_1_SQRT_2)?;
-    let half = ops.scalar(dtype, 0.5)?;
-    let one = ops.scalar(dtype, 1.0)?;
-    let scaled = ops.binary(CompositeBinary::Mul, x, &inv_sqrt2)?;
+    let shape = ops.shape(x)?;
+    let scaled = scale_by(ops, x, std::f64::consts::FRAC_1_SQRT_2, &shape)?;
     let erf = ops.unary(CompositeUnary::Erf, &scaled)?;
+    drop(scaled);
+    let one = splat(ops, dtype, 1.0, &shape)?;
     let gate = ops.binary(CompositeBinary::Add, &one, &erf)?;
-    let half_x = ops.binary(CompositeBinary::Mul, x, &half)?;
-    ops.binary(CompositeBinary::Mul, &half_x, &gate)
+    drop((one, erf));
+    let gated = ops.binary(CompositeBinary::Mul, x, &gate)?;
+    drop(gate);
+    scale_by(ops, &gated, 0.5, &shape)
 }
 
 /// `sqrt(2 / pi)`, the GELU tanh-approximation scale.
@@ -548,19 +593,24 @@ const GELU_TANH_CUBIC: f64 = 0.044_715;
 pub fn gelu_tanh<O: CompositeOps>(ops: &mut O, x: &O::Value) -> Result<O::Value, O::Error> {
     let dtype = ops.dtype(x);
     require_real_float("gelu_tanh", dtype)?;
-    let scale = ops.scalar(dtype, SQRT_2_OVER_PI)?;
-    let cubic = ops.scalar(dtype, GELU_TANH_CUBIC)?;
-    let half = ops.scalar(dtype, 0.5)?;
-    let one = ops.scalar(dtype, 1.0)?;
+    let shape = ops.shape(x)?;
     let square = ops.binary(CompositeBinary::Mul, x, x)?;
     let cube = ops.binary(CompositeBinary::Mul, &square, x)?;
-    let cube_term = ops.binary(CompositeBinary::Mul, &cube, &cubic)?;
+    drop(square);
+    let cube_term = scale_by(ops, &cube, GELU_TANH_CUBIC, &shape)?;
+    drop(cube);
     let polynomial = ops.binary(CompositeBinary::Add, x, &cube_term)?;
-    let inner = ops.binary(CompositeBinary::Mul, &polynomial, &scale)?;
+    drop(cube_term);
+    let inner = scale_by(ops, &polynomial, SQRT_2_OVER_PI, &shape)?;
+    drop(polynomial);
     let tanh = ops.unary(CompositeUnary::Tanh, &inner)?;
+    drop(inner);
+    let one = splat(ops, dtype, 1.0, &shape)?;
     let gate = ops.binary(CompositeBinary::Add, &one, &tanh)?;
-    let half_x = ops.binary(CompositeBinary::Mul, x, &half)?;
-    ops.binary(CompositeBinary::Mul, &half_x, &gate)
+    drop((one, tanh));
+    let gated = ops.binary(CompositeBinary::Mul, x, &gate)?;
+    drop(gate);
+    scale_by(ops, &gated, 0.5, &shape)
 }
 
 /// Arithmetic mean over `axes` (`None` = every axis), dividing the sum by the count.
@@ -616,11 +666,12 @@ fn mean_over<O: CompositeOps>(
         let nan = ops.scalar(dtype, f64::NAN)?;
         return ops.broadcast_in_dim(&nan, &reduced_shape(shape, axes), &[]);
     }
-    let count = ops.scalar(dtype, count as f64)?;
     if axes.is_empty() {
+        let count = ops.scalar(dtype, 1.0)?;
         return ops.binary(CompositeBinary::Div, x, &count);
     }
     let sum = ops.reduce(CompositeReduce::Sum, x, axes)?;
+    let count = splat(ops, dtype, count as f64, &reduced_shape(shape, axes))?;
     ops.binary(CompositeBinary::Div, &sum, &count)
 }
 
@@ -681,35 +732,59 @@ fn softmax_impl<O: CompositeOps>(
     if shape[axis] == 0 {
         return empty_like(ops, x);
     }
-    let neg_inf = ops.scalar(dtype, f64::NEG_INFINITY)?;
-    let masked;
-    let x = match mask {
-        Some(mask) => {
-            masked = ops.select(mask, x, &neg_inf)?;
-            &masked
-        }
-        None => x,
+    let masked = match mask {
+        Some(mask) => Some({
+            let neg_inf = splat(ops, dtype, f64::NEG_INFINITY, &shape)?;
+            // Broadcast a smaller mask explicitly, right-aligned and without a
+            // reshape: the implicit broadcast of `select` reshapes away the
+            // unit dimensions first, which is several times slower on the eager
+            // CPU path for a large `Bool` mask.
+            let mask_shape = ops.shape(mask)?;
+            let full_mask;
+            let mask = if mask_shape == shape {
+                mask
+            } else {
+                let dims: Vec<usize> = (shape.len() - mask_shape.len()..shape.len()).collect();
+                full_mask = ops.broadcast_in_dim(mask, &shape, &dims)?;
+                &full_mask
+            };
+            ops.select(mask, x, &neg_inf)?
+        }),
+        None => None,
     };
-    let zero = ops.scalar(dtype, 0.0)?;
-    let one = ops.scalar(dtype, 1.0)?;
+    let x = masked.as_ref().unwrap_or(x);
     let keep = other_axes(shape.len(), axis);
+    let reduced = reduced_shape(&shape, &[axis]);
+    let (lowest, smallest_positive) = match dtype {
+        DType::F32 => (f64::from(f32::MIN), f64::from(f32::MIN_POSITIVE)),
+        _ => (f64::MIN, f64::MIN_POSITIVE),
+    };
 
     let max = ops.reduce(CompositeReduce::Max, x, &[axis])?;
-    // `Eq` rather than `Gt`: a NaN maximum is not "all masked" and must propagate.
-    let all_masked = ops.compare(&max, &neg_inf, CompareDir::Eq)?;
-    let safe_max = ops.select(&all_masked, &zero, &max)?;
+    // An all-masked slice has max -inf; clamping it to the lowest finite value
+    // keeps `x - max` at -inf there instead of NaN, while a NaN max still
+    // propagates (NaN-propagating maximum) and every other max is unchanged.
+    let floor = splat(ops, dtype, lowest, &reduced)?;
+    let safe_max = ops.binary(CompositeBinary::Maximum, &max, &floor)?;
+    drop((max, floor));
     let safe_max = ops.broadcast_in_dim(&safe_max, &shape, &keep)?;
     let shifted = ops.binary(CompositeBinary::Sub, x, &safe_max)?;
+    drop((safe_max, masked));
     let exp = ops.unary(CompositeUnary::Exp, &shifted)?;
     let sum = ops.reduce(CompositeReduce::Sum, &exp, &[axis])?;
-    // An all-masked slice sums to 0; dividing by it (or its log) would make
-    // the value and the backward pass NaN.
-    let safe_sum = ops.select(&all_masked, &one, &sum)?;
+    // Any participating slice sums to at least 1, an all-masked slice to 0;
+    // clamping to the smallest positive normal keeps the value 0 / -inf and
+    // the backward pass finite (the clamp, not `sum`, receives the gradient).
+    let tiny = splat(ops, dtype, smallest_positive, &reduced)?;
+    let safe_sum = ops.binary(CompositeBinary::Maximum, &sum, &tiny)?;
+    drop((sum, tiny));
     if log {
+        drop(exp);
         let log_sum = ops.unary(CompositeUnary::Log, &safe_sum)?;
         let log_sum = ops.broadcast_in_dim(&log_sum, &shape, &keep)?;
         ops.binary(CompositeBinary::Sub, &shifted, &log_sum)
     } else {
+        drop(shifted);
         let safe_sum = ops.broadcast_in_dim(&safe_sum, &shape, &keep)?;
         ops.binary(CompositeBinary::Div, &exp, &safe_sum)
     }
@@ -926,16 +1001,27 @@ pub fn layer_norm<O: CompositeOps>(
     }
     let dtype = ops.dtype(x);
     let keep = other_axes(shape.len(), axis);
-    let mean = mean_over(ops, x, &shape, &[axis])?;
+    let inv_count = 1.0 / shape[axis] as f64;
+    // The same primitive sequence as the hand composition: sum, scale,
+    // broadcast, subtract, fused sum of squares, scale, add eps, rsqrt.
+    let sum = ops.reduce(CompositeReduce::Sum, x, &[axis])?;
+    let reduced = reduced_shape(&shape, &[axis]);
+    let mean = scale_by(ops, &sum, inv_count, &reduced)?;
+    drop(sum);
     let mean = ops.broadcast_in_dim(&mean, &shape, &keep)?;
     let centered = ops.binary(CompositeBinary::Sub, x, &mean)?;
-    let squared = ops.binary(CompositeBinary::Mul, &centered, &centered)?;
-    let variance = mean_over(ops, &squared, &shape, &[axis])?;
-    let eps = ops.scalar(dtype, eps)?;
+    drop(mean);
+    let squares = ops.reduce(CompositeReduce::SumSquares, &centered, &[axis])?;
+    let variance = scale_by(ops, &squares, inv_count, &reduced)?;
+    drop(squares);
+    let eps = splat(ops, dtype, eps, &reduced)?;
     let shifted = ops.binary(CompositeBinary::Add, &variance, &eps)?;
+    drop((variance, eps));
     let inv_std = ops.unary(CompositeUnary::Rsqrt, &shifted)?;
+    drop(shifted);
     let inv_std = ops.broadcast_in_dim(&inv_std, &shape, &keep)?;
     let normalized = ops.binary(CompositeBinary::Mul, &centered, &inv_std)?;
+    drop((centered, inv_std));
     apply_affine(ops, normalized, &shape, axis, weight, bias)
 }
 
@@ -975,13 +1061,18 @@ pub fn rms_norm<O: CompositeOps>(
     }
     let dtype = ops.dtype(x);
     let keep = other_axes(shape.len(), axis);
-    let squared = ops.binary(CompositeBinary::Mul, x, x)?;
-    let mean_square = mean_over(ops, &squared, &shape, &[axis])?;
-    let eps = ops.scalar(dtype, eps)?;
+    let squares = ops.reduce(CompositeReduce::SumSquares, x, &[axis])?;
+    let reduced = reduced_shape(&shape, &[axis]);
+    let mean_square = scale_by(ops, &squares, 1.0 / shape[axis] as f64, &reduced)?;
+    drop(squares);
+    let eps = splat(ops, dtype, eps, &reduced)?;
     let shifted = ops.binary(CompositeBinary::Add, &mean_square, &eps)?;
+    drop((mean_square, eps));
     let inv_rms = ops.unary(CompositeUnary::Rsqrt, &shifted)?;
+    drop(shifted);
     let inv_rms = ops.broadcast_in_dim(&inv_rms, &shape, &keep)?;
     let normalized = ops.binary(CompositeBinary::Mul, x, &inv_rms)?;
+    drop(inv_rms);
     apply_affine(ops, normalized, &shape, axis, weight, bias)
 }
 
@@ -1103,7 +1194,9 @@ pub fn take_along_axis<O: CompositeOps>(
     let mut start_index_map = vec![axis];
     start_index_map.extend(positions.iter().map(|&position| batch_dims[position]));
     // Index tuple `(indices, batch coordinates...)` = indices * e_0 + coordinates,
-    // built with broadcasting arithmetic rather than a concatenation.
+    // built with broadcasting arithmetic rather than a concatenation: traced
+    // `concatenate` of distinct inputs fails to compile without input specs
+    // (#2018), so it only ever joins constants here (in `iota`).
     let start_indices = if positions.is_empty() {
         axis_component
     } else {

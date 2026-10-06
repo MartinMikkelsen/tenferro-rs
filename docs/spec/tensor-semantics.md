@@ -359,8 +359,9 @@ along one `axis` (real `F32`/`F64`). They subtract the slice maximum before
 - a slice with no participating entry (all masked out, or all `-inf` in the
   unmasked form) is all `0` / all `-inf` instead of the `NaN` of the naive
   `-inf - (-inf)`. Its gradient is finite, and in the masked forms it is `0`.
-  The implementation replaces the slice maximum by `0` and the slice sum by
-  `1` where the maximum is `-inf`;
+  The implementation clamps the slice maximum to the dtype's lowest finite
+  value and the slice sum to its smallest positive normal value (both with a
+  NaN-propagating `maximum`); neither clamp changes a participating slice;
 - a participating `NaN` or `+inf` makes the whole slice `NaN`; other slices are
   unaffected;
 - a zero-length `axis` returns an empty result of the input shape.
