@@ -34,7 +34,7 @@ not when changing tenferro itself.
 - **Column-major storage.** Dense buffers are column-major: the leftmost
   dimension varies fastest. Row-major data passed to `from_vec_col_major` is
   silently reinterpreted as column-major — permuted/wrong values, never
-  rejected.
+  rejected. Import row-major (C-order) buffers with `from_vec_row_major`.
 - **No facade crate.** `cargo add tenferro` fails by design; depend on the
   crates you need (`tenferro-runtime`, `tenferro-cpu`, and operation crates).
 - **Explicit execution owner.** Concrete operations take a borrowed session

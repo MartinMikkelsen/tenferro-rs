@@ -10759,6 +10759,45 @@ impl Tensor {
         T::into_tensor(shape.into_shape_vec().to_vec(), data)
     }
 
+    /// Create a tensor from a shape and row-major (C-order) flat data.
+    ///
+    /// The values are reordered once into tenferro's column-major storage;
+    /// no row-major owner is created. Use this for buffers authored in
+    /// PyTorch/NumPy/C order instead of passing them to
+    /// [`Self::from_vec_col_major`], which would reinterpret them silently.
+    /// This is the `Tensor`-level equivalent of
+    /// `TypedTensor::<T>::from_vec_row_major`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::Tensor;
+    ///
+    /// // Row-major [[1, 2, 3], [4, 5, 6]].
+    /// let t = Tensor::from_vec_row_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0])?;
+    /// assert_eq!(t.shape(), &[2, 3]);
+    /// assert_eq!(t.as_slice::<f64>()?, &[1.0, 4.0, 2.0, 5.0, 3.0, 6.0]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::ShapeDataLengthMismatch`] when
+    /// the shape product differs from `data.len()`, or
+    /// [`tenferro_tensor_core::ValidationError::IntegerOverflow`] when shape
+    /// arithmetic overflows.
+    pub fn from_vec_row_major<T: TensorScalar>(
+        shape: impl tenferro_tensor_core::IntoShapeVec,
+        data: Vec<T>,
+    ) -> crate::Result<Self> {
+        let (shape, reordered) = row_major_reorder::<T, tenferro_tensor_core::DynRank>(
+            shape.into_shape_vec().to_vec(),
+            data,
+            "Tensor::from_vec_row_major",
+        )?;
+        T::into_tensor(shape.as_ref().to_vec(), reordered)
+    }
+
     /// Tensor shape.
     ///
     /// # Examples

@@ -47,10 +47,12 @@ assert_eq!(
 ## Importing External Data
 
 PyTorch, NumPy, JAX, and many C-style examples present flat buffers in
-row-major order. `TypedTensor::<T>::from_vec_row_major` explicitly imports
-host values into column-major storage (cloning each element); it does not
-create a row-major owner. The dtype-erased `Tensor::from_vec_col_major` below
-still expects an already reordered column-major buffer.
+row-major order. `Tensor::from_vec_row_major` and
+`TypedTensor::<T>::from_vec_row_major` explicitly import such host values into
+column-major storage (reordering once); they do not create a row-major owner.
+`Tensor::from_vec_row_major(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0])`
+stores the same tensor as the column-major call below.
+`from_vec_col_major` expects an already column-major buffer.
 
 <!-- snippet-source: docs/tutorial-code/src/bin/core_tensor_snippets.rs#memory_order_26 -->
 ```rust
