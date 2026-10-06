@@ -544,7 +544,7 @@ pub trait EagerSessionLinalgExt {
     /// })??;
     /// assert_eq!(p.shape(), &[2, 2]);
     /// assert_eq!(q.shape(), &[2, 2]);
-    /// assert_eq!(parity.shape(), &[]);
+    /// assert_eq!(parity.shape(), &[] as &[usize]);
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
     /// # Errors
