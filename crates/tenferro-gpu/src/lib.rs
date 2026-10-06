@@ -68,6 +68,28 @@ pub mod cuda {
         pub use ::cubecl::prelude::{ArrayArg, CubeCount, CubeDim, TensorBinding};
     }
 
+    /// The `cudarc` crate tenferro-gpu is built against (issue #1940).
+    ///
+    /// Downstream code that calls a CUDA vendor library (cuBLAS, cuSOLVER, ...)
+    /// on tenferro buffers through [`raw::Session`] should take its bindings
+    /// from here, so they always match tenferro's `cudarc` version and CUDA
+    /// version selection. The enabled features are `driver`, `runtime`,
+    /// `nvrtc`, `cublas`, `dynamic-loading` and `cuda-12080`; a downstream crate
+    /// that needs another `cudarc` module (for example `cusolver`) adds its own
+    /// `cudarc` dependency of the same `0.19` line with that feature, and Cargo
+    /// unifies the two into one crate. The re-export is not a stable API of its
+    /// own: it moves with tenferro's `cudarc` requirement.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_gpu::cuda::cudarc::cublas::sys::cublasOperation_t;
+    ///
+    /// let no_transpose = cublasOperation_t::CUBLAS_OP_N;
+    /// assert_ne!(no_transpose, cublasOperation_t::CUBLAS_OP_T);
+    /// ```
+    pub use ::cudarc;
+
     /// Type-safe raw CUDA extension session (issue #1597).
     pub mod raw {
         pub use super::super::cubecl::raw::{

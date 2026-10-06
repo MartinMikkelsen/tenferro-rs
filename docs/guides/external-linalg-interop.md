@@ -58,8 +58,11 @@ need (an exotic LAPACK driver), when you already maintain a tuned system BLAS
 you want to reuse, or when you need faer's specific algorithms. Prefer
 tenferro's own operations otherwise: they manage provider selection, buffer
 pools, placement, and thread budgets for you. This escape hatch is not a
-license to reimplement what `tenferro-linalg` already provides, and it never
-promises zero-copy access to backend/GPU buffers.
+license to reimplement what `tenferro-linalg` already provides. On the host it
+borrows tenferro storage directly; for CUDA buffers, the raw CUDA session gives
+checked device pointers instead (see
+[Direct vendor calls on CUDA](#direct-vendor-calls-on-cuda)). Other GPU
+backends (WebGPU/Metal) have no such contract.
 
 ## Dependency contract
 
@@ -457,6 +460,151 @@ direct call with a large thread budget. See
 [Parallelism and Caching](parallelism-and-caching.md) for the oversubscription
 rules that apply equally here. If you need tenferro-managed NUMA placement,
 use tenferro's own operations instead of direct calls.
+
+## Direct vendor calls on CUDA
+
+The CUDA counterpart of the host escape hatch is the raw CUDA session
+(`CudaExecSession::with_raw`, issue #1597). Inside it a downstream crate can
+call cuBLAS, cuSOLVER or another CUDA library on tenferro-owned device buffers,
+on tenferro's execution stream, using only public APIs:
+
+<!-- snippet-source: docs/tutorial-code/src/bin/cuda_vendor_interop.rs#cuda-vendor-cublas -->
+```rust
+use tenferro_gpu::cuda::cudarc::cublas::{result as cublas, sys as cublas_sys};
+
+/// `C = A * B` with cuBLAS `dgemm` on tenferro device tensors.
+///
+/// `a` is `m x k` and `b` is `k x n`; both are compact column-major CUDA
+/// tensors resident on `backend`. The output is allocated by tenferro and
+/// written by cuBLAS on tenferro's stream.
+fn cublas_dgemm(
+    backend: &mut CudaBackend,
+    a: &TypedTensor<f64>,
+    b: &TypedTensor<f64>,
+) -> tenferro_tensor::Result<TypedTensor<f64>> {
+    let (m, k, n) = (a.shape()[0], a.shape()[1], b.shape()[1]);
+    // cuBLAS takes LP64 `int` dimensions; convert instead of casting.
+    let dim = |value: usize| {
+        i32::try_from(value)
+            .map_err(|_| Error::invalid_argument(OP, "shape", "dimension exceeds i32"))
+    };
+    let (m32, k32, n32) = (dim(m)?, dim(k)?, dim(n)?);
+
+    backend.with_backend_session(|backend_session| {
+        with_cuda_exec_session(backend_session, |cuda| {
+            cuda.with_raw(OP, |session| {
+                let a_ref = session.tensor(a)?;
+                let b_ref = session.tensor(b)?;
+                let mut c = session.alloc_output::<f64>(&[m, n])?;
+                let c_ref = session.tensor_mut(&mut c)?;
+                let (alpha, beta) = (1.0_f64, 0.0_f64);
+
+                // The handle is created inside the session, bound to the
+                // session's stream, and destroyed after the host barrier. A
+                // longer-lived handle must be re-bound with `set_stream` in
+                // every session: the stream belongs to the session, not the
+                // handle.
+                let handle =
+                    cublas::create_handle().map_err(|err| Error::backend_source(OP, err))?;
+                // SAFETY: `raw_handle` is the session's live CUDA stream and is
+                // used only inside this session. The three device pointers come
+                // from checked tensor references that stay borrowed until the
+                // `synchronize` below; A is m x k (lda = m), B is k x n
+                // (ldb = k) and C is m x n (ldc = m) in compact column-major
+                // storage, which is cuBLAS's native layout. C is the only
+                // buffer written and does not alias A or B.
+                let launched = unsafe {
+                    cublas::set_stream(
+                        handle,
+                        session.stream().raw_handle() as cublas_sys::cudaStream_t,
+                    )
+                    .and_then(|()| {
+                        cublas::dgemm(
+                            handle,
+                            cublas_sys::cublasOperation_t::CUBLAS_OP_N,
+                            cublas_sys::cublasOperation_t::CUBLAS_OP_N,
+                            m32,
+                            n32,
+                            k32,
+                            &alpha,
+                            a_ref.raw_ptr().cast(),
+                            m32,
+                            b_ref.raw_ptr().cast(),
+                            k32,
+                            &beta,
+                            c_ref.raw_ptr().cast(),
+                            m32,
+                        )
+                    })
+                };
+                // `synchronize` is the only host barrier: the GEMM was merely
+                // enqueued on the session's stream.
+                let synchronized = session.synchronize();
+                // SAFETY: the handle is not used after this point, and the
+                // barrier above (or the failed enqueue) means no work using it
+                // is still pending on the stream.
+                let destroyed = unsafe { cublas::destroy_handle(handle) };
+                launched.map_err(|err| Error::backend_source(OP, err))?;
+                synchronized?;
+                destroyed.map_err(|err| Error::backend_source(OP, err))?;
+                Ok(c)
+            })
+        })
+        .ok_or_else(|| Error::runtime_state(OP, "backend session is not CUDA"))?
+    })?
+}
+```
+<!-- end-snippet-source -->
+
+The example runs in the GPU CI lane (through `cuda_tutorial`) and on its own:
+
+```console
+cargo run --manifest-path docs/tutorial-code/Cargo.toml \
+  --no-default-features --features cuda,cpu-faer --bin cuda_vendor_interop
+```
+
+### Dependency contract
+
+| Crate | Source | Purpose |
+|---|---|---|
+| `cudarc` | `tenferro_gpu::cuda::cudarc` (re-export, `0.19`) | cuBLAS/driver/NVRTC bindings matching tenferro's CUDA build |
+
+Unlike the host crates above, tenferro-gpu **does** re-export `cudarc`: the
+vendor bindings must load the same CUDA libraries for the same CUDA version
+selection (`cuda-12080`, `dynamic-loading`) that tenferro uses, and taking them
+from the re-export makes a version or feature mismatch impossible. The
+re-export enables `driver`, `runtime`, `nvrtc` and `cublas`. For another module,
+such as `cusolver`, add `cudarc = { version = "0.19", default-features = false,
+features = ["cusolver", "dynamic-loading", "cuda-12080"] }` to your own
+manifest; Cargo unifies it with tenferro's copy, so the re-export then exposes
+that module too.
+
+### Stream, handle and lifetime rules
+
+- **Stream.** Issue every vendor call on `session.stream().raw_handle()`.
+  Work on that stream is ordered after the tenferro work that produced the
+  inputs and before the tenferro work that later reads the output, so no extra
+  events are needed. Do not use another stream: tenferro does not order work on
+  streams it does not own.
+- **Pointers.** `session.tensor(&t)` / `session.tensor_mut(&mut t)` validate
+  that the tensor is resident on this session's device and return its device
+  span; `raw_ptr()` is valid only while that reference (and the session) is
+  borrowed. Outputs come from `session.alloc_output`, so tenferro owns and
+  frees them. tenferro tensors are compact column-major, so the leading
+  dimension of an `m x n` matrix is `m`, exactly as for host BLAS.
+- **Barrier.** Successful raw-session calls only enqueue.
+  `session.synchronize()` is the host barrier; call it before destroying a
+  vendor handle or workspace that queued work still uses, and before reading
+  results on the host (or use `download_tensor`, which orders itself).
+- **Handles.** Vendor handles (`cublasHandle_t`, `cusolverDnHandle_t`) belong
+  to the caller. Create them while the session is active (tenferro's primary
+  context is current), bind them to the session's stream with `set_stream` in
+  every session that uses them (the stream belongs to the session, not to the
+  handle), and destroy them only after a barrier.
+- **What is not shared.** tenferro's own cuBLAS, cuSOLVER and cuTENSOR handles
+  and workspaces (for example the handle behind `dot_general`) are internal;
+  they are not exposed and must not be assumed reusable. Work issued from
+  another thread runs on that thread's stream and is outside this contract.
 
 ## Related work
 
