@@ -77,7 +77,7 @@ fn a_narrowing_program_differentiates_and_does_not_recover_discarded_information
         .expect("traced narrowing")
         .remove(0);
     let loss = narrowed
-        .reduce_sum_squares(&[0])
+        .reduce_sum_squares(Some(&[0]))
         .expect("ordinary f64 loss");
 
     // The reverse pass crosses the conversion back into the external scalar.
@@ -130,7 +130,7 @@ fn a_widening_program_differentiates_across_the_conversion() {
         .expect("traced narrowing")
         .remove(0);
     let loss = narrowed
-        .reduce_sum_squares(&[0])
+        .reduce_sum_squares(Some(&[0]))
         .expect("ordinary f64 loss");
 
     let seed = TracedTensor::from_tensor_concrete_shape(

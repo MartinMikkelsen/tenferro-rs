@@ -42,9 +42,17 @@ impl<T: TensorScalar> TypedTensorSessionOpsExt<T> for TypedTensor<T> {
 
     fn reduce_sum(
         &self,
-        axes: &[usize],
+        axes: Option<&[usize]>,
         session: &mut dyn BackendSession,
     ) -> Result<TypedTensor<T>> {
+        let all;
+        let axes = match axes {
+            Some(axes) => axes,
+            None => {
+                all = (0..self.shape().len()).collect::<Vec<_>>();
+                &all
+            }
+        };
         let out = session.reduce_sum_read(T::tensor_read(self), axes)?;
         into_typed_result("reduce_sum", out)
     }

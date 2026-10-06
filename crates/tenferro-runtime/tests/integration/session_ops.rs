@@ -93,7 +93,7 @@ fn session_dynamic_equal_shape_chain() {
             let x = a.add(&b, s).unwrap();
             let x = x.exp(s).unwrap();
             let x = x.mul(&b, s).unwrap();
-            x.reduce_sum(&[0], s).unwrap()
+            x.reduce_sum(Some(&[0]), s).unwrap()
         })
         .unwrap();
 
@@ -121,7 +121,7 @@ fn session_dynamic_broadcast_chain() {
             let x = a.add(&b, s).unwrap();
             let x = x.exp(s).unwrap();
             let x = x.mul(&a, s).unwrap();
-            x.reduce_sum(&[0], s).unwrap()
+            x.reduce_sum(Some(&[0]), s).unwrap()
         })
         .unwrap();
 
@@ -189,7 +189,7 @@ fn session_typed_equal_shape_chain() {
             let x = a.add(&b, s).unwrap();
             let x = x.exp(s).unwrap();
             let x = x.mul(&b, s).unwrap();
-            x.reduce_sum(&[0], s).unwrap()
+            x.reduce_sum(Some(&[0]), s).unwrap()
         })
         .unwrap();
 
@@ -215,7 +215,7 @@ fn session_typed_broadcast_chain() {
             let x = a.add(&b, s).unwrap();
             let x = x.exp(s).unwrap();
             let x = x.mul(&a, s).unwrap();
-            x.reduce_sum(&[0], s).unwrap()
+            x.reduce_sum(Some(&[0]), s).unwrap()
         })
         .unwrap();
 
@@ -274,7 +274,7 @@ fn session_in_typed_validates_output_dtype() {
         (
             "reduce_sum",
             backend
-                .with_backend_session(|s| a.reduce_sum(&[0], s))
+                .with_backend_session(|s| a.reduce_sum(Some(&[0]), s))
                 .unwrap()
                 .unwrap_err(),
         ),
@@ -422,7 +422,7 @@ fn session_chain_enters_one_session() {
             let x = x.add(&b, s).unwrap();
             let x = x.exp(s).unwrap();
             let x = x.mul(&a, s).unwrap();
-            x.reduce_sum(&[0], s).unwrap()
+            x.reduce_sum(Some(&[0]), s).unwrap()
         })
         .unwrap();
     assert_eq!(

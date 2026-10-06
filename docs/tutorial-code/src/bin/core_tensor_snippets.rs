@@ -150,7 +150,7 @@ let a = Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0,
 let (at, flat, col_sum) = backend.with_backend_session(|session| {
     let at = a.transpose(&[1, 0], session).unwrap();
     let flat = a.reshape(&[6], session).unwrap();
-    let col_sum = a.reduce_sum(&[0], session).unwrap();
+    let col_sum = a.reduce_sum(Some(&[0]), session).unwrap();
     (at, flat, col_sum)
 })?;
 assert_eq!(at.shape(), &[3, 2]);
@@ -428,7 +428,7 @@ let y = TypedTensor::<f64>::from_vec_col_major(vec![3], vec![4.0, 5.0, 6.0]).unw
 let (sum, product, total, mask, selected) = backend.with_backend_session(|session| {
     let sum = x.add(&y, session).unwrap();
     let product = x.mul(&y, session).unwrap();
-    let total = product.reduce_sum(&[0], session).unwrap();
+    let total = product.reduce_sum(Some(&[0]), session).unwrap();
     let mask = sum.compare(&product, CompareDir::Lt, session).unwrap();
     let selected = mask.where_select(&sum, &product, session).unwrap();
     (sum, product, total, mask, selected)
@@ -647,8 +647,8 @@ let a = Tensor::from_vec_col_major(
 // [[1.0, 3.0, 5.0],
 //  [2.0, 4.0, 6.0]]
 let (row_sums, total) = backend.with_backend_session(|session| {
-    let row_sums = a.reduce_sum(&[1], session).unwrap();
-    let total = a.reduce_sum(&[0, 1], session).unwrap();
+    let row_sums = a.reduce_sum(Some(&[1]), session).unwrap();
+    let total = a.reduce_sum(Some(&[0, 1]), session).unwrap();
     (row_sums, total)
 })?;
 

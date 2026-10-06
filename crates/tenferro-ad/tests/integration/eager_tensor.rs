@@ -843,7 +843,7 @@ fn eager_reduce_sum_squares_gradient_matches_finite_difference() {
     .unwrap();
     let loss = x
         .runtime()
-        .with_eager_session(|session| session.reduce_sum_squares(&x, &[0]))
+        .with_eager_session(|session| session.reduce_sum_squares(&x, Some(&[0])))
         .unwrap();
     let _cotangents = loss.backward().unwrap();
     let grad = x.grad().unwrap().unwrap();
@@ -858,6 +858,54 @@ fn eager_reduce_sum_squares_gradient_matches_finite_difference() {
         })
         .collect();
     assert_close_slice(f64_data(&grad.to_tensor().unwrap()), &expected, FD_TOL);
+}
+
+/// #1985: `None` reduces every axis, as for the rest of the reduction family,
+/// on the eager, traced and concrete surfaces.
+#[test]
+fn reduce_sum_squares_none_reduces_all_axes_on_every_surface() {
+    use tenferro_runtime::{GraphCompiler, TensorSessionOpsExt, TracedTensor};
+    use tenferro_tensor::BackendSessionHost;
+
+    let data = vec![1.0_f64, -2.0, 3.0, 0.5];
+    let x = EagerTensor::from_tensor_in(
+        Tensor::from_vec_col_major(vec![2, 2], data.clone()).unwrap(),
+        test_ctx(),
+    )
+    .unwrap();
+    let (all, explicit) = x
+        .runtime()
+        .with_eager_session(|session| {
+            Ok::<_, tenferro_ad::Error>((
+                session.reduce_sum_squares(&x, None)?,
+                session.reduce_sum_squares(&x, Some(&[0, 1]))?,
+            ))
+        })
+        .unwrap();
+    assert_eq!(all.shape(), &[] as &[usize]);
+    assert_eq!(f64_data(&all.to_tensor().unwrap()), &[14.25]);
+    assert_eq!(f64_data(&explicit.to_tensor().unwrap()), &[14.25]);
+
+    let traced = TracedTensor::from_vec_col_major(vec![2, 2], data.clone()).unwrap();
+    let total = traced.reduce_sum_squares(None).unwrap();
+    assert_eq!(total.rank, 0);
+    let program = GraphCompiler::new().compile_many(&[&total]).unwrap();
+    let cpu = tenferro_cpu::CpuBackend::new();
+    let mut builder = tenferro_runtime::Runtime::builder();
+    builder
+        .register_engine(tenferro_cpu::runtime_engine_registration(&cpu).unwrap())
+        .unwrap();
+    let runtime = builder.build().unwrap();
+    let out = runtime.run_compiled(&program, &[]).unwrap();
+    assert_eq!(f64_data(&out[0]), &[14.25]);
+
+    let host = Tensor::from_vec_col_major(vec![2, 2], data).unwrap();
+    let mut backend = tenferro_cpu::CpuBackend::new();
+    let sum = backend
+        .with_backend_session(|session| host.reduce_sum(None, session))
+        .unwrap()
+        .unwrap();
+    assert_eq!(f64_data(&sum), &[2.5]);
 }
 
 #[test]

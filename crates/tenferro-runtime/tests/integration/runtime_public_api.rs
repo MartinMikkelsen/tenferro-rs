@@ -116,7 +116,7 @@ fn tensor_extension_trait_covers_eager_runtime_paths() {
                 let casted = input.cast(DType::F32, session)?;
                 let reshaped = input.reshape(&[4], session)?;
                 let transposed = input.transpose(&[1, 0], session)?;
-                let summed = input.reduce_sum(&[0], session)?;
+                let summed = input.reduce_sum(Some(&[0]), session)?;
                 Ok((converted, casted, reshaped, transposed, summed))
             },
         )

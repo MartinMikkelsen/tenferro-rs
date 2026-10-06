@@ -28,7 +28,19 @@ impl TensorSessionOpsExt for Tensor {
         session.exp_read(TensorRead::from_tensor(self))
     }
 
-    fn reduce_sum(&self, axes: &[usize], session: &mut dyn BackendSession) -> Result<Tensor> {
+    fn reduce_sum(
+        &self,
+        axes: Option<&[usize]>,
+        session: &mut dyn BackendSession,
+    ) -> Result<Tensor> {
+        let all;
+        let axes = match axes {
+            Some(axes) => axes,
+            None => {
+                all = (0..self.shape().len()).collect::<Vec<_>>();
+                &all
+            }
+        };
         session.reduce_sum_read(TensorRead::from_tensor(self), axes)
     }
 

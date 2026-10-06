@@ -768,7 +768,7 @@ fn einsum_plan_mixed_chain_enters_one_session() {
             for _ in 0..10 {
                 x = plan.execute([&lhs, &rhs], session)?;
                 x = x.exp(session)?;
-                x = x.reduce_sum(&[1], session)?;
+                x = x.reduce_sum(Some(&[1]), session)?;
             }
             Ok(x)
         })

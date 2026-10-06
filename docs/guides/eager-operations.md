@@ -247,7 +247,7 @@ let a = Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0,
 let (at, flat, col_sum) = backend.with_backend_session(|session| {
     let at = a.transpose(&[1, 0], session).unwrap();
     let flat = a.reshape(&[6], session).unwrap();
-    let col_sum = a.reduce_sum(&[0], session).unwrap();
+    let col_sum = a.reduce_sum(Some(&[0]), session).unwrap();
     (at, flat, col_sum)
 })?;
 assert_eq!(at.shape(), &[3, 2]);
@@ -256,7 +256,7 @@ assert_eq!(col_sum.shape(), &[3]);
 ```
 <!-- end-snippet-source -->
 
-The `reduce_sum(&[0], &mut backend)` call removes axis `0`. For this `[2, 3]` tensor, that
+The `reduce_sum(Some(&[0]), session)` call removes axis `0`. For this `[2, 3]` tensor, that
 means summing down each column and keeping one value per column.
 
 ## Einsum

@@ -24,8 +24,8 @@ fn typed_tensor_reduction_and_structural_wrappers_preserve_values() {
         .with_backend_session(
             |session| -> tenferro_tensor::Result<[TypedTensor<f64>; 5]> {
                 Ok([
-                    x.reduce_sum(&[1], session)?,
-                    x.reduce_sum(&[0, 1], session)?,
+                    x.reduce_sum(Some(&[1]), session)?,
+                    x.reduce_sum(Some(&[0, 1]), session)?,
                     x.reshape(&[3, 2], session)?,
                     x.transpose(&[1, 0], session)?,
                     row.broadcast_in_dim(&[2, 3], &[1], session)?,

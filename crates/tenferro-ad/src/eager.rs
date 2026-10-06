@@ -1957,17 +1957,22 @@ impl EagerSession<'_> {
     }
 
     /// Sum elementwise squares over the selected axes in this borrowed session.
-    /// Only `f32` and `f64` are supported; an empty axis slice squares each value.
+    /// Only `f32` and `f64` are supported. `None` reduces every axis, like the
+    /// rest of the reduction family; `Some(&[])` squares each value.
     ///
     /// # Examples
     /// ```rust
     /// use tenferro_ad::{EagerRuntime, Tensor};
     /// let ctx = EagerRuntime::new()?;
-    /// let sum = ctx.with_eager_session(|s| {
+    /// let (sum, all) = ctx.with_eager_session(|s| {
     ///     let input = s.constant_from(Tensor::from_vec_col_major([2], vec![3.0_f64, 4.0])?)?;
-    ///     s.reduce_sum_squares(&input, &[0])
+    ///     Ok::<_, tenferro_ad::Error>((
+    ///         s.reduce_sum_squares(&input, Some(&[0]))?,
+    ///         s.reduce_sum_squares(&input, None)?,
+    ///     ))
     /// })?;
     /// assert_eq!(sum.value()?.as_slice::<f64>()?, &[25.0]);
+    /// assert_eq!(all.value()?.as_slice::<f64>()?, &[25.0]);
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
     /// # Errors
@@ -1975,20 +1980,16 @@ impl EagerSession<'_> {
     pub fn reduce_sum_squares(
         &mut self,
         input: &EagerTensor,
-        axes: &[usize],
+        axes: Option<&[usize]>,
     ) -> Result<EagerTensor> {
         self.ensure_runtime(input)?;
+        let axes = axes.map_or_else(|| (0..input.shape().len()).collect(), <[usize]>::to_vec);
         crate::eager_ops::validate_eager_axes(
             "EagerSession::reduce_sum_squares",
             input.shape().len(),
-            axes,
+            &axes,
         )?;
-        self.run_unary(
-            input,
-            StdTensorOp::ReduceSumSquares {
-                axes: axes.to_vec(),
-            },
-        )
+        self.run_unary(input, StdTensorOp::ReduceSumSquares { axes })
     }
 
     /// Reduce the product of selected axes in this borrowed session.

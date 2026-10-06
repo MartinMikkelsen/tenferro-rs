@@ -205,7 +205,9 @@ pub trait TensorSessionOpsExt {
     /// dtype or [`tenferro_tensor::Error::BackendSource`] for a typed backend
     /// failure.
     fn exp(&self, session: &mut dyn BackendSession) -> tenferro_tensor::Result<Tensor>;
-    /// Sum over one or more axes inside a session.
+    /// Sum over the selected axes inside a session. `None` reduces every
+    /// axis and `Some(&[])` keeps the input shape, as in the eager and traced
+    /// reduction family.
     ///
     /// # Examples
     ///
@@ -216,8 +218,10 @@ pub trait TensorSessionOpsExt {
     ///
     /// let mut backend = CpuBackend::new();
     /// let x = Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]).unwrap();
-    /// let sums = backend.with_backend_session(|session| x.reduce_sum(&[1], session))??;
+    /// let sums = backend.with_backend_session(|session| x.reduce_sum(Some(&[1]), session))??;
     /// assert_eq!(sums.as_slice::<f64>().unwrap(), &[3.0, 3.0]);
+    /// let total = backend.with_backend_session(|session| x.reduce_sum(None, session))??;
+    /// assert_eq!(total.as_slice::<f64>().unwrap(), &[6.0]);
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     ///
@@ -228,7 +232,7 @@ pub trait TensorSessionOpsExt {
     /// [`tenferro_tensor::Error::BackendSource`] for a typed backend failure.
     fn reduce_sum(
         &self,
-        axes: &[usize],
+        axes: Option<&[usize]>,
         session: &mut dyn BackendSession,
     ) -> tenferro_tensor::Result<Tensor>;
     /// Convert to a different dtype using the checked conversion lattice inside a session.
@@ -984,7 +988,8 @@ pub trait TypedTensorSessionOpsExt<T: TensorScalar> {
     /// dtype or [`tenferro_tensor::Error::BackendSource`] for a typed backend
     /// failure.
     fn exp(&self, session: &mut dyn BackendSession) -> tenferro_tensor::Result<TypedTensor<T>>;
-    /// Sum over one or more axes inside a session.
+    /// Sum over the selected axes inside a session. `None` reduces every
+    /// axis and `Some(&[])` keeps the input shape.
     ///
     /// # Examples
     ///
@@ -995,7 +1000,7 @@ pub trait TypedTensorSessionOpsExt<T: TensorScalar> {
     ///
     /// let mut backend = CpuBackend::new();
     /// let x = TypedTensor::<f64>::from_vec_col_major(vec![2, 3], vec![1.0; 6]).unwrap();
-    /// let sums = backend.with_backend_session(|session| x.reduce_sum(&[1], session))??;
+    /// let sums = backend.with_backend_session(|session| x.reduce_sum(Some(&[1]), session))??;
     /// assert_eq!(sums.host_data().unwrap(), &[3.0, 3.0]);
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
@@ -1008,7 +1013,7 @@ pub trait TypedTensorSessionOpsExt<T: TensorScalar> {
     /// typed backend failure.
     fn reduce_sum(
         &self,
-        axes: &[usize],
+        axes: Option<&[usize]>,
         session: &mut dyn BackendSession,
     ) -> tenferro_tensor::Result<TypedTensor<T>>;
     /// Elementwise subtraction with NumPy-style broadcasting inside a session.

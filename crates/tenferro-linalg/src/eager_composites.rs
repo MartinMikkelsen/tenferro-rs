@@ -252,7 +252,7 @@ fn frobenius_norm(
     abs: &EagerTensor,
     axes: &[usize],
 ) -> Result<EagerTensor> {
-    let squares = session.reduce_sum_squares(abs, axes)?;
+    let squares = session.reduce_sum_squares(abs, Some(axes))?;
     session.sqrt(&squares)
 }
 
