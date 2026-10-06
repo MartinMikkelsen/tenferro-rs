@@ -19,6 +19,51 @@ let mut backend = CpuBackend::new();
         Ok(())
     }
 
+    snippet_eager_operations_mixing()?;
+
+    // snippet source: docs/guides/eager-operations.md (Mixing eager and concrete work)
+    fn snippet_eager_operations_mixing() -> Result<(), Box<dyn std::error::Error>> {
+        // snippet-start:eager_operations_mixing
+use tenferro_ad::{EagerRuntime, EagerTensor};
+use tenferro_cpu::{CpuBackend, CpuPlacement};
+use tenferro_runtime::{Tensor, TensorSessionOpsExt};
+
+let runtime = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
+let x = EagerTensor::from_tensor_in(
+    Tensor::from_vec_col_major(vec![2], vec![1.0_f64, -2.0])?,
+    runtime.clone(),
+)?;
+
+// Canonical entry: eager ops on a borrowed `EagerSession`.
+let y = runtime.with_eager_session(|s| s.mul(&x, &x))?;
+let values = y.to_tensor()?;
+
+// AD-free work in the same session: the eager session lends its backend session.
+let total = runtime.with_eager_session(|s| {
+    values
+        .reduce_sum(None, s.backend_session())
+        .map_err(tenferro_ad::Error::from)
+})?;
+assert_eq!(total.as_slice::<f64>()?, &[5.0]);
+
+// CPU placement bridge: core ops on the runtime's CPU backend session.
+let mut cpu = runtime.on_cpu(CpuPlacement::Auto)?;
+let doubled = cpu.with_eager_session(|session| {
+    values
+        .scale_real(2.0, session)
+        .map_err(tenferro_ad::Error::from)
+})?;
+assert_eq!(doubled.as_slice::<f64>()?, &[2.0, 8.0]);
+
+// A nested entry into the same runtime is rejected, not deadlocked.
+let nested = runtime.with_eager_session(|_| {
+    Ok::<_, tenferro_ad::Error>(runtime.with_eager_session(|s| s.neg(&x)).is_err())
+})?;
+assert!(nested);
+        // snippet-end:eager_operations_mixing
+        Ok(())
+    }
+
     snippet_eager_operations_2()?;
 
     // snippet source: docs/guides/eager-operations.md:97
@@ -150,7 +195,7 @@ let a = Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0,
 let (at, flat, col_sum) = backend.with_backend_session(|session| {
     let at = a.transpose(&[1, 0], session).unwrap();
     let flat = a.reshape(&[6], session).unwrap();
-    let col_sum = a.reduce_sum(&[0], session).unwrap();
+    let col_sum = a.reduce_sum(Some(&[0]), session).unwrap();
     (at, flat, col_sum)
 })?;
 assert_eq!(at.shape(), &[3, 2]);
@@ -190,7 +235,7 @@ let y = EagerTensor::requires_grad_in(Tensor::from_vec_col_major(vec![2], vec![3
 let make_loss = || ctx.with_eager_session(|s| {
     let product = s.mul(&x, &y)?;
     s.reduce_sum(&product, Some(&[0]))
-}).unwrap().unwrap();
+}).unwrap();
 let loss = make_loss();
 loss.backward().unwrap();
 assert_eq!(x.grad().unwrap().unwrap().as_slice::<f64>().unwrap(), &[3.0, 4.0]);
@@ -234,7 +279,7 @@ let seed = EagerTensor::from_tensor_in(
     ctx,
 ).unwrap();
 
-let y = x.runtime().with_eager_session(|s| s.mul(&x, &x))??;
+let y = x.runtime().with_eager_session(|s| s.mul(&x, &x))?;
 y.backward_with(&seed).unwrap();
 assert_eq!(x.grad().unwrap().unwrap().as_slice::<f64>().unwrap(), &[4.0, 12.0]);
 Ok(())
@@ -257,7 +302,7 @@ let x = EagerTensor::requires_grad_in(
     Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0]).unwrap(),
     ctx.clone(),
 ).unwrap();
-let y = ctx.with_eager_session(|s| s.mul(&x, &x))??;
+let y = ctx.with_eager_session(|s| s.mul(&x, &x))?;
 let seed = EagerTensor::from_tensor_in(
     Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 1.0]).unwrap(),
     ctx.clone(),
@@ -302,7 +347,7 @@ let tangent = EagerTensor::from_tensor_in(
 let loss = ctx.with_eager_session(|s| {
     let square = s.mul(&x, &x)?;
     s.mul(&square, &x)
-})??;
+})?;
 let grad = ctx.grad(&loss, &x).unwrap();
 let hvp = ctx.jvp(&grad, &x, &tangent).unwrap();
 
@@ -333,7 +378,7 @@ let x = EagerTensor::requires_grad_in(
 let y = ctx.with_eager_session(|s| {
     let _guard = ctx.no_grad();
     s.mul(&x, &x)
-})??;
+})?;
 assert!(!y.tracks_grad());
 Ok(())
 }
@@ -360,14 +405,14 @@ let x = EagerTensor::requires_grad_in(
     ctx.clone(),
 ).unwrap();
 
-let y = ctx.with_eager_session(|session| session.matmul(&a, &x))??;
+let y = ctx.with_eager_session(|session| session.matmul(&a, &x))?;
 let y_tensor = y.to_tensor().unwrap();
 assert_eq!(y_tensor.as_slice::<f64>().unwrap(), &[23.0, 34.0]);
 
 let loss = ctx.with_eager_session(|s| {
     let squared = s.mul(&y, &y)?;
     s.reduce_sum(&squared, Some(&[0, 1]))
-})??;
+})?;
 let loss_tensor = loss.to_tensor().unwrap();
 assert_eq!(loss_tensor.as_slice::<f64>().unwrap(), &[1685.0]);
 
@@ -428,7 +473,7 @@ let y = TypedTensor::<f64>::from_vec_col_major(vec![3], vec![4.0, 5.0, 6.0]).unw
 let (sum, product, total, mask, selected) = backend.with_backend_session(|session| {
     let sum = x.add(&y, session).unwrap();
     let product = x.mul(&y, session).unwrap();
-    let total = product.reduce_sum(&[0], session).unwrap();
+    let total = product.reduce_sum(Some(&[0]), session).unwrap();
     let mask = sum.compare(&product, CompareDir::Lt, session).unwrap();
     let selected = mask.where_select(&sum, &product, session).unwrap();
     (sum, product, total, mask, selected)
@@ -497,7 +542,7 @@ let x = ctx.variable_from(Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0,
 let y = ctx.with_eager_session(|s| {
     let squared = s.mul(&x, &x)?;
     s.reduce_sum(&squared, Some(&[0]))
-})??;
+})?;
 
 y.backward().unwrap();
 assert_eq!(x.grad().unwrap().unwrap().as_slice::<f64>().unwrap(), &[2.0, 4.0, 6.0]);
@@ -567,7 +612,7 @@ use tenferro_ad::{EagerRuntime, Tensor};
 fn main() -> Result<(), Box<dyn std::error::Error>> {
 let ctx = EagerRuntime::new()?;
 let x = ctx.variable_from(Tensor::from_vec_col_major(vec![3], vec![0.0_f64, 1.0, 2.0]).unwrap()).unwrap();
-let y = ctx.with_eager_session(|session| session.exp(&x))??;
+let y = ctx.with_eager_session(|session| session.exp(&x))?;
 
 let y_tensor = y.to_tensor().unwrap();
 let data = y_tensor.as_slice::<f64>().unwrap();
@@ -619,7 +664,7 @@ use tenferro_ad::{EagerRuntime, Tensor};
 fn main() -> Result<(), Box<dyn std::error::Error>> {
 let ctx = EagerRuntime::new()?;
 let v = ctx.variable_from(Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]).unwrap()).unwrap();
-let repeated = ctx.with_eager_session(|s| s.broadcast_in_dim(&v, &[3, 2], &[0]))??;
+let repeated = ctx.with_eager_session(|s| s.broadcast_in_dim(&v, &[3, 2], &[0]))?;
 
 assert_eq!(repeated.shape(), &[3, 2]);
 assert_eq!(repeated.to_tensor().unwrap().as_slice::<f64>().unwrap(), &[1.0, 2.0, 3.0, 1.0, 2.0, 3.0]);
@@ -647,8 +692,8 @@ let a = Tensor::from_vec_col_major(
 // [[1.0, 3.0, 5.0],
 //  [2.0, 4.0, 6.0]]
 let (row_sums, total) = backend.with_backend_session(|session| {
-    let row_sums = a.reduce_sum(&[1], session).unwrap();
-    let total = a.reduce_sum(&[0, 1], session).unwrap();
+    let row_sums = a.reduce_sum(Some(&[1]), session).unwrap();
+    let total = a.reduce_sum(Some(&[0, 1]), session).unwrap();
     (row_sums, total)
 })?;
 
@@ -658,6 +703,57 @@ assert_eq!(total.shape(), &[] as &[usize]);
 // Rank-0 tensors hold one scalar element; as_slice() returns a length-1 slice.
 assert_eq!(total.as_slice::<f64>().unwrap(), &[21.0]);
         // snippet-end:tensor_operations_24
+        Ok(())
+    }
+
+    snippet_tensor_operations_dot_general_layout()?;
+
+    // snippet source: docs/guides/tensor-operations.md (Contraction Output Layout)
+    fn snippet_tensor_operations_dot_general_layout() -> Result<(), Box<dyn std::error::Error>> {
+        // snippet-start:tensor_operations_dot_general_layout
+use tenferro_cpu::CpuBackend;
+use tenferro_runtime::{DotGeneralConfig, Tensor, TensorSessionOpsExt};
+use tenferro_tensor::BackendSessionHost;
+
+// Attention scores: q[d, lq, b] and k[d, lk, b] (column-major, batch last).
+let (d, lq, lk, b) = (2, 3, 4, 2);
+let q_data: Vec<f64> = (0..d * lq * b).map(|v| v as f64).collect();
+let k_data: Vec<f64> = (0..d * lk * b).map(|v| 0.5 * v as f64).collect();
+let q = Tensor::from_vec_col_major(vec![d, lq, b], q_data.clone())?;
+let k = Tensor::from_vec_col_major(vec![d, lk, b], k_data.clone())?;
+let config = DotGeneralConfig {
+    lhs_contracting_dims: [0].as_slice().into(),
+    rhs_contracting_dims: [0].as_slice().into(),
+    lhs_batch_dims: [2].as_slice().into(),
+    rhs_batch_dims: [2].as_slice().into(),
+};
+let mut backend = CpuBackend::new();
+let (scores, batch_leading) = backend.with_backend_session(|session| {
+    let scores = q.dot_general(&k, config, session)?;
+    // Output is [lhs free..., rhs free..., batch...] = [lq, lk, b].
+    // Move batch first only if a consumer needs [b, lq, lk].
+    let batch_leading = scores.transpose(&[2, 0, 1], session)?;
+    Ok::<_, tenferro_tensor::Error>((scores, batch_leading))
+})??;
+assert_eq!(scores.shape(), &[lq, lk, b]);
+assert_eq!(batch_leading.shape(), &[b, lq, lk]);
+
+// scores[i, j, n] = sum_c q[c, i, n] * k[c, j, n]
+let at = |data: &[f64], dims: [usize; 3], idx: [usize; 3]| {
+    data[idx[0] + dims[0] * (idx[1] + dims[1] * idx[2])]
+};
+let s = scores.as_slice::<f64>()?;
+for n in 0..b {
+    for j in 0..lk {
+        for i in 0..lq {
+            let expected: f64 = (0..d)
+                .map(|c| at(&q_data, [d, lq, b], [c, i, n]) * at(&k_data, [d, lk, b], [c, j, n]))
+                .sum();
+            assert_eq!(s[i + lq * (j + lk * n)], expected);
+        }
+    }
+}
+        // snippet-end:tensor_operations_dot_general_layout
         Ok(())
     }
 

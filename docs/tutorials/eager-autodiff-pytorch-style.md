@@ -32,7 +32,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let loss = runtime.with_eager_session(|s| {
         let prediction = s.mul(&x, &x)?;
         s.reduce_sum(&prediction, Some(&[0]))
-    })??;
+    })?;
 
     assert_eq!(loss.shape(), &[]);
     assert_close(loss.value()?.as_slice::<f64>().unwrap(), &[14.0]);

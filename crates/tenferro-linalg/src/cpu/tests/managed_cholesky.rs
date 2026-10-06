@@ -528,7 +528,6 @@ fn managed_eager_cholesky_preserves_domain_and_values() {
     let output = runtime
         .with_eager_session(|session| session.cholesky(&eager))
         .unwrap()
-        .unwrap()
         .to_tensor()
         .unwrap();
     let output = output.as_typed::<f64>().unwrap();

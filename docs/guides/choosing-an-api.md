@@ -99,7 +99,7 @@ operations.
 
 | Need | Without autodiff | Eager path | Traced path |
 | --- | --- | --- | --- |
-| Everyday tensor ops | `TensorSessionOpsExt` / `TypedTensorSessionOpsExt` session-explicit methods | `EagerTensor` methods / associated functions | `TracedTensor` methods / associated functions |
+| Everyday tensor ops | Receiver methods with the session last: `x.gather(&idx, cfg, session)` via `TensorSessionOpsExt` (all core ops) / `TypedTensorSessionOpsExt` (elementwise, reductions, dot, scaling; indexing and structural ops on `Tensor`) | `session.gather(&x, &idx, cfg)` on a borrowed `EagerSession` | `TracedTensor` methods / associated functions |
 | Einsum | `[&a, &b].einsum(...)` via `TensorEinsumExt` / `TypedTensorEinsumExt`; `TensorReadEinsumExt` / `TypedTensorReadEinsumExt` for views; `ConcreteEinsumPlan` for repeated fixed metadata | `session.einsum(&[&a, &b], ...)` via `EagerSessionEinsumExt` | `trace.einsum(...)` via `TraceContextEinsumExt` plus `extension_module` |
 | FFT | `x.fft(...)` via `TensorFftExt`; `read.fft_read(...)` via `TensorReadFftExt` | `session.fft(&x, ...)` via `EagerSessionFftExt` with `autodiff` (`EagerTensorFftExt` only for consuming in-place FFT) | `x.fft(...)` via `TracedTensorFftExt` plus `extension_module` |
 | Tensordot sugar | Use `matmul` or `dot_general` directly | `session.tensordot(&a, &b, axes)` via `EagerSessionEinsumExt` | `a.tensordot(&b, axes)` via `TracedTensorEinsumExt` |

@@ -47,20 +47,16 @@ fn eager_and_traced_broadcast_errors_share_payloads_across_discovery_phases() {
             "incompatible_binary" => {
                 let lhs = eager_tensor(ctx.clone(), vec![2]);
                 let rhs = eager_tensor(ctx.clone(), vec![3]);
-                ctx.with_eager_session(|s| s.add(&lhs, &rhs))
-                    .unwrap()
-                    .unwrap_err()
+                ctx.with_eager_session(|s| s.add(&lhs, &rhs)).unwrap_err()
             }
             "incompatible_input" => {
                 let input = eager_tensor(ctx.clone(), vec![2, 3]);
                 ctx.with_eager_session(|s| s.broadcast_in_dim(&input, &[2, 4], &[0, 1]))
-                    .unwrap()
                     .unwrap_err()
             }
             "rank_too_large" => {
                 let input = eager_tensor(ctx.clone(), vec![2, 3]);
                 ctx.with_eager_session(|s| s.broadcast_in_dim(&input, &[3], &[0, 0]))
-                    .unwrap()
                     .unwrap_err()
             }
             _ => unreachable!(),

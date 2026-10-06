@@ -24,6 +24,20 @@
 //!   helpers are available as methods on `GraphCompiler`, concrete input
 //!   slices/arrays, eager input slices/arrays, and tensor receivers.
 //!
+//! # Cargo features
+//!
+//! | Feature | Enables |
+//! |---|---|
+//! | `cpu-faer` (default) and the other CPU provider features | Forwarded to `tenferro-cpu`; see its documentation. |
+//! | `autodiff` | The eager surface (`EagerSessionEinsumExt`) and AD rules. Adds the `tenferro-ad` dependency. |
+//! | `cuda` | CUDA execution through `tenferro-gpu`. |
+//! | `webgpu` | WebGPU/Metal execution through `tenferro-gpu` (a subset of operations). |
+//! | `rocm` | Placeholder; HIP/ROCm is not implemented. |
+//!
+//! For contractions without AD, use the concrete [`TensorEinsumExt`] /
+//! [`TypedTensorEinsumExt`] APIs or [`ConcreteEinsumPlan`] inside a backend
+//! session; they need no `autodiff`.
+//!
 //! # Examples
 //!
 //! ```
@@ -63,6 +77,7 @@
 //! assert_eq!(embedded.output, vec![b'i' as u32, b'i' as u32]);
 //! assert_eq!(higher_rank.inputs[0], vec![b'i' as u32, b'i' as u32, b'j' as u32]);
 //! ```
+#![cfg_attr(docsrs, feature(doc_cfg))]
 
 mod binary_dot;
 mod builder;
@@ -93,6 +108,7 @@ pub use concrete::{
     TypedTensorReadEinsumExt, TypedTensorReadEinsumIntoExt, TypedTensorTensordotExt,
 };
 #[cfg(feature = "autodiff")]
+#[cfg_attr(docsrs, doc(cfg(feature = "autodiff")))]
 pub use eager_ad::EagerSessionEinsumExt;
 pub use error::{Error, PlanningError, Result};
 pub use extension::extension_module;

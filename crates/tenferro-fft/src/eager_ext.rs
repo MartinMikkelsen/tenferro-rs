@@ -21,6 +21,7 @@ use crate::{
 /// Consuming in-place FFT methods for [`EagerTensor`].
 /// Ordinary eager FFT operations use [`EagerSessionFftExt`] inside a borrowed
 /// `EagerRuntime::with_eager_session` region.
+#[cfg_attr(docsrs, doc(cfg(feature = "autodiff")))]
 pub trait EagerTensorFftExt {
     /// Consume a uniquely owned, untracked, compact column-major CPU complex
     /// tensor and overwrite it with its FFT. Shape and allocation are preserved; no implicit copy occurs.
@@ -109,10 +110,11 @@ impl EagerTensorFftExt for EagerTensor {
 /// let result = ctx.with_eager_session(|session| {
 ///     let input = session.constant_from(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?)?;
 ///     session.fft(&input, None, -1, FftNorm::Backward)
-/// })??;
+/// })?;
 /// assert_eq!(result.shape(), &[2]);
 /// # Ok::<(), tenferro_ad::Error>(())
 /// ```
+#[cfg_attr(docsrs, doc(cfg(feature = "autodiff")))]
 pub trait EagerSessionFftExt {
     /// Perform a complex or full-spectrum real FFT on this borrowed session.
     ///
@@ -126,7 +128,7 @@ pub trait EagerSessionFftExt {
     /// let result = ctx.with_eager_session(|session| {
     ///     let x = session.constant_from(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?)?;
     ///     session.fft(&x, None, -1, FftNorm::Backward)
-    /// })??;
+    /// })?;
     /// assert_eq!(result.value()?.as_slice::<Complex64>()?[0], Complex64::new(3.0, 0.0));
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
@@ -155,7 +157,7 @@ pub trait EagerSessionFftExt {
     /// let result = ctx.with_eager_session(|session| {
     ///     let x = session.constant_from(Tensor::from_vec_col_major(vec![2], vec![Complex64::new(3.0, 0.0), Complex64::new(-1.0, 0.0)])?)?;
     ///     session.ifft(&x, None, -1, FftNorm::Backward)
-    /// })??;
+    /// })?;
     /// assert_eq!(result.value()?.as_slice::<Complex64>()?, &[Complex64::new(1.0, 0.0), Complex64::new(2.0, 0.0)]);
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
@@ -180,7 +182,7 @@ pub trait EagerSessionFftExt {
     /// let result = ctx.with_eager_session(|session| {
     ///     let x = session.constant_from(Tensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0])?)?;
     ///     session.rfft(&x, None, -1, FftNorm::Backward)
-    /// })??;
+    /// })?;
     /// assert_eq!(result.shape(), &[3]);
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
@@ -206,7 +208,7 @@ pub trait EagerSessionFftExt {
     /// let result = ctx.with_eager_session(|session| {
     ///     let x = session.constant_from(Tensor::from_vec_col_major(vec![3], vec![Complex64::new(10.0, 0.0), Complex64::new(-2.0, 2.0), Complex64::new(-2.0, 0.0)])?)?;
     ///     session.irfft(&x, Some(4), -1, FftNorm::Backward)
-    /// })??;
+    /// })?;
     /// assert_eq!(result.shape(), &[4]);
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```

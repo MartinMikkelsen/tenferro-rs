@@ -123,7 +123,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             .with_eager_session(|session| {
                                 session.dot_general(&out, black_box(&b), black_box(config.clone()))
                             })
-                            .unwrap()
                             .unwrap();
                     }
                     Some(out.to_tensor().unwrap())

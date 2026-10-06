@@ -8,7 +8,7 @@ use super::backend_broadcast_multiply_untracked;
 fn einsum(inputs: &[&EagerTensor], subscripts: &str) -> crate::Result<EagerTensor> {
     inputs[0]
         .runtime()
-        .with_eager_session(|s| super::einsum(s, inputs, subscripts))?
+        .with_eager_session(|s| super::einsum(s, inputs, subscripts))
 }
 
 #[test]
@@ -226,7 +226,6 @@ fn nary_eager_einsum_expanded_standard_ops_preserve_backward() {
     let loss = out
         .runtime()
         .with_eager_session(|s| s.reduce_sum(&out, Some(&[0, 1])))
-        .unwrap()
         .unwrap();
     let _ = loss.backward().unwrap();
 
@@ -261,7 +260,6 @@ fn tracked_nary_einsum_gradients_match_expected_values() {
     let loss = out
         .runtime()
         .with_eager_session(|s| s.reduce_sum(&out, Some(&[0, 1])))
-        .unwrap()
         .unwrap();
     let _ = loss.backward().unwrap();
 
@@ -297,7 +295,6 @@ fn eager_outer_product_can_use_untracked_backend_broadcast_multiply() {
         .with_eager_session(|session| {
             backend_broadcast_multiply_untracked(session, &lhs, &[2, 3], &[0], &rhs, &[2, 3], &[1])
         })
-        .unwrap()
         .unwrap()
         .expect("untracked CPU eager tensors should use backend broadcast multiply");
 

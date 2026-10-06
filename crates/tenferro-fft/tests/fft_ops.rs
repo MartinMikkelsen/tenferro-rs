@@ -95,7 +95,6 @@ fn eager_fft_family_installs_and_executes_on_the_borrowed_session() {
             let real_back = session.irfft(&half, Some(2), -1, FftNorm::Backward)?;
             Ok::<_, tenferro_ad::Error>((output, inverse, half, real_back))
         })
-        .unwrap()
         .unwrap();
     assert_c64_close(
         output.value().unwrap().as_slice::<Complex64>().unwrap(),
@@ -119,7 +118,6 @@ fn eager_fft_family_installs_and_executes_on_the_borrowed_session() {
         .unwrap();
     let error = ctx
         .with_eager_session(|session| session.fft(&foreign, None, -1, FftNorm::Backward))
-        .unwrap()
         .unwrap_err();
     assert!(matches!(error, RuntimeError::ContextMismatch { .. }));
 }
@@ -512,7 +510,6 @@ fn eager_fft_matches_traced_fft() {
     let eager = input
         .runtime()
         .with_eager_session(|s| s.fft(&input, Some(3), -1, FftNorm::Ortho))
-        .unwrap()
         .unwrap();
 
     assert_c64_close(
@@ -542,7 +539,6 @@ fn eager_ifft_matches_traced_ifft() {
     let eager = input
         .runtime()
         .with_eager_session(|s| s.ifft(&input, None, 0, FftNorm::Forward))
-        .unwrap()
         .unwrap();
 
     assert_c64_close(
@@ -563,7 +559,6 @@ fn eager_rfft_matches_traced_rfft() {
     let eager = input
         .runtime()
         .with_eager_session(|s| s.rfft(&input, None, -1, FftNorm::Backward))
-        .unwrap()
         .unwrap();
 
     assert_c64_close(
@@ -592,7 +587,6 @@ fn eager_irfft_matches_traced_irfft() {
     let eager = input
         .runtime()
         .with_eager_session(|s| s.irfft(&input, Some(4), -1, FftNorm::Backward))
-        .unwrap()
         .unwrap();
 
     assert_f64_close(
@@ -637,7 +631,6 @@ fn eager_fft_reuses_c2c_vjp_rule() {
 
     let y = ctx
         .with_eager_session(|session| session.fft(&x, None, -1, FftNorm::Backward))
-        .unwrap()
         .unwrap();
     let dx = ctx.vjp(&y, &x, &cotangent).unwrap();
 

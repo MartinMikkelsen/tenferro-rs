@@ -39,7 +39,6 @@ fn consuming_fft_preserves_allocation_and_matches_borrowed_fft_on_every_axis() {
                 let x = EagerTensor::from_tensor_in(source, runtime.clone()).unwrap();
                 let expected = runtime
                     .with_eager_session(|s| s.fft(&x, None, axis, norm))
-                    .unwrap()
                     .unwrap();
                 let pointer = x.value().unwrap().as_slice::<Complex64>().unwrap().as_ptr();
                 let y = x.fft_in_place(axis, norm).unwrap();
@@ -53,7 +52,6 @@ fn consuming_fft_preserves_allocation_and_matches_borrowed_fft_on_every_axis() {
                 );
                 let expected = runtime
                     .with_eager_session(|s| s.ifft(&y, None, axis, norm))
-                    .unwrap()
                     .unwrap();
                 let z = y.ifft_in_place(axis, norm).unwrap();
                 assert_eq!(
@@ -93,7 +91,6 @@ fn consuming_fft_respects_compact_slice_extent_and_offset() {
                     },
                 )
             })
-            .unwrap()
             .unwrap();
         drop(source);
         let pointer = slice
@@ -148,7 +145,6 @@ fn consuming_fft_rejects_noncompact_layout_before_ownership_extraction() {
     let view = source
         .runtime()
         .with_eager_session(|s| s.transpose(&source, &[1, 0]))
-        .unwrap()
         .unwrap();
     drop(source);
     let view = match view.fft_in_place(0, FftNorm::Backward) {
@@ -166,7 +162,6 @@ fn consuming_fft_rejects_noncompact_layout_before_ownership_extraction() {
         view.runtime()
             .with_eager_session(|s| s.fft(&view, None, 0, FftNorm::Backward))
             .unwrap()
-            .unwrap()
             .shape(),
         &[3, 2]
     );
@@ -178,8 +173,7 @@ fn consuming_fft_preserves_a_retained_reshape_source() {
     let source = input(&runtime);
     let reshaped = source
         .runtime()
-        .with_eager_session(|s| s.reshape(&source, &[1, 2]))
-        .unwrap()
+        .with_eager_session(|s| s.reshape(&source, [1, 2]))
         .unwrap();
     // A reshape may share the physical owner or materialize independently.
     // Mutation must never change the retained source in either representation.
@@ -203,7 +197,6 @@ fn consuming_fft_preserves_values_needed_by_later_backward() {
     let input = input(&runtime);
     let coefficient = runtime
         .with_eager_session(|s| s.fft(&input, None, 0, FftNorm::Backward))
-        .unwrap()
         .unwrap();
     let variable = EagerTensor::requires_grad_in(
         Tensor::from_vec_col_major([2], vec![Complex64::new(1., 0.); 2]).unwrap(),
@@ -212,7 +205,6 @@ fn consuming_fft_preserves_values_needed_by_later_backward() {
     .unwrap();
     let product = runtime
         .with_eager_session(|s| s.mul(&variable, &coefficient))
-        .unwrap()
         .unwrap();
     // A separately saved value permits mutation; a retained physical owner
     // requires rejection. Either way backward must observe the original data.
@@ -307,4 +299,26 @@ fn consuming_fft_rejects_invalid_axis_dtype_tracking_and_capture_before_mutation
         tracked.value().unwrap().as_slice::<Complex64>().unwrap(),
         &[Complex64::new(2., 0.)]
     );
+}
+
+/// #1858 (B2): both error arms convert into `tenferro_ad::Error` so `?` works.
+#[test]
+fn in_place_errors_convert_into_the_eager_error_type() {
+    let runtime = EagerRuntime::with_cpu_backend(CpuBackend::with_threads(1).unwrap()).unwrap();
+    let real = EagerTensor::from_tensor_in(
+        Tensor::from_vec_col_major([1], vec![1.0_f64]).unwrap(),
+        runtime,
+    )
+    .unwrap();
+    let rejected = real.fft_in_place(0, FftNorm::Backward).unwrap_err();
+    let converted = tenferro_ad::Error::from(rejected);
+    assert!(converted.to_string().contains("C32 or C64"), "{converted}");
+
+    let execution = EagerFftInPlaceError::Execution(tenferro_ad::Error::runtime_state(
+        "fft_in_place",
+        tenferro_ad::ErrorPhase::Execution,
+        "intentional",
+    ));
+    let converted = tenferro_ad::Error::from(execution);
+    assert!(converted.to_string().contains("intentional"), "{converted}");
 }

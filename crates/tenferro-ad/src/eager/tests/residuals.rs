@@ -47,11 +47,9 @@ fn exp_tanh_reuse_saved_outputs_with_dropped_handles_and_correct_higher_derivati
                         session.exp(&x)
                     }
                 })
-                .unwrap()
                 .unwrap();
             let loss = ctx
                 .with_eager_session(|session| session.reduce_sum(&y, Some(&[0])))
-                .unwrap()
                 .unwrap();
             let saved = loss.trace.as_ref().unwrap().collect();
             assert_eq!(saved.len(), 1);
@@ -85,7 +83,6 @@ fn exp_tanh_reuse_saved_outputs_with_dropped_handles_and_correct_higher_derivati
             assert_no_live_transcendental(&ctx);
             let first_sum = ctx
                 .with_eager_session(|session| session.reduce_sum(&first, Some(&[0])))
-                .unwrap()
                 .unwrap();
             let second = ctx.grad(&first_sum, &x).unwrap();
             for (actual, &x) in second
@@ -130,7 +127,6 @@ fn cached_execution_rebinds_residuals_for_each_forward() {
                 let y = session.exp(&x)?;
                 session.reduce_sum(&y, Some(&[0]))
             })
-            .unwrap()
             .unwrap();
         let gradient = ctx.grad(&loss, &x).unwrap();
         assert!(
@@ -151,16 +147,12 @@ fn intermediate_inputs_are_retained_without_retaining_all_outputs() {
         Arc::clone(&ctx),
     )
     .unwrap();
-    let square = ctx.with_eager_session(|s| s.mul(&x, &x)).unwrap().unwrap();
+    let square = ctx.with_eager_session(|s| s.mul(&x, &x)).unwrap();
     assert!(square.trace.as_ref().unwrap().collect().is_empty());
-    let fourth = ctx
-        .with_eager_session(|s| s.mul(&square, &square))
-        .unwrap()
-        .unwrap();
+    let fourth = ctx.with_eager_session(|s| s.mul(&square, &square)).unwrap();
     assert_eq!(fourth.trace.as_ref().unwrap().collect().len(), 1);
     let loss = ctx
         .with_eager_session(|session| session.reduce_sum(&fourth, Some(&[0])))
-        .unwrap()
         .unwrap();
     drop(square);
     drop(fourth);

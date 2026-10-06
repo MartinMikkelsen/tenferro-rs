@@ -34,7 +34,6 @@ fn test_f32_gpu_fusion_chain_e2e() {
             s.mul(&sum, &c)
         })
         .unwrap()
-        .unwrap()
         .to_tensor()
         .unwrap();
 

@@ -93,7 +93,7 @@ fn eager_runtime_built_from_ad_context_uses_shared_transform_cache() {
         ctx.clone(),
     )
     .unwrap();
-    let y = ctx.with_eager_session(|s| s.mul(&x, &x)).unwrap().unwrap();
+    let y = ctx.with_eager_session(|s| s.mul(&x, &x)).unwrap();
 
     assert_eq!(ad.ad_transform_cache_stats().unwrap().entries, 0);
     let _ = ctx.vjp(&y, &x, &seed).unwrap();
@@ -126,15 +126,9 @@ fn ad_transform_cache_entry_limit_evicts_lru_entries() {
     )
     .unwrap();
 
-    let output0 = ctx
-        .with_eager_session(|s| s.mul(&x0, &x0))
-        .unwrap()
-        .unwrap();
+    let output0 = ctx.with_eager_session(|s| s.mul(&x0, &x0)).unwrap();
     let _ = ctx.vjp(&output0, &x0, &seed).unwrap();
-    let output1 = ctx
-        .with_eager_session(|s| s.mul(&x1, &x1))
-        .unwrap()
-        .unwrap();
+    let output1 = ctx.with_eager_session(|s| s.mul(&x1, &x1)).unwrap();
     let _ = ctx.vjp(&output1, &x1, &seed).unwrap();
 
     assert_eq!(ad.ad_transform_cache_stats().unwrap().entries, 1);
@@ -194,7 +188,6 @@ fn eager_backward_shape_churn_keeps_transform_cache_shape_specific() {
                 let axes: Vec<_> = (0..quadratic.shape().len()).collect();
                 s.reduce_sum(&quadratic, Some(&axes))
             })
-            .unwrap()
             .unwrap();
         Fixture { x, loss }
     }

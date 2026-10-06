@@ -102,7 +102,6 @@ fn test_gpu_eager_backward_smoke() {
     let seed = EagerTensor::from_tensor_in(seed_gpu, ctx.clone()).unwrap();
     let y = ctx
         .with_eager_session(|session| session.mul(&x, &x))
-        .unwrap()
         .unwrap();
 
     y.backward_with(&seed).unwrap();
@@ -139,7 +138,6 @@ fn test_gpu_borrowed_reduce_sum_preserves_residency_and_gradient() {
     let seed = EagerTensor::from_tensor_in(seed_gpu, ctx.clone()).unwrap();
     let sum = ctx
         .with_eager_session(|session| session.reduce_sum(&x, Some(&[0])))
-        .unwrap()
         .unwrap();
     let result = sum.to_tensor().unwrap();
     assert_device_backed(&result);
@@ -193,7 +191,6 @@ fn test_gpu_borrowed_concat_gather_and_index_select_stay_resident() {
             let indexed = session.index_select(&joined, -1, &[4, 1])?;
             Ok::<_, tenferro_ad::Error>((joined, selected, indexed))
         })
-        .unwrap()
         .unwrap();
     let joined = joined.to_tensor().unwrap();
     let selected = selected.to_tensor().unwrap();
@@ -282,7 +279,6 @@ fn test_gpu_matmul_vjp() {
                 },
             )
         })
-        .unwrap()
         .unwrap();
     let gpu_grad_a = ctx
         .vjp(&y_gpu, &a_gpu, &cotangent_gpu)

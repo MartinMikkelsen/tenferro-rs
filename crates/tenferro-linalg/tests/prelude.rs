@@ -23,7 +23,6 @@ fn prelude_calls_eager_linalg_operation() {
     .unwrap();
     let (_u, singular_values, _vt) = runtime
         .with_eager_session(|session| session.svd(&input))
-        .unwrap()
         .unwrap();
     assert_eq!(singular_values.shape(), &[2]);
 }

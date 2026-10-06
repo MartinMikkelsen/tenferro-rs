@@ -224,7 +224,6 @@ fn eager_binary_methods_return_shape_errors() {
     let err = x
         .runtime()
         .with_eager_session(|s| s.add(&x, &y))
-        .unwrap()
         .unwrap_err();
 
     assert!(matches!(

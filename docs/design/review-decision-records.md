@@ -32,3 +32,49 @@ should address the recorded rationale directly.
 
 This keeps review feedback aligned with repository intent and avoids repeatedly
 re-litigating decisions that were already made explicit.
+
+## Recorded decisions
+
+Short API-contract decisions that have no larger design document of their own.
+
+### Unused placeholder in `compile_with_input_specs` (#1968)
+
+`GraphCompiler::compile_with_input_specs` rejects a declared placeholder that
+the output does not depend on (`Validation` / `InvalidArgument`, phase
+`Compile`). Before, such a placeholder was silently dropped from the program
+inputs, so a tensor passed for it at run time was either rejected as an extra
+input or, when the input counts happened to match, bound to a retained constant
+input in its place. Keeping unused placeholders as ignored program inputs was
+rejected because it needs a semantic input that no operation reads; rejecting
+the declaration is the fail-fast contract. Callers drop the binding, as the
+kdv-pinn `pde::tests` do for the constant third derivative of `x^3`.
+
+### Concrete session surface parity (#1858)
+
+- **Receiver forms.** `TensorSessionOpsExt` exposes the indexing (`gather`,
+  `scatter`, `slice`, `dynamic_slice`, `pad`, `concatenate`, `reverse`),
+  reduction (`reduce_max`, `reduce_min`, `reduce_prod`, `reduce_sum_squares`),
+  structural (`broadcast_in_dim`, `tril`, `triu`, `extract_diag`, `embed_diag`),
+  dot (`dot_general`, `dot_general_with_conj`) and scaling (`scale_real`,
+  `scale_complex`) operations as thin forwarders over the borrowed session,
+  with the argument order and config types of the eager method of the same
+  name and the session last. `concatenate` has no receiver, as on the eager
+  session. Scaling shares `tenferro_runtime::scale` with the eager surface, so
+  factor rounding and rejection are identical.
+- **Typed narrowing.** `TypedTensorSessionOpsExt` gains the reductions, the dot
+  family and scaling, whose backend hooks read borrowed views. The indexing,
+  padding, concatenation and triangular/diagonal hooks take owned erased
+  `&Tensor` inputs, so a typed forwarder would have to copy its receiver first
+  (hidden materialization). Those stay on `Tensor`; `Tensor::from_typed` moves a
+  typed tensor there without a copy. Typed bool-mask selection remains
+  `TypedTensorMaskSessionOpsExt::where_select`.
+- **Eager in-place FFT (option B2).** `fft_in_place` / `ifft_in_place` keep
+  their consuming signature and `EagerFftInPlaceError`, and live on the
+  separate `EagerTensorFftExt` trait, while ordinary eager FFTs are
+  `&self`-style methods on `EagerSessionFftExt`. `From<EagerFftInPlaceError>
+  for tenferro_ad::Error` drops a rejected input and keeps its error, so `?`
+  works; callers that need the input back match on `Rejected`.
+- **No concrete in-place FFT.** The consuming eager form exists to guarantee
+  that no implicit copy happens under the eager ownership rules. A concrete
+  `fft_in_place` would need its own in-place hook in the FFT backend SPI and
+  the CPU lane kernel; it is not added until a concrete use case needs it.

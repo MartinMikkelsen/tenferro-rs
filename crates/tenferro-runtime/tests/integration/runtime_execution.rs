@@ -3927,3 +3927,20 @@ fn runtime_run_compiled_reprepares_after_engine_reconfiguration() -> Result<(), 
     assert!(after_second.misses > after_first.misses);
     Ok(())
 }
+
+/// #1968: a declared placeholder the output does not depend on is rejected at
+/// compile time instead of being silently dropped from the program inputs.
+#[test]
+fn compile_with_input_specs_rejects_unused_placeholder() {
+    let x = TracedTensor::input_concrete_shape(DType::F64, &[3]).unwrap();
+    let y = TracedTensor::input_concrete_shape(DType::F64, &[3]).unwrap();
+    let out = y.neg().unwrap();
+    let err = GraphCompiler::new()
+        .compile_with_input_specs(&out, &[(&y, DType::F64, &[3]), (&x, DType::F64, &[3])])
+        .unwrap_err();
+    let message = err.to_string();
+    assert!(message.contains("binding 1"), "{message}");
+    assert!(GraphCompiler::new()
+        .compile_with_input_specs(&out, &[(&y, DType::F64, &[3])])
+        .is_ok());
+}

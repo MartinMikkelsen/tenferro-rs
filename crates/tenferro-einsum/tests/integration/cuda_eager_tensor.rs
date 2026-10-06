@@ -13,7 +13,7 @@ use tenferro_einsum::{EinsumNotation, EinsumSubscripts, TensorDotAxes};
 fn einsum(inputs: &[&EagerTensor], subscripts: &str) -> tenferro_einsum::Result<EagerTensor> {
     inputs[0]
         .runtime()
-        .with_eager_session(|s| s.einsum(inputs, subscripts))?
+        .with_eager_session(|s| s.einsum(inputs, subscripts))
 }
 
 #[allow(dead_code)]
@@ -23,7 +23,7 @@ fn einsum_notation(
 ) -> tenferro_einsum::Result<EagerTensor> {
     inputs[0]
         .runtime()
-        .with_eager_session(|s| s.einsum_notation(inputs, notation))?
+        .with_eager_session(|s| s.einsum_notation(inputs, notation))
 }
 
 #[allow(dead_code)]
@@ -33,7 +33,7 @@ fn einsum_subscripts(
 ) -> tenferro_einsum::Result<EagerTensor> {
     inputs[0]
         .runtime()
-        .with_eager_session(|s| s.einsum_subscripts(inputs, subscripts))?
+        .with_eager_session(|s| s.einsum_subscripts(inputs, subscripts))
 }
 
 #[allow(dead_code)]
@@ -43,7 +43,7 @@ fn tensordot(
     axes: TensorDotAxes<'_>,
 ) -> tenferro_einsum::Result<EagerTensor> {
     lhs.runtime()
-        .with_eager_session(|s| s.tensordot(lhs, rhs, axes))?
+        .with_eager_session(|s| s.tensordot(lhs, rhs, axes))
 }
 
 #[test]

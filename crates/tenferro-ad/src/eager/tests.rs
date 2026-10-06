@@ -216,7 +216,6 @@ fn eager_materialization_uses_backend() {
 
     let view = ctx
         .with_eager_session(|s| s.transpose(&x, &[1, 0]))
-        .unwrap()
         .unwrap();
     let compact = view.to_tensor().unwrap();
     assert_eq!(compact.as_slice::<f64>().unwrap(), &[1.0, 3.0, 2.0, 4.0]);
@@ -251,7 +250,6 @@ fn untracked_standard_op_results_do_not_enter_value_record_registry() {
                 },
             )
         })
-        .unwrap()
         .unwrap();
 
     assert!(!output.tracks_grad());
@@ -617,7 +615,6 @@ fn eager_extension_dispatch_does_not_initialize_lazy_view_materialization_cache(
     let x_t = x
         .runtime()
         .with_eager_session(|s| s.transpose(&x, &[1, 0]))
-        .unwrap()
         .unwrap();
     assert!(matches!(x_t.tensor_read(), TensorRead::View(_)));
 
@@ -732,11 +729,7 @@ fn eager_recording_retains_symbolic_semantic_trace_for_shape_churn() {
             ctx,
         )
         .unwrap();
-        let y = x
-            .runtime()
-            .with_eager_session(|s| s.mul(&x, &x))
-            .unwrap()
-            .unwrap();
+        let y = x.runtime().with_eager_session(|s| s.mul(&x, &x)).unwrap();
         let semantic_trace = y
             .semantic_trace
             .as_ref()
@@ -784,7 +777,7 @@ fn deferred_eager_semantic_analysis_seeds_symbolic_leaf_metadata() {
         Arc::clone(&ctx),
     )
     .unwrap();
-    let y = ctx.with_eager_session(|s| s.mul(&x, &x)).unwrap().unwrap();
+    let y = ctx.with_eager_session(|s| s.mul(&x, &x)).unwrap();
     let raw = y
         .semantic_trace
         .as_ref()
@@ -825,7 +818,7 @@ fn eager_runtime_vjp_can_use_semantic_trace_when_gate_enabled() {
         Arc::clone(&ctx),
     )
     .unwrap();
-    let y = ctx.with_eager_session(|s| s.mul(&x, &x)).unwrap().unwrap();
+    let y = ctx.with_eager_session(|s| s.mul(&x, &x)).unwrap();
 
     let vjp = ctx.vjp(&y, &x, &seed).unwrap();
 
@@ -853,7 +846,7 @@ fn eager_runtime_vjp_uses_semantic_trace_for_multi_input_graph_when_gate_enabled
         Arc::clone(&ctx),
     )
     .unwrap();
-    let output = ctx.with_eager_session(|s| s.mul(&x, &y)).unwrap().unwrap();
+    let output = ctx.with_eager_session(|s| s.mul(&x, &y)).unwrap();
 
     let dx = ctx.vjp(&output, &x, &seed).unwrap();
     let dy = ctx.vjp(&output, &y, &seed).unwrap();
@@ -875,7 +868,7 @@ fn eager_backward_with_accepts_vector_cotangent_seed() {
         Arc::clone(&ctx),
     )
     .unwrap();
-    let y = ctx.with_eager_session(|s| s.mul(&x, &x)).unwrap().unwrap();
+    let y = ctx.with_eager_session(|s| s.mul(&x, &x)).unwrap();
 
     y.backward_with(&seed).unwrap();
 
@@ -898,7 +891,7 @@ fn eager_backward_with_rejects_mismatched_seed_shape() {
         Arc::clone(&ctx),
     )
     .unwrap();
-    let y = ctx.with_eager_session(|s| s.mul(&x, &x)).unwrap().unwrap();
+    let y = ctx.with_eager_session(|s| s.mul(&x, &x)).unwrap();
 
     let err = y.backward_with(&seed).unwrap_err();
 
@@ -929,7 +922,7 @@ fn eager_runtime_vjp_returns_composable_tensor_without_touching_grad_slot() {
         Arc::clone(&ctx),
     )
     .unwrap();
-    let y = ctx.with_eager_session(|s| s.mul(&x, &x)).unwrap().unwrap();
+    let y = ctx.with_eager_session(|s| s.mul(&x, &x)).unwrap();
 
     let dx = ctx.vjp(&y, &x, &seed).unwrap();
 
@@ -957,10 +950,7 @@ fn eager_functional_ad_reports_inactive_inputs_and_accepts_explicit_rule_context
         Arc::clone(&ctx),
     )
     .unwrap();
-    let loss = ctx
-        .with_eager_session(|s| s.mul(&active, &active))
-        .unwrap()
-        .unwrap();
+    let loss = ctx.with_eager_session(|s| s.mul(&active, &active)).unwrap();
 
     let inactive_vjp = ctx.vjp_optional(&loss, &inactive, &seed).unwrap();
     let inactive_jvp = ctx.jvp_optional(&loss, &inactive, &seed).unwrap();
@@ -992,7 +982,7 @@ fn eager_runtime_jvp_returns_composable_semantic_trace() {
         Arc::clone(&ctx),
     )
     .unwrap();
-    let y = ctx.with_eager_session(|s| s.mul(&x, &x)).unwrap().unwrap();
+    let y = ctx.with_eager_session(|s| s.mul(&x, &x)).unwrap();
 
     let dy = ctx.jvp(&y, &x, &tangent).unwrap();
 
@@ -1013,7 +1003,7 @@ fn eager_runtime_ad_transform_cache_reuses_recorded_graph_linearization() {
         Arc::clone(&ctx),
     )
     .unwrap();
-    let y = ctx.with_eager_session(|s| s.mul(&x, &x)).unwrap().unwrap();
+    let y = ctx.with_eager_session(|s| s.mul(&x, &x)).unwrap();
 
     assert_eq!(ctx.cache_stats().unwrap().ad_transforms.entries, 0);
 
@@ -1060,7 +1050,7 @@ fn eager_prepared_derivative_cache_reuses_runtime_preparation() {
         Arc::clone(&ctx),
     )
     .unwrap();
-    let y = ctx.with_eager_session(|s| s.mul(&x, &x)).unwrap().unwrap();
+    let y = ctx.with_eager_session(|s| s.mul(&x, &x)).unwrap();
 
     assert_eq!(ctx.runtime.cache_stats().unwrap().prepared_plans.entries, 0);
 
@@ -1097,7 +1087,7 @@ fn eager_prepared_derivative_cache_is_visible_and_clearable() {
         Arc::clone(&ctx),
     )
     .unwrap();
-    let y = ctx.with_eager_session(|s| s.mul(&x, &x)).unwrap().unwrap();
+    let y = ctx.with_eager_session(|s| s.mul(&x, &x)).unwrap();
 
     assert_eq!(ctx.cache_stats().unwrap().prepared_derivatives.entries, 0);
 
@@ -1137,7 +1127,7 @@ fn eager_prepared_derivative_cache_limit_evicts_lru_entries() {
         Arc::clone(&ctx),
     )
     .unwrap();
-    let y = ctx.with_eager_session(|s| s.mul(&x, &x)).unwrap().unwrap();
+    let y = ctx.with_eager_session(|s| s.mul(&x, &x)).unwrap();
     let seed = EagerTensor::from_tensor_in(
         Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 1.0]).unwrap(),
         Arc::clone(&ctx),
@@ -1146,7 +1136,7 @@ fn eager_prepared_derivative_cache_limit_evicts_lru_entries() {
     let _ = ctx.vjp(&y, &x, &seed).unwrap();
     assert_eq!(ctx.cache_stats().unwrap().prepared_derivatives.entries, 1);
 
-    let z = ctx.with_eager_session(|s| s.add(&x, &x)).unwrap().unwrap();
+    let z = ctx.with_eager_session(|s| s.add(&x, &x)).unwrap();
     let _ = ctx.vjp(&z, &x, &seed).unwrap();
     let stats = ctx.cache_stats().unwrap().prepared_derivatives;
     assert_eq!(stats.entries, 1);
@@ -1166,7 +1156,7 @@ fn eager_functional_grad_can_feed_jvp() {
         Arc::clone(&ctx),
     )
     .unwrap();
-    let loss = ctx.with_eager_session(|s| s.mul(&x, &x)).unwrap().unwrap();
+    let loss = ctx.with_eager_session(|s| s.mul(&x, &x)).unwrap();
 
     let grad = ctx.grad(&loss, &x).unwrap();
     let hvp = ctx.jvp(&grad, &x, &tangent).unwrap();
@@ -1194,7 +1184,6 @@ fn eager_jvp_of_functional_grad_matches_cubic_hvp() {
             let x2 = s.mul(&x, &x)?;
             s.mul(&x2, &x)
         })
-        .unwrap()
         .unwrap();
 
     let grad = ctx.grad(&loss, &x).unwrap();
@@ -1218,9 +1207,8 @@ fn eager_no_grad_scope_suppresses_operation_recording() {
             let _guard = ctx.no_grad();
             s.mul(&x, &x)
         })
-        .unwrap()
         .unwrap();
-    let z = ctx.with_eager_session(|s| s.mul(&x, &x)).unwrap().unwrap();
+    let z = ctx.with_eager_session(|s| s.mul(&x, &x)).unwrap();
 
     assert!(!y.tracks_grad());
     assert!(z.tracks_grad());
@@ -1366,14 +1354,12 @@ fn untracked_nary_ops_consume_lazy_views_without_materializing_inputs() {
     let x_t = x
         .runtime()
         .with_eager_session(|s| s.transpose(&x, &[1, 0]))
-        .unwrap()
         .unwrap();
     assert!(matches!(x_t.tensor_read(), TensorRead::View(_)));
 
     let doubled = x_t
         .runtime()
         .with_eager_session(|s| s.add(&x_t, &x_t))
-        .unwrap()
         .unwrap();
     assert_eq!(
         doubled.value().unwrap().as_slice::<f64>().unwrap(),
@@ -1383,7 +1369,6 @@ fn untracked_nary_ops_consume_lazy_views_without_materializing_inputs() {
     let reduced = x_t
         .runtime()
         .with_eager_session(|s| s.reduce_sum(&x_t, Some(&[0])))
-        .unwrap()
         .unwrap();
     assert_eq!(
         reduced.value().unwrap().as_slice::<f64>().unwrap(),
@@ -1404,7 +1389,6 @@ fn untracked_nary_ops_consume_lazy_views_without_materializing_inputs() {
                 },
             )
         })
-        .unwrap()
         .unwrap();
     assert_eq!(
         dot.value().unwrap().as_slice::<f64>().unwrap(),
@@ -1426,7 +1410,6 @@ fn eager_gradients_bundle_borrows_and_extracts_one_owner() {
             let squared = s.mul(&x, &x)?;
             s.reduce_sum(&squared, Some(&[0]))
         })
-        .unwrap()
         .unwrap();
     let mut gradients = loss.backward().unwrap();
 
@@ -1502,10 +1485,7 @@ fn dropped_values_do_not_accumulate_in_the_runtime_registries() {
         let x = ctx
             .variable_from(Tensor::from_vec_col_major(vec![1], vec![f64::from(step)]).unwrap())
             .unwrap();
-        let y = ctx
-            .with_eager_session(|s| s.mul(&x, &keep))
-            .unwrap()
-            .unwrap();
+        let y = ctx.with_eager_session(|s| s.mul(&x, &keep)).unwrap();
         drop((x, y));
     }
     // Dead weak entries are swept whenever an insert would grow the table, so
@@ -1523,7 +1503,7 @@ fn untracked_results_are_retained_without_an_allocation_group() {
         Arc::clone(&ctx),
     )
     .unwrap();
-    let y = ctx.with_eager_session(|s| s.neg(&x)).unwrap().unwrap();
+    let y = ctx.with_eager_session(|s| s.neg(&x)).unwrap();
 
     assert!(!y.tracks_grad());
     assert!(matches!(

@@ -109,6 +109,18 @@ itself. This is what makes a chain over graph inputs or embedded constants fuse
 on CUDA: without it the chain fell back to one command per instruction
 (`gpu/elementwise` trace 0.975 ms at n=1048576 against 0.190 ms after).
 
+An engine whose fused kernel accepts a bounded number of inputs reports that
+bound through `ElementwiseRuntime::max_fused_region_inputs`. The planner skips a
+candidate region that reads more distinct external inputs than the root engine's
+bound, so the region runs instruction by instruction instead of attempting a
+fusion that the backend declines on every execution (#1968). The CPU engine
+reports the erased strided fused kernel's limit
+(`tenferro_cpu_fused::ERASED_FUSION_MAX_INPUTS`, four inputs); CUDA reports no
+limit, so its region planning is unchanged. The CPU fused entry point also
+declines such plans itself, which keeps the unprepared segmented path correct.
+`prepared_elementwise_region_above_cpu_input_limit_is_not_planned` guards the
+planner side.
+
 Re-divergence is guarded from two sides. The plan census
 (`execution_command_counts`, computed in `region.rs` from the shared
 segmentation and eligibility) is asserted against the segmented executor's count

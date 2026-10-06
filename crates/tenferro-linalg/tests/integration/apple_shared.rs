@@ -185,7 +185,6 @@ fn eager_cholesky_preserves_apple_domain_without_transfers() {
     let eager = runtime
         .with_eager_session(|session| session.cholesky(&eager_input))
         .unwrap()
-        .unwrap()
         .to_tensor()
         .unwrap();
     assert_cholesky_result(input_id, &eager, &context, before);

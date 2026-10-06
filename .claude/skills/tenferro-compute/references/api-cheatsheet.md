@@ -36,7 +36,11 @@ assert_eq!(projected.host_data()?, &[3.0, 6.0, 3.5, 11.0]);
 The important shape is
 `backend.with_backend_session(|session| x.matmul(&weights, session))`. For
 dynamic dtypes use `TensorSessionOpsExt`; for static scalar types use
-`TypedTensorSessionOpsExt`.
+`TypedTensorSessionOpsExt`. The receiver methods mirror the eager session
+methods with the session last (`x.gather(&idx, config, session)`,
+`x.reduce_max(None, session)`, `x.dot_general(&y, config, session)`);
+indexing, padding, concatenation and triangular/diagonal ops are on `Tensor`
+only (`Tensor::from_typed` moves a typed tensor there without a copy).
 
 ## Eager tensors
 
@@ -55,7 +59,7 @@ let x = runtime.variable_from(Tensor::from_vec_col_major(
 let loss = runtime.with_eager_session(|s| {
     let prediction = s.mul(&x, &x)?;
     s.reduce_sum(&prediction, Some(&[0]))
-})??;
+})?;
 loss.backward()?;
 assert_eq!(
     x.grad()?.expect("tracked variable should receive a gradient").as_slice::<f64>()?,
@@ -66,7 +70,7 @@ assert_eq!(
 
 Common import recipes:
 
-- `tenferro_einsum::EagerSessionEinsumExt` for borrowed eager einsum and `tensordot` (`runtime.with_eager_session(|s| s.einsum(&[&a, &b], "ij,jk->ik"))??`).
+- `tenferro_einsum::EagerSessionEinsumExt` for borrowed eager einsum and `tensordot` (`runtime.with_eager_session(|s| s.einsum(&[&a, &b], "ij,jk->ik"))?`).
 - `tenferro_linalg::EagerSessionLinalgExt` for borrowed eager linear algebra (`EagerTensorLinalgExt::solve` remains a calling-thread `no_grad` exception).
 - `tenferro_ad::{EagerRuntime, Tensor}` for eager values and runtime AD.
 

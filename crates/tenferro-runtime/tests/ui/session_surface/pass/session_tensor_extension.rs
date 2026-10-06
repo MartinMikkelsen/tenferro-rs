@@ -19,7 +19,7 @@ fn main() {
         .with_backend_session(|session| {
             let broadcast = column.add(&row, session)?;
             assert_eq!(broadcast.shape(), &[2]);
-            broadcast.reduce_sum(&[0], session)
+            broadcast.reduce_sum(Some(&[0]), session)
         }).unwrap()
         .unwrap();
 

@@ -39,6 +39,37 @@ pub enum EagerFftInPlaceError {
     Execution(#[from] Error),
 }
 
+/// Drop the rejected input and keep the error, so `?` works in functions that
+/// return `tenferro_ad::Result`.
+///
+/// Match on [`EagerFftInPlaceError::Rejected`] instead when the unchanged input
+/// must be recovered.
+///
+/// # Examples
+/// ```
+/// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
+/// use tenferro_cpu::CpuBackend;
+/// use tenferro_fft::{EagerTensorFftExt, FftNorm};
+///
+/// fn transform(input: EagerTensor) -> tenferro_ad::Result<EagerTensor> {
+///     Ok(input.fft_in_place(0, FftNorm::Backward)?)
+/// }
+///
+/// let runtime = EagerRuntime::with_cpu_backend(CpuBackend::with_threads(1)?)?;
+/// let real = EagerTensor::from_tensor_in(Tensor::from_vec_col_major([1], vec![1.0_f64])?, runtime)?;
+/// let error = transform(real).unwrap_err();
+/// assert!(error.to_string().contains("C32 or C64"), "{error}");
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+impl From<EagerFftInPlaceError> for Error {
+    fn from(error: EagerFftInPlaceError) -> Self {
+        match error {
+            EagerFftInPlaceError::Rejected { source, .. } => source,
+            EagerFftInPlaceError::Execution(source) => source,
+        }
+    }
+}
+
 pub(crate) fn apply(
     input: EagerTensor,
     operation: FftOperation,

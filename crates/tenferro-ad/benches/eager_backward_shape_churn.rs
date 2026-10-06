@@ -58,7 +58,6 @@ fn fixture(ctx: &Arc<EagerRuntime>, left_bond: usize, right_bond: usize, seed: u
             let axes: Vec<usize> = (0..quadratic.shape().len()).collect();
             s.reduce_sum(&quadratic, Some(&axes))
         })
-        .unwrap()
         .unwrap();
     Fixture {
         ctx: Arc::clone(ctx),

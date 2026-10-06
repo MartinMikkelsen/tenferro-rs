@@ -4,11 +4,12 @@
 
 ## Conventions you must know before writing code
 
-- **Column-major storage.** Dense buffers are column-major: the leftmost dimension varies fastest. Row-major data passed to `from_vec_col_major` is silently reinterpreted as column-major — permuted/wrong values, never rejected.
+- **Column-major storage.** Dense buffers are column-major: the leftmost dimension varies fastest. Row-major data passed to `from_vec_col_major` is silently reinterpreted as column-major — permuted/wrong values, never rejected. Import row-major (C-order) buffers with `from_vec_row_major`.
 - **No facade crate.** `cargo add tenferro` fails by design; depend on the crates you need (`tenferro-runtime`, `tenferro-cpu`, and operation crates).
 - **Explicit backend.** Direct operations take an explicit backend argument; construct the backend/runtime once and reuse it — per-call construction discards the buffer pool.
 - **WARNING — einsum dialect.** Equations need the explicit arrow (`"ij,jk->ik"`); omitting it is rejected during parsing with `Error::InvalidSubscripts`. Flat notation supports one right-aligned, broadcastable `...` ellipsis per term, and `EinsumNotation` is the programmatic form. Parenthesized contraction order containing ellipsis is also rejected during parsing.
 - **Result-returning operators.** Traced operators return `Result`; propagate with `?`.
+- **No `Clone` on tensors.** `Tensor` and the dynamic `TypedTensor` do not implement `Clone`; `duplicate()` returns an independent copy and fails for device-only storage. Share one tensor with `Arc<Tensor>` or views instead of copying.
 
 ## Recipes and references
 

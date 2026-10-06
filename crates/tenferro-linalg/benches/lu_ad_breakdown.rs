@@ -120,7 +120,7 @@ fn fixture(n: usize, threads: usize) -> Fixture {
     let rhs = eager(&ctx, vec![n, n], dense_matrix(n, 3));
     let scalar_one = eager(&ctx, vec![], vec![1.0]);
 
-    let (_p, l, u, _parity) = ctx.with_eager_session(|s| s.lu(&matrix)).unwrap().unwrap();
+    let (_p, l, u, _parity) = ctx.with_eager_session(|s| s.lu(&matrix)).unwrap();
     let lu_loss = ctx
         .with_eager_session(|s| {
             let l_axes: Vec<usize> = (0..l.shape().len()).collect();
@@ -129,7 +129,6 @@ fn fixture(n: usize, threads: usize) -> Fixture {
             let u_sum = s.reduce_sum(&u, Some(&u_axes))?;
             s.add(&l_sum, &u_sum)
         })
-        .unwrap()
         .unwrap();
     let warm = ctx.jvp(&lu_loss, &matrix, &tangent).unwrap();
     consume_f64(&warm);
@@ -184,7 +183,6 @@ fn bench_lu_ad_breakdown(c: &mut Criterion) {
                 let (p, l, u, parity) = fixture
                     .ctx
                     .with_eager_session(|s| s.lu(black_box(&fixture.matrix)))
-                    .unwrap()
                     .unwrap();
                 consume_many(&[p, l, u, parity]);
             });
@@ -206,7 +204,6 @@ fn bench_lu_ad_breakdown(c: &mut Criterion) {
                                 true,
                             )
                         })
-                        .unwrap()
                         .unwrap();
                     consume_f64(&out);
                 });
@@ -229,7 +226,6 @@ fn bench_lu_ad_breakdown(c: &mut Criterion) {
                                 false,
                             )
                         })
-                        .unwrap()
                         .unwrap();
                     consume_f64(&out);
                 });
@@ -252,7 +248,6 @@ fn bench_lu_ad_breakdown(c: &mut Criterion) {
                             let eye = session.embed_diag(&diagonal, 0, 1)?;
                             session.add(&strict_lower, &eye)
                         })
-                        .unwrap()
                         .unwrap();
                     consume_f64(&out);
                 });
@@ -264,7 +259,6 @@ fn bench_lu_ad_breakdown(c: &mut Criterion) {
                 let out = fixture
                     .ctx
                     .with_eager_session(|session| session.triu(black_box(&fixture.upper), 0))
-                    .unwrap()
                     .unwrap();
                 consume_f64(&out);
             });
@@ -287,7 +281,6 @@ fn bench_lu_ad_breakdown(c: &mut Criterion) {
                             black_box(config.clone()),
                         )
                     })
-                    .unwrap()
                     .unwrap();
                 consume_f64(&out);
             });

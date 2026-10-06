@@ -89,11 +89,18 @@ session with `runtime.with_eager_session(|session| { ... })`. This includes
 `stack`, `gather`, and the borrowed index-selection/diagonal routes. Do not call a remaining implicit
 `EagerTensor` operation while holding a borrowed session.
 
+`with_eager_session` returns the callback's own `Result<T, E>`, so one `?`
+propagates both a failed session entry and a failed operation. `E` is any error
+type with `From<tenferro_ad::Error>`, including your own application error.
+A callback that ends in `Ok(..)` after `?`-chains may need the error type named,
+for example `Ok::<_, tenferro_ad::Error>(value)`, and a tensor-level error from
+`session.backend_session()` converts with `.map_err(tenferro_ad::Error::from)`.
+
 Operation-family crates add eager extension traits. For example,
 `tenferro_linalg::EagerTensorLinalgExt` owns linalg eager methods and
 `tenferro_einsum::EagerSessionEinsumExt` owns eager einsum and `tensordot` on a
 borrowed session, for example
-`ctx.with_eager_session(|s| s.einsum(&[&a, &b], "ij,jk->ik"))??`.
+`ctx.with_eager_session(|s| s.einsum(&[&a, &b], "ij,jk->ik"))?`.
 
 For CUDA, eager means the operation is submitted immediately. It does not mean
 the host waits after every GPU kernel. Host synchronization happens at
@@ -135,6 +142,80 @@ Owned tensors stay compact column-major. Metadata-only strided views live on
 `TypedTensorView` and `TypedTensorViewMut`; operations that require compact
 storage may copy a view into compact storage on the same device, but they do
 not silently upload CPU tensors or download CUDA tensors.
+
+To bring a `Tensor` into an eager runtime as an untracked constant, pick by
+where the data lives:
+
+| Source | Call | Transfer |
+|---|---|---|
+| Already on the runtime's backend (any tensor on a CPU runtime; a device tensor on CUDA/WebGPU) | `session.constant_from(tensor)` or `runtime.constant_from(tensor)` | none |
+| Host data, runtime possibly on a device | `session.constant_from_host(tensor)` | uploads to the backend (a host copy on CPU) |
+
+On a CPU runtime both give the same result. Trainable leaves use
+`variable_from` with the same residency rule as `constant_from`.
+
+`Tensor` and the dynamic `TypedTensor` do not implement `Clone`. When two
+branches need the same constant, call `tensor.duplicate()?`: it returns an
+independent copy, and fails for device-only storage instead of silently
+downloading it. To share one tensor without copying, wrap it in `Arc<Tensor>`
+or pass views.
+
+## Mixing eager and concrete work
+
+There are three ways to reach a backend session from eager code:
+
+| Entry | Use for |
+|---|---|
+| `EagerRuntime::with_eager_session(\|s\| ...)` | The canonical entry: eager operations on `s`, plus AD-free `Tensor` operations through `s.backend_session()`. |
+| `EagerRuntime::on_cpu(placement)?.with_eager_session(\|session\| ...)` | Core `Tensor` operations on the runtime's CPU backend with an explicit CPU placement. |
+| `EagerRuntime::with_execution_session(\|session\| ...)` | Raw backend access for extension code; no eager operations. |
+
+The callback must be `Send` (the CPU backend may run it on a pool thread) and
+returns one `Result`; see `with_eager_session` above. Do all work for one region
+inside one callback: entering the same runtime again from inside the callback,
+or calling an operation that opens its own session, returns a typed
+`SessionEntry` error (`Reentered`) instead of running, and never deadlocks.
+
+<!-- snippet-source: docs/tutorial-code/src/bin/core_tensor_snippets.rs#eager_operations_mixing -->
+```rust
+use tenferro_ad::{EagerRuntime, EagerTensor};
+use tenferro_cpu::{CpuBackend, CpuPlacement};
+use tenferro_runtime::{Tensor, TensorSessionOpsExt};
+
+let runtime = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
+let x = EagerTensor::from_tensor_in(
+    Tensor::from_vec_col_major(vec![2], vec![1.0_f64, -2.0])?,
+    runtime.clone(),
+)?;
+
+// Canonical entry: eager ops on a borrowed `EagerSession`.
+let y = runtime.with_eager_session(|s| s.mul(&x, &x))?;
+let values = y.to_tensor()?;
+
+// AD-free work in the same session: the eager session lends its backend session.
+let total = runtime.with_eager_session(|s| {
+    values
+        .reduce_sum(None, s.backend_session())
+        .map_err(tenferro_ad::Error::from)
+})?;
+assert_eq!(total.as_slice::<f64>()?, &[5.0]);
+
+// CPU placement bridge: core ops on the runtime's CPU backend session.
+let mut cpu = runtime.on_cpu(CpuPlacement::Auto)?;
+let doubled = cpu.with_eager_session(|session| {
+    values
+        .scale_real(2.0, session)
+        .map_err(tenferro_ad::Error::from)
+})?;
+assert_eq!(doubled.as_slice::<f64>()?, &[2.0, 8.0]);
+
+// A nested entry into the same runtime is rejected, not deadlocked.
+let nested = runtime.with_eager_session(|_| {
+    Ok::<_, tenferro_ad::Error>(runtime.with_eager_session(|s| s.neg(&x)).is_err())
+})?;
+assert!(nested);
+```
+<!-- end-snippet-source -->
 
 ## Materializing metadata-only views
 
@@ -240,7 +321,7 @@ let a = Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0,
 let (at, flat, col_sum) = backend.with_backend_session(|session| {
     let at = a.transpose(&[1, 0], session).unwrap();
     let flat = a.reshape(&[6], session).unwrap();
-    let col_sum = a.reduce_sum(&[0], session).unwrap();
+    let col_sum = a.reduce_sum(Some(&[0]), session).unwrap();
     (at, flat, col_sum)
 })?;
 assert_eq!(at.shape(), &[3, 2]);
@@ -249,13 +330,13 @@ assert_eq!(col_sum.shape(), &[3]);
 ```
 <!-- end-snippet-source -->
 
-The `reduce_sum(&[0], &mut backend)` call removes axis `0`. For this `[2, 3]` tensor, that
+The `reduce_sum(Some(&[0]), session)` call removes axis `0`. For this `[2, 3]` tensor, that
 means summing down each column and keeping one value per column.
 
 ## Einsum
 
 Use `tenferro_einsum::EagerSessionEinsumExt` on a borrowed session when working
-with `EagerTensor`: `ctx.with_eager_session(|s| s.einsum(&[&a, &b], "ij,jk->ik"))??`.
+with `EagerTensor`: `ctx.with_eager_session(|s| s.einsum(&[&a, &b], "ij,jk->ik"))?`.
 For traced graph execution, use `tenferro_einsum::TraceContextEinsumExt` and
 install `tenferro_einsum::extension_module` on the `Runtime`.
 
@@ -313,7 +394,7 @@ let y = EagerTensor::requires_grad_in(Tensor::from_vec_col_major(vec![2], vec![3
 let make_loss = || ctx.with_eager_session(|s| {
     let product = s.mul(&x, &y)?;
     s.reduce_sum(&product, Some(&[0]))
-}).unwrap().unwrap();
+}).unwrap();
 let loss = make_loss();
 loss.backward().unwrap();
 assert_eq!(x.grad().unwrap().unwrap().as_slice::<f64>().unwrap(), &[3.0, 4.0]);
@@ -356,7 +437,7 @@ let seed = EagerTensor::from_tensor_in(
     ctx,
 ).unwrap();
 
-let y = x.runtime().with_eager_session(|s| s.mul(&x, &x))??;
+let y = x.runtime().with_eager_session(|s| s.mul(&x, &x))?;
 y.backward_with(&seed).unwrap();
 assert_eq!(x.grad().unwrap().unwrap().as_slice::<f64>().unwrap(), &[4.0, 12.0]);
 Ok(())
@@ -377,7 +458,7 @@ let x = EagerTensor::requires_grad_in(
     Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0]).unwrap(),
     ctx.clone(),
 ).unwrap();
-let y = ctx.with_eager_session(|s| s.mul(&x, &x))??;
+let y = ctx.with_eager_session(|s| s.mul(&x, &x))?;
 let seed = EagerTensor::from_tensor_in(
     Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 1.0]).unwrap(),
     ctx.clone(),
@@ -421,7 +502,7 @@ let tangent = EagerTensor::from_tensor_in(
 let loss = ctx.with_eager_session(|s| {
     let square = s.mul(&x, &x)?;
     s.mul(&square, &x)
-})??;
+})?;
 let grad = ctx.grad(&loss, &x).unwrap();
 let hvp = ctx.jvp(&grad, &x, &tangent).unwrap();
 
@@ -451,7 +532,7 @@ let x = EagerTensor::requires_grad_in(
 let y = ctx.with_eager_session(|s| {
     let _guard = ctx.no_grad();
     s.mul(&x, &x)
-})??;
+})?;
 assert!(!y.tracks_grad());
 Ok(())
 }
@@ -476,14 +557,14 @@ let x = EagerTensor::requires_grad_in(
     ctx.clone(),
 ).unwrap();
 
-let y = ctx.with_eager_session(|session| session.matmul(&a, &x))??;
+let y = ctx.with_eager_session(|session| session.matmul(&a, &x))?;
 let y_tensor = y.to_tensor().unwrap();
 assert_eq!(y_tensor.as_slice::<f64>().unwrap(), &[23.0, 34.0]);
 
 let loss = ctx.with_eager_session(|s| {
     let squared = s.mul(&y, &y)?;
     s.reduce_sum(&squared, Some(&[0, 1]))
-})??;
+})?;
 let loss_tensor = loss.to_tensor().unwrap();
 assert_eq!(loss_tensor.as_slice::<f64>().unwrap(), &[1685.0]);
 

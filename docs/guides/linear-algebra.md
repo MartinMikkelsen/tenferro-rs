@@ -40,7 +40,12 @@ tenferro-linalg = { version = "...", features = ["autodiff"] }
 ```
 
 Concrete graph/runtime users can omit `tenferro-ad` and the `autodiff` feature
-when they do not need eager linalg helpers or linalg AD rules.
+when they do not need eager linalg helpers or linalg AD rules. For
+inference-only code, call the operations on `Tensor`/`TypedTensor` inside a
+backend session (`TensorLinalgExt` / `TypedTensorLinalgExt`, for example
+`triangular_solve`, `solve`, `cholesky`); that route needs no `autodiff`. There
+is no separate eager-without-AD feature: `EagerSession` lives in `tenferro-ad`,
+which is all that `autodiff` adds, so such a feature would save no dependency.
 The examples below are Rust fragments; copy them into `fn main() -> Result<(),
 Box<dyn std::error::Error>>` for a standalone binary.
 

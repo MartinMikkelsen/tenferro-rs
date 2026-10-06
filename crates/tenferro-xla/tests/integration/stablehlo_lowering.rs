@@ -26,7 +26,7 @@ fn lowers_elementwise_reduce_and_static_shapes() {
 #[test]
 fn lowers_sum_squares_to_multiply_then_reduce() {
     let x = TracedTensor::input_symbolic_shape(DType::F64, 2).unwrap();
-    let y = x.reduce_sum_squares(&[0]).unwrap();
+    let y = x.reduce_sum_squares(Some(&[0])).unwrap();
     let mut compiler = GraphCompiler::new();
     let program = compiler
         .compile_with_input_specs(&y, &[(&x, DType::F64, &[2, 3])])

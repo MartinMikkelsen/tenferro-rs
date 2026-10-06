@@ -39,3 +39,28 @@ fn non_copy_host_import_handles_scalar_empty_and_rejected_shape() {
     assert!(TypedTensor::<String>::from_vec_row_major([2, 3], vec![String::new(); 5]).is_err());
     assert!(TypedTensor::<String>::from_vec_row_major([usize::MAX, 2], vec![]).is_err());
 }
+
+/// #1984: the dtype-erased tensor imports row-major data explicitly.
+#[test]
+fn erased_tensor_imports_row_major_data_in_column_major_storage() {
+    use tenferro_tensor::{ErrorKind, Tensor};
+
+    // Row-major [2, 3, 2]: value = 6 i + 2 j + k.
+    let data: Vec<f64> = (0..12).map(f64::from).collect();
+    let tensor = Tensor::from_vec_row_major(vec![2, 3, 2], data).unwrap();
+    let col_major = tensor.as_slice::<f64>().unwrap();
+    for i in 0..2 {
+        for j in 0..3 {
+            for k in 0..2 {
+                assert_eq!(col_major[i + 2 * j + 6 * k], (6 * i + 2 * j + k) as f64);
+            }
+        }
+    }
+
+    let scalar = Tensor::from_vec_row_major(Vec::<usize>::new(), vec![7_i32]).unwrap();
+    assert_eq!(scalar.as_slice::<i32>().unwrap(), &[7]);
+    let empty = Tensor::from_vec_row_major(vec![0, 3], Vec::<f32>::new()).unwrap();
+    assert_eq!(empty.shape(), &[0, 3]);
+    let error = Tensor::from_vec_row_major(vec![2, 3], vec![1.0_f64; 5]).unwrap_err();
+    assert!(matches!(error.kind(), ErrorKind::Validation(_)));
+}

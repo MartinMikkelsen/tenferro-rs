@@ -27,7 +27,6 @@ fn prelude_calls_eager_fft_operation() {
     .unwrap();
     let spectrum = runtime
         .with_eager_session(|session| session.rfft(&input, None, -1, FftNorm::Backward))
-        .unwrap()
         .unwrap();
     assert_eq!(spectrum.shape(), &[3]);
 }

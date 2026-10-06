@@ -26,7 +26,6 @@ fn evaluate(a: &TracedTensor, input: Tensor) -> Vec<Tensor> {
                 let (sign, log) = session.slogdet(&eager)?;
                 Ok::<_, tenferro_ad::Error>((session.det(&eager)?, sign, log))
             })
-            .unwrap()
             .unwrap();
         for (actual, expected) in [det, sign, log].iter().zip(&result) {
             let actual = actual.to_tensor().unwrap();

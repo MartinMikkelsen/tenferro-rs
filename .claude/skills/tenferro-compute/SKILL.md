@@ -34,7 +34,7 @@ not when changing tenferro itself.
 - **Column-major storage.** Dense buffers are column-major: the leftmost
   dimension varies fastest. Row-major data passed to `from_vec_col_major` is
   silently reinterpreted as column-major — permuted/wrong values, never
-  rejected.
+  rejected. Import row-major (C-order) buffers with `from_vec_row_major`.
 - **No facade crate.** `cargo add tenferro` fails by design; depend on the
   crates you need (`tenferro-runtime`, `tenferro-cpu`, and operation crates).
 - **Explicit execution owner.** Concrete operations take a borrowed session
@@ -55,6 +55,9 @@ not when changing tenferro itself.
   term; `EinsumNotation` provides the programmatic form.
 - **Result-returning operators.** Traced operators return `Result`; propagate
   with `?`.
+- **No `Clone` on tensors.** `Tensor` and the dynamic `TypedTensor` do not
+  implement `Clone`; `duplicate()` returns an independent copy and fails for
+  device-only storage. Share with `Arc<Tensor>` or views instead.
 - CPU/GPU transfers are explicit; unsupported GPU operations do not silently
   fall back to CPU.
 - Traced standard extensions need an explicitly installed extension module and

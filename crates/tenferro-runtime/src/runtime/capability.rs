@@ -805,6 +805,27 @@ pub trait ElementwiseRuntime: fmt::Debug + Send + Sync + 'static {
         &self,
         request: ElementwisePrepareRequest<'_>,
     ) -> Result<PrepareCapability, PrepareError>;
+
+    /// Largest number of distinct external inputs one fused elementwise region
+    /// may read on this engine, or `None` when the engine has no such limit.
+    ///
+    /// The prepared planner does not plan a region above this limit, so the
+    /// region runs instruction by instruction without a fusion attempt that the
+    /// backend would decline anyway. The default is `None`.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_cpu::CpuBackend;
+    /// use tenferro_runtime::ElementwiseRuntime;
+    ///
+    /// // The CPU engine's fused kernel reads at most four region inputs.
+    /// let cpu = CpuBackend::new();
+    /// assert_eq!(cpu.max_fused_region_inputs(), Some(4));
+    /// ```
+    fn max_fused_region_inputs(&self) -> Option<usize> {
+        None
+    }
 }
 
 /// Direct runtime provider for reduction core operations.

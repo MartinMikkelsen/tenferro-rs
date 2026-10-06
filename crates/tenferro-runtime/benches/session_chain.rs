@@ -41,7 +41,7 @@ fn run_chain_one_session(a: &Tensor, b: &Tensor, backend: &mut CpuBackend) -> Te
             let x = x.add(b, session).expect("add 3");
             let x = x.exp(session).expect("exp 3");
             let x = x.mul(a, session).expect("mul 3");
-            x.reduce_sum(&[0], session).expect("reduce_sum")
+            x.reduce_sum(Some(&[0]), session).expect("reduce_sum")
         })
         .unwrap()
 }
@@ -71,7 +71,7 @@ fn run_chain_execution_scope(
                 let x = x.add(b, session).expect("add 3");
                 let x = x.exp(session).expect("exp 3");
                 let x = x.mul(a, session).expect("mul 3");
-                x.reduce_sum(&[0], session).expect("reduce_sum")
+                x.reduce_sum(Some(&[0]), session).expect("reduce_sum")
             })
             .unwrap()
         })

@@ -1874,6 +1874,9 @@ impl TracedTensor {
 
     /// Generalized tensor contraction.
     ///
+    /// The output layout is `[lhs free..., rhs free..., batch...]`: batch axes
+    /// come last (see [`DotGeneralConfig`]).
+    ///
     /// # Examples
     ///
     /// ```rust
@@ -2045,8 +2048,9 @@ impl TracedTensor {
     ///
     /// Each value is squared in its input dtype before reduction. The initial
     /// supported dtypes are `f32` and `f64`; other dtypes return a typed
-    /// unsupported error during execution. Passing an empty axis slice returns
-    /// the elementwise square without reducing rank.
+    /// unsupported error during execution. `None` reduces every axis, like
+    /// the rest of the reduction family; `Some(&[])` returns the elementwise
+    /// square without reducing rank.
     ///
     /// This operation is useful when the squared sum is needed directly. Use
     /// the linalg norm APIs when a square root or complex magnitude semantics
@@ -2069,17 +2073,18 @@ impl TracedTensor {
     /// #     vec![2, 2],
     /// #     vec![1.0_f64, 2.0, 3.0, 4.0],
     /// # )?;
-    /// let squares = x.reduce_sum_squares(&[1])?;
+    /// let squares = x.reduce_sum_squares(Some(&[1]))?;
     /// assert_eq!(squares.rank, 1);
+    /// let total = x.reduce_sum_squares(None)?;
+    /// assert_eq!(total.rank, 0);
     /// # Ok::<(), tenferro_runtime::Error>(())
     /// ```
-    pub fn reduce_sum_squares(&self, axes: &[usize]) -> Result<TracedTensor> {
+    pub fn reduce_sum_squares(&self, axes: Option<&[usize]>) -> Result<TracedTensor> {
+        let axes = axes.map_or_else(|| (0..self.rank).collect(), <[usize]>::to_vec);
         let (out_rank, out_shape_hint) =
-            reduction_output_meta(self, axes, "TracedTensor::reduce_sum_squares")?;
+            reduction_output_meta(self, &axes, "TracedTensor::reduce_sum_squares")?;
         apply_unary(
-            StdTensorOp::ReduceSumSquares {
-                axes: axes.to_vec(),
-            },
+            StdTensorOp::ReduceSumSquares { axes },
             self,
             out_rank,
             out_shape_hint,

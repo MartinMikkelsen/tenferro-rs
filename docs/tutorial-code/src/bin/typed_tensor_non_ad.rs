@@ -30,7 +30,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let shifted = x.add(&column_offsets, session)?;
             let squared_total = shifted
                 .mul(&shifted, session)?
-                .reduce_sum(&[0, 1], session)?;
+                .reduce_sum(Some(&[0, 1]), session)?;
             let transposed = x.transpose(&[1, 0], session)?;
             let projected = x.matmul(&weights, session)?;
             Ok([shifted, squared_total, transposed, projected])

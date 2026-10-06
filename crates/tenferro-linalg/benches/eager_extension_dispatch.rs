@@ -78,7 +78,6 @@ fn bench_group(c: &mut Criterion, tracked: bool, label: &str) {
             bench.iter(|| {
                 let out = rt
                     .with_eager_session(|session| session.matmul(black_box(&a), black_box(&b)))
-                    .expect("borrow eager session")
                     .expect("matmul");
                 consume(out);
             });
@@ -104,7 +103,6 @@ fn bench_group(c: &mut Criterion, tracked: bool, label: &str) {
             bench.iter(|| {
                 let (u, _s, _vt) = rt
                     .with_eager_session(|session| session.svd(black_box(&a)))
-                    .expect("borrow eager session")
                     .expect("svd");
                 consume(u);
             });
@@ -118,7 +116,6 @@ fn bench_group(c: &mut Criterion, tracked: bool, label: &str) {
             bench.iter(|| {
                 let (w, _v) = rt
                     .with_eager_session(|session| session.eigh(black_box(&a)))
-                    .expect("borrow eager session")
                     .expect("eigh");
                 consume(w);
             });

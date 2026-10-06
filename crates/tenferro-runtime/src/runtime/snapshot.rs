@@ -252,6 +252,16 @@ impl ExecutableEngineSnapshot {
         self.binding.contract().context_identity()
     }
 
+    /// Fused-region input limit reported by this engine's elementwise
+    /// capability; see [`super::ElementwiseRuntime::max_fused_region_inputs`].
+    pub(super) fn max_fused_region_inputs(&self) -> Option<usize> {
+        self.binding
+            .contract()
+            .capabilities()
+            .elementwise()
+            .and_then(|elementwise| elementwise.max_fused_region_inputs())
+    }
+
     pub(super) fn executor(&self) -> &Arc<dyn super::execution::ErasedTensorBackendExecutor> {
         self.binding.contract().executor()
     }
@@ -942,7 +952,7 @@ impl Runtime {
     ///
     /// Returns [`crate::Error::RuntimeState`] when the snapshot cannot be read
     /// or an engine's preparation fails, with the typed
-    /// [`PrepareError`]/[`RuntimeStateError`] source retained.
+    /// [`PrepareError`](super::PrepareError)/[`RuntimeStateError`] source retained.
     pub fn prepare_extension_immediate(
         &self,
         engine_id: &EngineId,

@@ -9348,6 +9348,11 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
 
     /// Make an explicit independent host copy with the same shape and placement.
     ///
+    /// The dynamic `TypedTensor` does not implement [`Clone`] (only the
+    /// host-only representation does): the copy reads host data, rejects
+    /// device-only storage, and creates a new owner, so it is fallible. See
+    /// [`Tensor::duplicate`] for the sharing alternatives.
+    ///
     /// # Examples
     /// ```
     /// use tenferro_tensor::TypedTensor;
@@ -10668,6 +10673,31 @@ impl Tensor {
 
     /// Make an explicit owning copy of this dtype-erased tensor.
     ///
+    /// `Tensor` deliberately does not implement [`Clone`]: copying can fail
+    /// (device-only storage is rejected) and allocates a new, independent
+    /// owner, so it is an explicit fallible call rather than an infallible
+    /// `clone()`. The copy shares nothing with `self`; mutating one never
+    /// affects the other. To share one tensor between several users without
+    /// copying, wrap it in [`std::sync::Arc`] or borrow views of it.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use tenferro_tensor::Tensor;
+    ///
+    /// let weights = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?;
+    /// // Two independent owners of the same values.
+    /// let copy = weights.duplicate()?;
+    /// assert_eq!(copy.as_slice::<f64>()?, weights.as_slice::<f64>()?);
+    ///
+    /// // A shared, read-only handle instead of a copy.
+    /// let shared = Arc::new(weights);
+    /// let other = Arc::clone(&shared);
+    /// assert_eq!(other.shape(), &[2]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    ///
     /// # Errors
     ///
     /// Returns [`crate::Error::RuntimeState`] or [`crate::Error::Unsupported`]
@@ -10727,6 +10757,45 @@ impl Tensor {
         data: Vec<T>,
     ) -> crate::Result<Self> {
         T::into_tensor(shape.into_shape_vec().to_vec(), data)
+    }
+
+    /// Create a tensor from a shape and row-major (C-order) flat data.
+    ///
+    /// The values are reordered once into tenferro's column-major storage;
+    /// no row-major owner is created. Use this for buffers authored in
+    /// PyTorch/NumPy/C order instead of passing them to
+    /// [`Self::from_vec_col_major`], which would reinterpret them silently.
+    /// This is the `Tensor`-level equivalent of
+    /// `TypedTensor::<T>::from_vec_row_major`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::Tensor;
+    ///
+    /// // Row-major [[1, 2, 3], [4, 5, 6]].
+    /// let t = Tensor::from_vec_row_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0])?;
+    /// assert_eq!(t.shape(), &[2, 3]);
+    /// assert_eq!(t.as_slice::<f64>()?, &[1.0, 4.0, 2.0, 5.0, 3.0, 6.0]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::ShapeDataLengthMismatch`] when
+    /// the shape product differs from `data.len()`, or
+    /// [`tenferro_tensor_core::ValidationError::IntegerOverflow`] when shape
+    /// arithmetic overflows.
+    pub fn from_vec_row_major<T: TensorScalar>(
+        shape: impl tenferro_tensor_core::IntoShapeVec,
+        data: Vec<T>,
+    ) -> crate::Result<Self> {
+        let (shape, reordered) = row_major_reorder::<T, tenferro_tensor_core::DynRank>(
+            shape.into_shape_vec().to_vec(),
+            data,
+            "Tensor::from_vec_row_major",
+        )?;
+        T::into_tensor(shape.as_ref().to_vec(), reordered)
     }
 
     /// Tensor shape.

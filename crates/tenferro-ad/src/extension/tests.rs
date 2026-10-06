@@ -392,7 +392,6 @@ fn eager_extension_targeted_install_and_execution_reuse_the_borrowed_session() {
                 },
             )
         })
-        .unwrap()
         .unwrap();
     assert_eq!(
         outputs[0].value().unwrap().as_slice::<f64>().unwrap(),
@@ -412,7 +411,6 @@ fn eager_extension_target_resolves_under_a_borrowed_session() {
     let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new()).unwrap();
     let target = ctx
         .with_eager_session(|_session| ctx.eager_extension_target())
-        .unwrap()
         .unwrap();
     assert_eq!(target.engine_id, tenferro_cpu::runtime_engine_id().unwrap());
     assert_eq!(target.backend_kind, EagerExtensionBackendKind::Cpu);
@@ -430,7 +428,6 @@ fn eager_extension_prepared_executor_uses_borrowed_session() {
         .with_eager_session(|session| {
             super::apply_eager_in_session(session, Arc::new(BridgeProbe::one()), &[&value])
         })
-        .unwrap()
         .unwrap();
     assert_eq!(
         outputs[0].value().unwrap().as_slice::<f64>().unwrap(),
@@ -443,7 +440,6 @@ fn eager_extension_prepared_executor_uses_borrowed_session() {
         .with_eager_session(|session| {
             super::apply_eager_in_session(session, Arc::new(BridgeProbe::one()), &[&foreign])
         })
-        .unwrap()
         .unwrap_err();
     assert!(matches!(error, Error::ContextMismatch { .. }));
 }
@@ -467,7 +463,6 @@ fn eager_extension_borrowed_recording_materializes_untracked_inputs_in_session()
                 &[&tracked, &constant],
             )
         })
-        .unwrap()
         .unwrap();
     assert_eq!(
         output[0].value().unwrap().as_slice::<f64>().unwrap(),
@@ -488,7 +483,6 @@ fn eager_extension_native_context_fallback_requires_a_separate_region() {
         .with_eager_session(|session| {
             super::apply_eager_in_session(session, Arc::clone(&op), &[&input])
         })
-        .unwrap()
         .unwrap_err();
     assert!(matches!(error, Error::Unsupported { .. }));
     let outputs = super::apply_eager(op, &[&input]).unwrap();
@@ -998,7 +992,6 @@ fn eager_extension_factory_receives_exact_webgpu_target() {
 
     let copied = ctx
         .with_eager_session(|session| session.duplicate_value(&input))
-        .unwrap()
         .unwrap();
     let host = ctx
         .with_execution_session(|session| {

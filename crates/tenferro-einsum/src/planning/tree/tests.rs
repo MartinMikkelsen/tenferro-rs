@@ -53,16 +53,19 @@ fn binary_public_planning_bypasses_both_general_optimizers() {
     // A positive control proves that the real general entry is instrumented.
     let nary = Subscripts::new(&[&[0, 1], &[1, 2], &[2, 3]], &[0, 3]);
     let shapes = [&[2, 3][..], &[3, 4][..], &[4, 2][..]];
+    // Without annealing the default options plan with the deterministic greedy
+    // (#1963); an annealing schedule reaches omeco's TreeSA.
     let tree = ContractionTree::optimize(&nary, &shapes).unwrap();
     assert_eq!(tree.step_count(), 2);
-    assert_eq!(OMECO_CALLS.with(Cell::get), 1);
-
-    // Also prove the fallback counter is connected, independently of omeco's
-    // choice to return a plan for the positive-control problem above.
-    let before = SELF_GREEDY_CALLS.with(Cell::get);
-    let sizes = super::build_size_dict(&nary, &shapes, None).unwrap();
-    assert_eq!(optimize_self_greedy_pairs(&nary, &sizes).unwrap().len(), 2);
-    assert_eq!(SELF_GREEDY_CALLS.with(Cell::get), before + 1);
+    assert_eq!(counts(), (0, 1));
+    let annealing = ContractionOptimizerOptions {
+        niters: 2,
+        betas: vec![0.1, 1.0],
+        ..ContractionOptimizerOptions::default()
+    };
+    let tree = ContractionTree::optimize_with_options(&nary, &shapes, &annealing).unwrap();
+    assert_eq!(tree.step_count(), 2);
+    assert_eq!(counts(), (1, 1));
 }
 
 #[test]
@@ -136,7 +139,7 @@ fn binary_public_execution_surfaces_bypass_general_optimizers() {
             // The same public call with three operands must reach the counter.
             let result = [&a, &b, &a].einsum("ij,jk,kl->il", session).unwrap();
             assert_eq!(result.as_slice::<f64>().unwrap(), &[12.0; 6]);
-            assert_eq!(OMECO_CALLS.with(Cell::get), 1);
+            assert_eq!(SELF_GREEDY_CALLS.with(Cell::get), 1);
         })
         .unwrap();
 }
@@ -905,4 +908,22 @@ fn optimize_with_space_optimized_score_builds_tree() {
 
     let tree = ContractionTree::optimize_with_options(&subs, &shapes, &options).unwrap();
     assert_eq!(tree.step_count(), 2);
+}
+
+#[test]
+fn self_greedy_prefers_connected_pairs_and_breaks_ties_by_index() {
+    // A ring of equal bonds: every connected pair has the same cost, so the
+    // smallest connected index pair goes first, and disconnected pairs
+    // (outer products) are never chosen while a connected pair remains.
+    let ring = Subscripts::new(&[&[0, 1], &[1, 2], &[2, 3], &[3, 0]], &[]);
+    let sizes: HashMap<u32, usize> = (0..4).map(|label| (label, 4)).collect();
+    let pairs = optimize_self_greedy_pairs(&ring, &sizes).unwrap();
+    assert_eq!(pairs, vec![(0, 1), (2, 3), (4, 5)]);
+
+    // Two disconnected components fall back to the smallest live indices once
+    // no connected pair remains.
+    let split = Subscripts::new(&[&[0, 1], &[1], &[2, 3], &[3]], &[0, 2]);
+    let sizes: HashMap<u32, usize> = (0..4).map(|label| (label, 3)).collect();
+    let pairs = optimize_self_greedy_pairs(&split, &sizes).unwrap();
+    assert_eq!(pairs, vec![(0, 1), (2, 3), (4, 5)]);
 }

@@ -243,6 +243,10 @@ impl ElementwiseRuntime for CpuBackend {
             CpuPreparedKind::Elementwise,
         )
     }
+
+    fn max_fused_region_inputs(&self) -> Option<usize> {
+        Some(tenferro_cpu_fused::ERASED_FUSION_MAX_INPUTS)
+    }
 }
 
 impl ReductionRuntime for CpuBackend {

@@ -147,7 +147,6 @@ fn test_cubecl_svd_xgesvdp_eager() {
     let eager = EagerTensor::from_tensor_in(device, runtime.clone()).unwrap();
     let (u, s, vt) = runtime
         .with_eager_session(|session| session.svd_with_options(&eager, options))
-        .unwrap()
         .unwrap();
     let factors: Vec<_> = [&u, &s, &vt]
         .into_iter()

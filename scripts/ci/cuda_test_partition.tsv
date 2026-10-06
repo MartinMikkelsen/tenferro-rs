@@ -326,6 +326,7 @@ host	tenferro-ad::integration	eager_tensor::eager_untracked_tensor_behaves_like_
 host	tenferro-ad::integration	eager_tensor::eager_x_squared_gradient_matches_finite_difference
 host	tenferro-ad::integration	eager_tensor::matrix_eager_input_uses_column_major_values
 host	tenferro-ad::integration	eager_tensor::placement_bound_session_reuses_runtime_identity_and_requested_placement
+host	tenferro-ad::integration	eager_tensor::reduce_sum_squares_none_reduces_all_axes_on_every_surface
 host	tenferro-ad::integration	eager_tensor::untracked_eager_intermediate_can_later_feed_tracked_ad
 host	tenferro-ad::integration	eager_tensor::untracked_eager_transpose_is_exposed_as_borrowed_view_until_materialized
 host	tenferro-ad::integration	eager_tensor::untracked_leaf_functional_vjp_requires_explicit_capture

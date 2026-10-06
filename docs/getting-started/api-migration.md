@@ -9,7 +9,7 @@ and session-owned execution. Historical worklogs are not API documentation.
 
 | Older spelling | Current spelling |
 | --- | --- |
-| <code>tenferro_einsum::&#8203;eager_tensor</code> | Import `tenferro_einsum::EagerSessionEinsumExt` and call the trait method on a borrowed session: `ctx.with_eager_session(\|s\| s.einsum(&[&a, &b], "ij,jk->ik"))??`. |
+| <code>tenferro_einsum::&#8203;eager_tensor</code> | Import `tenferro_einsum::EagerSessionEinsumExt` and call the trait method on a borrowed session: `ctx.with_eager_session(\|s\| s.einsum(&[&a, &b], "ij,jk->ik"))?`. |
 | `tenferro_einsum::EagerEinsumExt` (`[&a, &b].einsum(...)` on eager values), `EagerTensorEinsumExt` (`a.tensordot(&b, axes)`) | `EagerSessionEinsumExt` on a borrowed session: `s.einsum(&[&a, &b], "ij,jk->ik")`, `s.einsum_notation(...)`, `s.einsum_subscripts(...)`, `s.tensordot(&a, &b, axes)`. |
 | <code>tenferro_linalg::&#8203;eager_tensor</code> | Import `tenferro_linalg::EagerTensorLinalgExt` and call the trait method on the eager value. |
 | <code>tenferro_runtime::&#8203;traced_tensor</code> | Use the current traced tensor types and their extension traits, such as `tenferro_linalg::TracedTensorLinalgExt`. |
@@ -78,6 +78,18 @@ let columns = value.reduce_sum(Some(&[0]))?;  // selected axes
 
 An empty slice remains distinct from `None`: use `Some(&[])` when the API's
 identity/no-axis behavior is what the program needs.
+
+## Changed signatures (2026-10)
+
+| Older spelling | Current spelling |
+| --- | --- |
+| `ctx.with_eager_session(\|s\| s.neg(&x))??` (nested `Result`) | `ctx.with_eager_session(\|s\| s.neg(&x))?`: the callback returns `Result<T, E>` with `E: From<tenferro_ad::Error>`, and session-entry failures arrive as `E::from(..)`. Annotate `Ok::<_, tenferro_ad::Error>(..)` when the error type is not otherwise inferred; map tensor-level errors with `.map_err(tenferro_ad::Error::from)`. Same for `CpuPlacementBoundEager::with_eager_session`. |
+| `reduce_sum_squares(&x, &[0])` (eager), `x.reduce_sum_squares(&[0])` (traced) | `Some(&[0])`; `None` now reduces every axis, as for `reduce_sum`. |
+| `x.reduce_sum(&[1], session)` on `Tensor` / `TypedTensor` | `x.reduce_sum(Some(&[1]), session)`. |
+| `session.gather(&x, &idx, &cfg)` and other core ops only on the session | Also `x.gather(&idx, cfg, session)` via `TensorSessionOpsExt` (see the session-surface notes in the guides). |
+| `Tensor::from_vec_col_major` with row-major data | `Tensor::from_vec_row_major(shape, data)` reorders once into column-major storage. |
+| `compile_with_input_specs` with a placeholder the output does not use | Rejected at compile time (`InvalidArgument` naming the binding); drop that binding. |
+| `?` on `EagerFftInPlaceError` in a `tenferro_ad::Result` function | Works: `From<EagerFftInPlaceError> for tenferro_ad::Error` drops a rejected input. |
 
 ## Finding the current method
 

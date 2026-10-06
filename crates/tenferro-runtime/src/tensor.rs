@@ -4,9 +4,15 @@
 //! provides backend-parametric session-explicit operation methods through
 //! [`TensorSessionOpsExt`].
 
+use std::borrow::Cow;
+
+use num_complex::Complex64;
 use tenferro_ops::broadcast::{broadcast_error_to_validation, broadcast_shape, broadcast_shapes};
 use tenferro_tensor::validate::matmul_config_for_shapes;
-use tenferro_tensor::{BackendSession, CompareDir, DType, Error, Result, TensorRead};
+use tenferro_tensor::{
+    BackendSession, CompareDir, DType, DotGeneralConfig, Error, GatherConfig, PadConfig, Result,
+    ScatterConfig, SliceConfig, TensorRead,
+};
 
 use crate::typed_tensor::{broadcast_to_in_read, ReadInput};
 
@@ -28,8 +34,13 @@ impl TensorSessionOpsExt for Tensor {
         session.exp_read(TensorRead::from_tensor(self))
     }
 
-    fn reduce_sum(&self, axes: &[usize], session: &mut dyn BackendSession) -> Result<Tensor> {
-        session.reduce_sum_read(TensorRead::from_tensor(self), axes)
+    fn reduce_sum(
+        &self,
+        axes: Option<&[usize]>,
+        session: &mut dyn BackendSession,
+    ) -> Result<Tensor> {
+        let axes = all_axes_if_none(self.shape().len(), axes);
+        session.reduce_sum_read(TensorRead::from_tensor(self), &axes)
     }
 
     fn convert(&self, to: DType, session: &mut dyn BackendSession) -> Result<Tensor> {
@@ -173,6 +184,161 @@ impl TensorSessionOpsExt for Tensor {
     fn transpose(&self, perm: &[usize], session: &mut dyn BackendSession) -> Result<Tensor> {
         session.transpose_read(TensorRead::from_tensor(self), perm)
     }
+
+    fn gather(
+        &self,
+        indices: &Tensor,
+        config: GatherConfig,
+        session: &mut dyn BackendSession,
+    ) -> Result<Tensor> {
+        session.gather(self, indices, &config)
+    }
+
+    fn scatter(
+        &self,
+        indices: &Tensor,
+        updates: &Tensor,
+        config: ScatterConfig,
+        session: &mut dyn BackendSession,
+    ) -> Result<Tensor> {
+        session.scatter(self, indices, updates, &config)
+    }
+
+    fn slice(&self, config: SliceConfig, session: &mut dyn BackendSession) -> Result<Tensor> {
+        session.slice(self, &config)
+    }
+
+    fn dynamic_slice(
+        &self,
+        starts: &Tensor,
+        sizes: &[usize],
+        session: &mut dyn BackendSession,
+    ) -> Result<Tensor> {
+        session.dynamic_slice(self, starts, sizes)
+    }
+
+    fn pad(&self, config: PadConfig, session: &mut dyn BackendSession) -> Result<Tensor> {
+        session.pad(self, &config)
+    }
+
+    fn concatenate(
+        inputs: &[&Tensor],
+        axis: usize,
+        session: &mut dyn BackendSession,
+    ) -> Result<Tensor> {
+        session.concatenate(inputs, axis)
+    }
+
+    fn reverse(&self, axes: &[usize], session: &mut dyn BackendSession) -> Result<Tensor> {
+        session.reverse(self, axes)
+    }
+
+    fn reduce_max(
+        &self,
+        axes: Option<&[usize]>,
+        session: &mut dyn BackendSession,
+    ) -> Result<Tensor> {
+        let axes = all_axes_if_none(self.shape().len(), axes);
+        session.reduce_max_read(TensorRead::from_tensor(self), &axes)
+    }
+
+    fn reduce_min(
+        &self,
+        axes: Option<&[usize]>,
+        session: &mut dyn BackendSession,
+    ) -> Result<Tensor> {
+        let axes = all_axes_if_none(self.shape().len(), axes);
+        session.reduce_min_read(TensorRead::from_tensor(self), &axes)
+    }
+
+    fn reduce_prod(
+        &self,
+        axes: Option<&[usize]>,
+        session: &mut dyn BackendSession,
+    ) -> Result<Tensor> {
+        let axes = all_axes_if_none(self.shape().len(), axes);
+        session.reduce_prod_read(TensorRead::from_tensor(self), &axes)
+    }
+
+    fn reduce_sum_squares(
+        &self,
+        axes: Option<&[usize]>,
+        session: &mut dyn BackendSession,
+    ) -> Result<Tensor> {
+        let axes = all_axes_if_none(self.shape().len(), axes);
+        session.reduce_sum_squares_read(TensorRead::from_tensor(self), &axes)
+    }
+
+    fn broadcast_in_dim(
+        &self,
+        shape: &[usize],
+        dims: &[usize],
+        session: &mut dyn BackendSession,
+    ) -> Result<Tensor> {
+        session.broadcast_in_dim_read(TensorRead::from_tensor(self), shape, dims)
+    }
+
+    fn tril(&self, k: i64, session: &mut dyn BackendSession) -> Result<Tensor> {
+        session.tril(self, k)
+    }
+
+    fn triu(&self, k: i64, session: &mut dyn BackendSession) -> Result<Tensor> {
+        session.triu(self, k)
+    }
+
+    fn extract_diag(
+        &self,
+        axis_a: usize,
+        axis_b: usize,
+        session: &mut dyn BackendSession,
+    ) -> Result<Tensor> {
+        session.extract_diagonal(self, axis_a, axis_b)
+    }
+
+    fn embed_diag(
+        &self,
+        axis_a: usize,
+        axis_b: usize,
+        session: &mut dyn BackendSession,
+    ) -> Result<Tensor> {
+        session.embed_diagonal(self, axis_a, axis_b)
+    }
+
+    fn dot_general(
+        &self,
+        rhs: &Tensor,
+        config: DotGeneralConfig,
+        session: &mut dyn BackendSession,
+    ) -> Result<Tensor> {
+        session.dot_general_read(
+            TensorRead::from_tensor(self),
+            TensorRead::from_tensor(rhs),
+            &config,
+        )
+    }
+
+    fn dot_general_with_conj(
+        &self,
+        rhs: &Tensor,
+        config: DotGeneralConfig,
+        lhs_conj: bool,
+        rhs_conj: bool,
+        session: &mut dyn BackendSession,
+    ) -> Result<Tensor> {
+        session.dot_general_with_conj(self, rhs, &config, lhs_conj, rhs_conj)
+    }
+
+    fn scale_real(&self, factor: f64, session: &mut dyn BackendSession) -> Result<Tensor> {
+        let scalar = crate::scale::real_scale_scalar(self.dtype(), factor)?;
+        let scalar = session.upload_host_tensor(TensorRead::from_tensor(&scalar))?;
+        TensorSessionOpsExt::mul(self, &scalar, session)
+    }
+
+    fn scale_complex(&self, factor: Complex64, session: &mut dyn BackendSession) -> Result<Tensor> {
+        let scalar = crate::scale::complex_scale_scalar(self.dtype(), factor)?;
+        let scalar = session.upload_host_tensor(TensorRead::from_tensor(&scalar))?;
+        TensorSessionOpsExt::mul(self, &scalar, session)
+    }
 }
 
 fn broadcast_binary_in<'a>(
@@ -204,4 +370,14 @@ fn broadcast_ternary_in<'a>(
 
 fn broadcast_error(err: tenferro_ops::broadcast::BroadcastError) -> Error {
     Error::validation("broadcast", broadcast_error_to_validation(err))
+}
+
+/// Resolve a reduction-family axis argument: `None` selects every axis.
+///
+/// An explicit axis list stays borrowed; only `None` builds a list.
+pub(crate) fn all_axes_if_none(rank: usize, axes: Option<&[usize]>) -> Cow<'_, [usize]> {
+    match axes {
+        Some(axes) => Cow::Borrowed(axes),
+        None => Cow::Owned((0..rank).collect()),
+    }
 }

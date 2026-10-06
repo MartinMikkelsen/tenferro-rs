@@ -308,7 +308,7 @@ let (outer, diag) = ctx.with_eager_session(|s| {
     let outer = s.einsum(&[&u, &v], "i,j->ij")?;
     let diag = s.einsum(&[&v], "i->ii")?;
     Ok::<_, tenferro_einsum::Error>((outer, diag))
-})??;
+})?;
 
 assert_eq!(outer.shape(), &[2, 3]);
 let outer_tensor = outer.to_tensor()?;

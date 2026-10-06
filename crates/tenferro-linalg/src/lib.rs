@@ -37,12 +37,47 @@
 //! let out = runtime.run_compiled(&program, &[]).unwrap().pop().unwrap();
 //! assert_eq!(out.shape(), &[2, 2]);
 //! ```
+//!
+//! # Cargo features
+//!
+//! | Feature | Enables |
+//! |---|---|
+//! | `cpu-faer` (default) and the other CPU provider features | Forwarded to `tenferro-cpu`; see its documentation. |
+//! | `autodiff` | The eager surface (`EagerSessionLinalgExt`, `EagerTensorLinalgExt`) and AD rules. Adds the `tenferro-ad` dependency. |
+//! | `cuda` | CUDA execution through `tenferro-gpu`. |
+//! | `webgpu` | WebGPU/Metal execution through `tenferro-gpu` (a subset of operations). |
+//! | `rocm` | Placeholder; HIP/ROCm is not implemented. |
+//!
+//! `autodiff` is not a heavy dependency switch: `tenferro-ad` is the crate that
+//! owns `EagerSession`/`EagerTensor`, so an eager linalg surface without it
+//! would save nothing and would only produce eager tensors whose linalg ops
+//! fail on backward (#1972). For inference without AD, call the same
+//! operations on concrete tensors inside a backend session through
+//! [`TensorLinalgExt`] / [`TypedTensorLinalgExt`], which need no `autodiff`:
+//!
+//! ```
+//! use tenferro_cpu::CpuBackend;
+//! use tenferro_linalg::TypedTensorLinalgExt;
+//! use tenferro_tensor::{BackendSessionHost, TypedTensor};
+//!
+//! let mut backend = CpuBackend::new();
+//! // Lower-triangular [[2, 0], [1, 1]] (column-major) and right-hand side.
+//! let l = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![2.0, 1.0, 0.0, 1.0])?;
+//! let b = TypedTensor::<f64>::from_vec_col_major(vec![2, 1], vec![4.0, 5.0])?;
+//! let x = backend.with_backend_session(|session| {
+//!     // left_side, lower, transpose_a, unit_diagonal
+//!     l.triangular_solve(&b, true, true, false, false, session)
+//! })??;
+//! assert_eq!(x.host_data()?, &[2.0, 3.0]);
+//! # Ok::<(), Box<dyn std::error::Error>>(())
+//! ```
 // A misaligned pointer handed to a CUDA library is undefined behaviour and
 // fails only on some library versions: `cuDoubleComplex` is `double2`, which
 // CUDA declares `__align__(16)`, while `num_complex::Complex64` is 8-aligned,
 // so casting `&Complex64` to `*const cuDoubleComplex` produced a pointer
 // cuBLAS >= 12.9 faults on (issue #1870). Deny the whole cast class at this
 // FFI boundary rather than re-auditing it by hand.
+#![cfg_attr(docsrs, feature(doc_cfg))]
 #![deny(clippy::cast_ptr_alignment)]
 
 #[cfg(feature = "autodiff")]
@@ -74,6 +109,7 @@ pub use ad::support::{
 };
 pub use backend::LinalgBackend;
 #[cfg(feature = "autodiff")]
+#[cfg_attr(docsrs, doc(cfg(feature = "autodiff")))]
 pub use eager_ext::{EagerSessionLinalgExt, EagerTensorLinalgExt};
 pub use error::{Error, Result};
 pub use extension::{

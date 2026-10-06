@@ -468,7 +468,6 @@ fn run_eager(
         .collect::<Result<Vec<_>, _>>()?;
     let initial_state = runtime
         .with_eager_session(|session| session.householder_qr(&initial))
-        .map_err(to_string)?
         .map_err(to_string)?;
     let total = config.warmups + config.repetitions;
     let mut timings = Vec::with_capacity(config.repetitions);
@@ -483,7 +482,6 @@ fn run_eager(
             black_box(
                 runtime
                     .with_eager_session(|session| complete_eager(state, &blocks, session))
-                    .map_err(to_string)?
                     .map_err(to_string)?,
             );
         }
@@ -494,7 +492,6 @@ fn run_eager(
     }
     let state = runtime
         .with_eager_session(|session| complete_eager(initial_state, &blocks, session))
-        .map_err(to_string)?
         .map_err(to_string)?;
     let (q, r) = runtime
         .with_eager_session(|session| {
@@ -503,7 +500,6 @@ fn run_eager(
                 state.r(raw_options(), session)?,
             ))
         })
-        .map_err(to_string)?
         .map_err(to_string)?;
     Ok((
         timings,

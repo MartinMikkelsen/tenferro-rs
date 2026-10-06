@@ -721,7 +721,7 @@ let (outer, diag) = ctx.with_eager_session(|s| {
     let outer = s.einsum(&[&u, &v], "i,j->ij")?;
     let diag = s.einsum(&[&v], "i->ii")?;
     Ok::<_, tenferro_einsum::Error>((outer, diag))
-})??;
+})?;
 
 assert_eq!(outer.shape(), &[2, 3]);
 let outer_tensor = outer.to_tensor()?;
@@ -1022,7 +1022,7 @@ let (spectrum, restored) = runtime.with_eager_session(|session| {
     let spectrum = session.rfft(&x, None, -1, FftNorm::Backward)?;
     let restored = session.irfft(&spectrum, Some(4), -1, FftNorm::Backward)?;
     Ok::<_, tenferro_ad::Error>((spectrum, restored))
-})??;
+})?;
 
 assert_eq!(spectrum.shape(), &[3]);
 assert_eq!(restored.to_tensor()?.as_slice::<f64>()?, &[1.0, 2.0, 3.0, 4.0]);

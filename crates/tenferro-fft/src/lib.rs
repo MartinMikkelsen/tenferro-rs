@@ -21,6 +21,19 @@
 //! consuming in-place transforms retain `EagerTensorFftExt`. Traced graph
 //! construction uses [`TracedTensorFftExt`].
 //!
+//! # Cargo features
+//!
+//! | Feature | Enables |
+//! |---|---|
+//! | `cpu-faer` (default) and the other CPU provider features | Forwarded to `tenferro-cpu`; see its documentation. |
+//! | `autodiff` | The eager surface (`EagerSessionFftExt`, `EagerTensorFftExt`) and AD rules. Adds the `tenferro-ad` dependency. |
+//! | `cuda` | CUDA execution through `tenferro-gpu`. |
+//! | `webgpu` | WebGPU/Metal execution through `tenferro-gpu` (a subset of operations). |
+//! | `rocm` | Placeholder; HIP/ROCm is not implemented. |
+//!
+//! For transforms without AD, use [`TensorFftExt`] / [`TensorReadFftExt`] on
+//! concrete tensors inside a backend session; they need no `autodiff`.
+//!
 //! # Examples
 //!
 //! ```
@@ -106,6 +119,7 @@
 //! assert_eq!(out.as_slice::<Complex64>().unwrap()[0], Complex64::new(10.0, 0.0));
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
+#![cfg_attr(docsrs, feature(doc_cfg))]
 
 use std::any::Any;
 use std::hash::Hasher;
@@ -156,8 +170,10 @@ pub use cache::{
     fft_plan_cache_selector, FftPlanCache, DEFAULT_FFT_PLAN_CACHE_CAPACITY, FFT_PLAN_CACHE_NAME,
 };
 #[cfg(feature = "autodiff")]
+#[cfg_attr(docsrs, doc(cfg(feature = "autodiff")))]
 pub use eager_ext::{EagerSessionFftExt, EagerTensorFftExt};
 #[cfg(feature = "autodiff")]
+#[cfg_attr(docsrs, doc(cfg(feature = "autodiff")))]
 pub use eager_in_place::EagerFftInPlaceError;
 pub use spec::{FftNorm, FftOperation, FftPlanSpec};
 

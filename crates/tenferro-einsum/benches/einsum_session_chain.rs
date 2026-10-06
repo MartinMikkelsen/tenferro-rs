@@ -64,7 +64,7 @@ fn bench_einsum_session_chain(c: &mut Criterion) {
                     for _ in 0..CALLS {
                         let x = plan.execute(inputs, session).unwrap();
                         let x = x.exp(session).unwrap();
-                        let out = x.reduce_sum(&[0], session).unwrap();
+                        let out = x.reduce_sum(Some(&[0]), session).unwrap();
                         black_box(out);
                     }
                 })

@@ -80,7 +80,6 @@ fn solve_saved_lu_preserves_real_complex_batched_higher_derivatives() {
             let solution = a.solve(&b).unwrap();
             let loss = ctx
                 .with_eager_session(|s| s.reduce_sum(&solution, Some(&axes)))
-                .unwrap()
                 .unwrap();
             drop(solution); // LU/pivots and X must survive without user handles.
             let ga = ctx.grad(&loss, &a).unwrap();
@@ -98,7 +97,6 @@ fn solve_saved_lu_preserves_real_complex_batched_higher_derivatives() {
                 let solution = a.solve(&b).unwrap();
                 let loss = ctx
                     .with_eager_session(|s| s.reduce_sum(&solution, Some(&axes)))
-                    .unwrap()
                     .unwrap();
                 (
                     values(&ctx.grad(&loss, &a).unwrap(), complex),
@@ -123,7 +121,6 @@ fn solve_saved_lu_preserves_real_complex_batched_higher_derivatives() {
                     let product = s.mul(&ga, &conjugated)?;
                     s.reduce_sum(&product, Some(&axes))
                 })
-                .unwrap()
                 .unwrap();
             close(
                 &values(&ctx.grad(&directional, &a).unwrap(), complex),
@@ -158,7 +155,6 @@ fn solve_handles_single_and_multiple_tracked_inputs_and_no_grad() {
         if track_a || track_b {
             let loss = ctx
                 .with_eager_session(|s| s.reduce_sum(&solution, Some(&[0, 1])))
-                .unwrap()
                 .unwrap();
             drop(solution);
             let gradients = loss.backward().unwrap();

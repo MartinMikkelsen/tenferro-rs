@@ -63,10 +63,11 @@ use crate::{
 /// let product = ctx.with_eager_session(|session| {
 ///     let c = session.einsum(&[&a, &b], "ij,jk->ik")?;
 ///     session.einsum(&[&c], "ij->")
-/// })??;
+/// })?;
 /// assert_eq!(product.value()?.as_slice::<f64>()?, &[24.0]);
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
+#[cfg_attr(docsrs, doc(cfg(feature = "autodiff")))]
 pub trait EagerSessionEinsumExt {
     /// Execute an einsum from string notation.
     ///
@@ -78,7 +79,7 @@ pub trait EagerSessionEinsumExt {
     ///
     /// let ctx = EagerRuntime::new()?;
     /// let x = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0])?, ctx.clone())?;
-    /// let dot = ctx.with_eager_session(|session| session.einsum(&[&x, &x], "i,i->"))??;
+    /// let dot = ctx.with_eager_session(|session| session.einsum(&[&x, &x], "i,i->"))?;
     /// assert_eq!(dot.value()?.as_slice::<f64>()?, &[13.0]);
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
@@ -103,7 +104,7 @@ pub trait EagerSessionEinsumExt {
     /// let x = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0])?, ctx.clone())?;
     /// // `...->...` keeps every axis the ellipsis covers.
     /// let notation = EinsumNotation::new(&[&[EinsumAxis::Ellipsis]], &[EinsumAxis::Ellipsis]);
-    /// let same = ctx.with_eager_session(|session| session.einsum_notation(&[&x], &notation))??;
+    /// let same = ctx.with_eager_session(|session| session.einsum_notation(&[&x], &notation))?;
     /// assert_eq!(same.value()?.as_slice::<f64>()?, &[2.0, 3.0]);
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
@@ -129,7 +130,7 @@ pub trait EagerSessionEinsumExt {
     /// let ctx = EagerRuntime::new()?;
     /// let x = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0])?, ctx.clone())?;
     /// let subscripts = EinsumSubscripts::new(&[&[0], &[0]], &[]);
-    /// let dot = ctx.with_eager_session(|session| session.einsum_subscripts(&[&x, &x], &subscripts))??;
+    /// let dot = ctx.with_eager_session(|session| session.einsum_subscripts(&[&x, &x], &subscripts))?;
     /// assert_eq!(dot.value()?.as_slice::<f64>()?, &[13.0]);
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
@@ -157,7 +158,7 @@ pub trait EagerSessionEinsumExt {
     /// let ctx = EagerRuntime::new()?;
     /// let a = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6])?, ctx.clone())?;
     /// let b = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![3, 4], vec![1.0_f64; 12])?, ctx.clone())?;
-    /// let c = ctx.with_eager_session(|session| session.tensordot(&a, &b, TensorDotAxes::Count(1)))??;
+    /// let c = ctx.with_eager_session(|session| session.tensordot(&a, &b, TensorDotAxes::Count(1)))?;
     /// assert_eq!(c.shape(), &[2, 4]);
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
