@@ -118,6 +118,8 @@ class BuildArtifactContracts(unittest.TestCase):
         ):
             with self.subTest(dependency=name):
                 self.assertEqual(dependencies[name]["rev"], revision)
+                # Exact, so a newer registry release cannot replace the pinned content.
+                self.assertEqual(dependencies[name]["version"], "=0.4.5")
 
         self.assertNotIn("strided-einsum2", dependencies)
 
