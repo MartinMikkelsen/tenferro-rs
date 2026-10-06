@@ -389,7 +389,6 @@ fn eager_compact_qr_executes_on_cpu() {
                 state.q_columns(0..2, QrOptions::default(), session)?,
             ))
         })
-        .unwrap()
         .unwrap();
     assert_eq!(r.shape(), &[2, 2]);
     assert_eq!(q.shape(), &[3, 2]);
@@ -437,7 +436,6 @@ fn eager_borrowed_compact_qr_append_import_and_ad() {
             let loss = session.reduce_sum(&r, None)?;
             Ok::<_, tenferro_ad::Error>((q, r, imported_r, loss))
         })
-        .unwrap()
         .unwrap();
     assert_eq!(q.shape(), &[3, 2]);
     assert_eq!(r.shape(), &[2, 2]);

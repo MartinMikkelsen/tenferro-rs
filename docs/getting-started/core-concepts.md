@@ -126,7 +126,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let squared = session.mul(&x, &x)?;
         let loss = session.reduce_sum(&squared, Some(&[0]))?;
         Ok::<_, tenferro_ad::Error>((x, loss))
-    })??;
+    })?;
     loss.backward()?;
 
     assert_eq!(x.grad()?.unwrap().as_slice::<f64>().unwrap(), &[2.0, 4.0]);

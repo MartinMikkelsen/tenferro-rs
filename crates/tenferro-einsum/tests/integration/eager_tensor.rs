@@ -14,7 +14,7 @@ use tenferro_tensor::ValidationError;
 fn einsum(inputs: &[&EagerTensor], subscripts: &str) -> tenferro_einsum::Result<EagerTensor> {
     inputs[0]
         .runtime()
-        .with_eager_session(|s| s.einsum(inputs, subscripts))?
+        .with_eager_session(|s| s.einsum(inputs, subscripts))
 }
 
 #[allow(dead_code)]
@@ -24,7 +24,7 @@ fn einsum_notation(
 ) -> tenferro_einsum::Result<EagerTensor> {
     inputs[0]
         .runtime()
-        .with_eager_session(|s| s.einsum_notation(inputs, notation))?
+        .with_eager_session(|s| s.einsum_notation(inputs, notation))
 }
 
 #[allow(dead_code)]
@@ -34,7 +34,7 @@ fn einsum_subscripts(
 ) -> tenferro_einsum::Result<EagerTensor> {
     inputs[0]
         .runtime()
-        .with_eager_session(|s| s.einsum_subscripts(inputs, subscripts))?
+        .with_eager_session(|s| s.einsum_subscripts(inputs, subscripts))
 }
 
 #[allow(dead_code)]
@@ -44,7 +44,7 @@ fn tensordot(
     axes: TensorDotAxes<'_>,
 ) -> tenferro_einsum::Result<EagerTensor> {
     lhs.runtime()
-        .with_eager_session(|s| s.tensordot(lhs, rhs, axes))?
+        .with_eager_session(|s| s.tensordot(lhs, rhs, axes))
 }
 
 fn f64_data(tensor: &Tensor) -> &[f64] {
@@ -306,7 +306,6 @@ fn eager_tensor_einsum_ellipsis_backward_matches_expected_values() {
     let c = einsum(&[&a, &b], "...ij,...jk->...ik").unwrap();
     let loss = ctx
         .with_eager_session(|s| s.reduce_sum(&c, Some(&[0, 1, 2])))
-        .unwrap()
         .unwrap();
     let _ = loss.backward().unwrap();
 
@@ -337,7 +336,6 @@ fn eager_tensor_einsum_backward_populates_input_grads() {
     let c = einsum(&[&a, &b], "ij,jk->ik").unwrap();
     let loss = ctx
         .with_eager_session(|s| s.reduce_sum(&c, Some(&[0, 1])))
-        .unwrap()
         .unwrap();
     let _cotangents = loss.backward().unwrap();
 
@@ -373,7 +371,6 @@ fn eager_tensor_einsum_repeated_backward_accumulates_across_calls() {
     let c = einsum(&[&a, &b], "ij,jk->ik").unwrap();
     let loss = ctx
         .with_eager_session(|s| s.reduce_sum(&c, Some(&[0, 1])))
-        .unwrap()
         .unwrap();
     let _ = loss.backward().unwrap();
     assert_eq!(
@@ -388,7 +385,6 @@ fn eager_tensor_einsum_repeated_backward_accumulates_across_calls() {
     let c = einsum(&[&a, &b], "ij,jk->ik").unwrap();
     let loss = ctx
         .with_eager_session(|s| s.reduce_sum(&c, Some(&[0, 1])))
-        .unwrap()
         .unwrap();
     let _ = loss.backward().unwrap();
     assert_eq!(
@@ -418,7 +414,6 @@ fn eager_tensor_einsum_context_clear_grads_resets_all_live_leaves() {
     let c = einsum(&[&a, &b], "ij,jk->ik").unwrap();
     let loss = ctx
         .with_eager_session(|s| s.reduce_sum(&c, Some(&[0, 1])))
-        .unwrap()
         .unwrap();
     let _ = loss.backward().unwrap();
 
@@ -430,7 +425,6 @@ fn eager_tensor_einsum_context_clear_grads_resets_all_live_leaves() {
     let c = einsum(&[&a, &b], "ij,jk->ik").unwrap();
     let loss = ctx
         .with_eager_session(|s| s.reduce_sum(&c, Some(&[0, 1])))
-        .unwrap()
         .unwrap();
     let _ = loss.backward().unwrap();
 
@@ -464,7 +458,7 @@ fn eager_einsum_paths_follow_the_calling_threads_no_grad() {
         let _guard = ctx.no_grad();
         let binary = einsum(&[&a, &b], "ij,jk->ik").unwrap();
         let nary = einsum(&[&a, &b, &c], "ij,jk,kl->il").unwrap();
-        let session = ctx.with_eager_session(|s| s.neg(&a)).unwrap().unwrap();
+        let session = ctx.with_eager_session(|s| s.neg(&a)).unwrap();
         assert!(!binary.tracks_grad());
         assert!(!nary.tracks_grad());
         assert!(!session.tracks_grad());
@@ -475,7 +469,6 @@ fn eager_einsum_paths_follow_the_calling_threads_no_grad() {
     assert_eq!(f64_data(&nary.to_tensor().unwrap()), &[12.0; 4]);
     let loss = ctx
         .with_eager_session(|s| s.reduce_sum(&nary, Some(&[0, 1])))
-        .unwrap()
         .unwrap();
     let _ = loss.backward().unwrap();
     // d(sum(a b c))/da[i, j] = sum_{k, l} b[j, k] c[k, l] = 8 for all-ones inputs.

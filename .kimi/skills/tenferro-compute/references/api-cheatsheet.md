@@ -55,7 +55,7 @@ let x = runtime.variable_from(Tensor::from_vec_col_major(
 let loss = runtime.with_eager_session(|s| {
     let prediction = s.mul(&x, &x)?;
     s.reduce_sum(&prediction, Some(&[0]))
-})??;
+})?;
 loss.backward()?;
 assert_eq!(
     x.grad()?.expect("tracked variable should receive a gradient").as_slice::<f64>()?,
@@ -66,7 +66,7 @@ assert_eq!(
 
 Common import recipes:
 
-- `tenferro_einsum::EagerSessionEinsumExt` for borrowed eager einsum and `tensordot` (`runtime.with_eager_session(|s| s.einsum(&[&a, &b], "ij,jk->ik"))??`).
+- `tenferro_einsum::EagerSessionEinsumExt` for borrowed eager einsum and `tensordot` (`runtime.with_eager_session(|s| s.einsum(&[&a, &b], "ij,jk->ik"))?`).
 - `tenferro_linalg::EagerSessionLinalgExt` for borrowed eager linear algebra (`EagerTensorLinalgExt::solve` remains a calling-thread `no_grad` exception).
 - `tenferro_ad::{EagerRuntime, Tensor}` for eager values and runtime AD.
 

@@ -66,7 +66,12 @@ fn placement_bridge_source_keeps_runtime_and_executor_entry_boundaries_single() 
     let eager_source = include_str!("../../eager.rs");
     let eager_backend_source = include_str!("../../eager_backend.rs");
     let on_cpu = item_body(eager_source, "    pub fn on_cpu(");
-    let with_session = item_body(eager_source, "    pub fn with_eager_session<R: Send>(");
+    // The CPU-placement bridge's `with_eager_session` precedes the
+    // `EagerRuntime` method of the same signature in `eager.rs`.
+    let with_session = item_body(
+        eager_source,
+        "    pub fn with_eager_session<T: Send, E: From<Error> + Send>(",
+    );
     let refresh = item_body(eager_source, "    fn refresh_runtime_selection(&mut self)");
     let select_cpu_runtime = item_body(eager_source, "fn select_cpu_runtime(");
     let snapshot = item_body(
@@ -89,7 +94,9 @@ fn placement_bridge_source_keeps_runtime_and_executor_entry_boundaries_single() 
     assert!(!on_cpu.contains(".install("));
 
     assert_eq!(
-        with_session.matches("refresh_runtime_selection()?").count(),
+        with_session
+            .matches("refresh_runtime_selection().map_err(E::from)?")
+            .count(),
         1
     );
     assert_eq!(with_session.matches("with_backend_session(f)").count(), 1);

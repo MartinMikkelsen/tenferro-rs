@@ -190,7 +190,7 @@ let y = EagerTensor::requires_grad_in(Tensor::from_vec_col_major(vec![2], vec![3
 let make_loss = || ctx.with_eager_session(|s| {
     let product = s.mul(&x, &y)?;
     s.reduce_sum(&product, Some(&[0]))
-}).unwrap().unwrap();
+}).unwrap();
 let loss = make_loss();
 loss.backward().unwrap();
 assert_eq!(x.grad().unwrap().unwrap().as_slice::<f64>().unwrap(), &[3.0, 4.0]);
@@ -234,7 +234,7 @@ let seed = EagerTensor::from_tensor_in(
     ctx,
 ).unwrap();
 
-let y = x.runtime().with_eager_session(|s| s.mul(&x, &x))??;
+let y = x.runtime().with_eager_session(|s| s.mul(&x, &x))?;
 y.backward_with(&seed).unwrap();
 assert_eq!(x.grad().unwrap().unwrap().as_slice::<f64>().unwrap(), &[4.0, 12.0]);
 Ok(())
@@ -257,7 +257,7 @@ let x = EagerTensor::requires_grad_in(
     Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0]).unwrap(),
     ctx.clone(),
 ).unwrap();
-let y = ctx.with_eager_session(|s| s.mul(&x, &x))??;
+let y = ctx.with_eager_session(|s| s.mul(&x, &x))?;
 let seed = EagerTensor::from_tensor_in(
     Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 1.0]).unwrap(),
     ctx.clone(),
@@ -302,7 +302,7 @@ let tangent = EagerTensor::from_tensor_in(
 let loss = ctx.with_eager_session(|s| {
     let square = s.mul(&x, &x)?;
     s.mul(&square, &x)
-})??;
+})?;
 let grad = ctx.grad(&loss, &x).unwrap();
 let hvp = ctx.jvp(&grad, &x, &tangent).unwrap();
 
@@ -333,7 +333,7 @@ let x = EagerTensor::requires_grad_in(
 let y = ctx.with_eager_session(|s| {
     let _guard = ctx.no_grad();
     s.mul(&x, &x)
-})??;
+})?;
 assert!(!y.tracks_grad());
 Ok(())
 }
@@ -360,14 +360,14 @@ let x = EagerTensor::requires_grad_in(
     ctx.clone(),
 ).unwrap();
 
-let y = ctx.with_eager_session(|session| session.matmul(&a, &x))??;
+let y = ctx.with_eager_session(|session| session.matmul(&a, &x))?;
 let y_tensor = y.to_tensor().unwrap();
 assert_eq!(y_tensor.as_slice::<f64>().unwrap(), &[23.0, 34.0]);
 
 let loss = ctx.with_eager_session(|s| {
     let squared = s.mul(&y, &y)?;
     s.reduce_sum(&squared, Some(&[0, 1]))
-})??;
+})?;
 let loss_tensor = loss.to_tensor().unwrap();
 assert_eq!(loss_tensor.as_slice::<f64>().unwrap(), &[1685.0]);
 
@@ -497,7 +497,7 @@ let x = ctx.variable_from(Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0,
 let y = ctx.with_eager_session(|s| {
     let squared = s.mul(&x, &x)?;
     s.reduce_sum(&squared, Some(&[0]))
-})??;
+})?;
 
 y.backward().unwrap();
 assert_eq!(x.grad().unwrap().unwrap().as_slice::<f64>().unwrap(), &[2.0, 4.0, 6.0]);
@@ -567,7 +567,7 @@ use tenferro_ad::{EagerRuntime, Tensor};
 fn main() -> Result<(), Box<dyn std::error::Error>> {
 let ctx = EagerRuntime::new()?;
 let x = ctx.variable_from(Tensor::from_vec_col_major(vec![3], vec![0.0_f64, 1.0, 2.0]).unwrap()).unwrap();
-let y = ctx.with_eager_session(|session| session.exp(&x))??;
+let y = ctx.with_eager_session(|session| session.exp(&x))?;
 
 let y_tensor = y.to_tensor().unwrap();
 let data = y_tensor.as_slice::<f64>().unwrap();
@@ -619,7 +619,7 @@ use tenferro_ad::{EagerRuntime, Tensor};
 fn main() -> Result<(), Box<dyn std::error::Error>> {
 let ctx = EagerRuntime::new()?;
 let v = ctx.variable_from(Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]).unwrap()).unwrap();
-let repeated = ctx.with_eager_session(|s| s.broadcast_in_dim(&v, &[3, 2], &[0]))??;
+let repeated = ctx.with_eager_session(|s| s.broadcast_in_dim(&v, &[3, 2], &[0]))?;
 
 assert_eq!(repeated.shape(), &[3, 2]);
 assert_eq!(repeated.to_tensor().unwrap().as_slice::<f64>().unwrap(), &[1.0, 2.0, 3.0, 1.0, 2.0, 3.0]);

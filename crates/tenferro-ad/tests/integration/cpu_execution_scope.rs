@@ -96,7 +96,6 @@ fn shared_scope_eager_and_prepared_matmul_primal_jvp_vjp() {
             let check = || {
                 let output = eager
                     .with_eager_session(|s| s.dot_general(&x, &y, config.clone()))
-                    .unwrap()
                     .unwrap();
                 assert_eq!(output.shape(), output_shape);
                 assert_values(&output.to_tensor().unwrap(), &primal);
@@ -115,7 +114,6 @@ fn shared_scope_eager_and_prepared_matmul_primal_jvp_vjp() {
                 x.clear_grad().unwrap();
                 eager
                     .with_eager_session(|s| s.reduce_sum(&output, None))
-                    .unwrap()
                     .unwrap()
                     .backward()
                     .unwrap();
@@ -164,7 +162,6 @@ fn shared_scope_elementwise_reduction_ad_and_error_recovery() {
                         let squared = s.mul(&x, &x)?;
                         s.reduce_sum(&squared, None)
                     })
-                    .unwrap()
                     .unwrap();
                 assert_values(
                     &loss.to_tensor().unwrap(),
@@ -180,7 +177,6 @@ fn shared_scope_elementwise_reduction_ad_and_error_recovery() {
                 );
                 assert!(eager
                     .with_eager_session(|s| s.reshape(&x, [n + 1]))
-                    .unwrap()
                     .is_err());
                 assert_values(&x.to_tensor().unwrap(), &data);
             };

@@ -156,7 +156,7 @@ impl HouseholderQr<tenferro_ad::EagerTensor> {
     ///     let q = s.constant_from(Tensor::from_vec_col_major([1, 1], vec![1.0_f64])?)?;
     ///     let r = s.constant_from(Tensor::from_vec_col_major([1, 1], vec![2.0_f64])?)?;
     ///     HouseholderQr::<EagerTensor>::from_factors(&q, &r, s)
-    /// })??;
+    /// })?;
     /// assert!(format!("{state:?}").starts_with("HouseholderQr"));
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
@@ -188,7 +188,7 @@ impl HouseholderQr<tenferro_ad::EagerTensor> {
     ///     let a = s.constant_from(Tensor::from_vec_col_major([2, 1], vec![1.0_f64, 0.0])?)?;
     ///     let b = s.constant_from(Tensor::from_vec_col_major([2, 1], vec![0.0_f64, 1.0])?)?;
     ///     s.householder_qr(&a)?.append_columns(&b, s)
-    /// })??;
+    /// })?;
     /// assert!(format!("{state:?}").starts_with("HouseholderQr"));
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
@@ -219,7 +219,7 @@ impl HouseholderQr<tenferro_ad::EagerTensor> {
     /// let r = ctx.with_eager_session(|s| {
     ///     let a = s.constant_from(Tensor::from_vec_col_major([2, 1], vec![1.0_f64, 2.0])?)?;
     ///     s.householder_qr(&a)?.r(QrOptions::default(), s)
-    /// })??;
+    /// })?;
     /// assert_eq!(r.shape(), &[1, 1]);
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
@@ -255,7 +255,7 @@ impl HouseholderQr<tenferro_ad::EagerTensor> {
     /// let q = ctx.with_eager_session(|s| {
     ///     let a = s.constant_from(Tensor::from_vec_col_major([2, 1], vec![1.0_f64, 2.0])?)?;
     ///     s.householder_qr(&a)?.q_columns(0..1, QrOptions::default(), s)
-    /// })??;
+    /// })?;
     /// assert_eq!(q.shape(), &[2, 1]);
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```

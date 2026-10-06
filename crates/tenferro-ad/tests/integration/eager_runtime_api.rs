@@ -49,7 +49,6 @@ fn eager_runtime_replaces_eager_context_public_name() {
             let squared = s.mul(&x, &x)?;
             s.reduce_sum(&squared, Some(&[0]))
         })
-        .unwrap()
         .unwrap();
 
     loss.backward().unwrap();

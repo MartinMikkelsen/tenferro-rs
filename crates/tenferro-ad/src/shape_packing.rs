@@ -204,7 +204,7 @@ fn apply_slice_axis_config(
 ///     Tensor::from_vec_col_major(vec![3, 4], vec![0.0_f64; 12]).unwrap(),
 ///     ctx,
 /// ).unwrap();
-/// let y = x.runtime().with_eager_session(|s| x.slice_builder().axis(0, 0..2).axis_step(1, 0..4, 2).apply(s))??;
+/// let y = x.runtime().with_eager_session(|s| x.slice_builder().axis(0, 0..2).axis_step(1, 0..4, 2).apply(s))?;
 /// assert_eq!(y.shape(), &[2, 2]);
 /// # Ok::<(), tenferro_ad::Error>(())
 /// ```
@@ -234,7 +234,7 @@ impl<'a> EagerSliceBuilder<'a> {
     ///     Tensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap(),
     ///     ctx,
     /// ).unwrap();
-    /// let y = x.runtime().with_eager_session(|s| x.slice_builder().axis(0, 1..3).apply(s))??;
+    /// let y = x.runtime().with_eager_session(|s| x.slice_builder().axis(0, 1..3).apply(s))?;
     /// assert_eq!(y.shape(), &[2]);
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
@@ -259,7 +259,7 @@ impl<'a> EagerSliceBuilder<'a> {
     ///     Tensor::from_vec_col_major(vec![5], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0]).unwrap(),
     ///     ctx,
     /// ).unwrap();
-    /// let y = x.runtime().with_eager_session(|s| x.slice_builder().axis_step(0, 0..5, 2).apply(s))??;
+    /// let y = x.runtime().with_eager_session(|s| x.slice_builder().axis_step(0, 0..5, 2).apply(s))?;
     /// assert_eq!(y.shape(), &[3]);
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
@@ -281,7 +281,7 @@ impl<'a> EagerSliceBuilder<'a> {
     ///     Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]).unwrap(),
     ///     ctx,
     /// ).unwrap();
-    /// let y = x.runtime().with_eager_session(|s| x.slice_builder().take_axis(0, &[2, 0]).apply(s))??;
+    /// let y = x.runtime().with_eager_session(|s| x.slice_builder().take_axis(0, &[2, 0]).apply(s))?;
     /// assert_eq!(y.shape(), &[2]);
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
@@ -305,7 +305,7 @@ impl<'a> EagerSliceBuilder<'a> {
     ///     Tensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap(),
     ///     ctx,
     /// ).unwrap();
-    /// let y = x.runtime().with_eager_session(|s| x.slice_builder().axis(0, 1..4).apply(s))??;
+    /// let y = x.runtime().with_eager_session(|s| x.slice_builder().axis(0, 1..4).apply(s))?;
     /// assert_eq!(y.shape(), &[3]);
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
@@ -352,7 +352,7 @@ impl EagerTensor {
     ///     Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]).unwrap(),
     ///     ctx,
     /// ).unwrap();
-    /// let y = x.runtime().with_eager_session(|s| x.slice_builder().axis(0, 0..2).apply(s))??;
+    /// let y = x.runtime().with_eager_session(|s| x.slice_builder().axis(0, 0..2).apply(s))?;
     /// assert_eq!(y.shape(), &[2]);
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
@@ -371,7 +371,7 @@ impl EagerSession<'_> {
     /// let result = ctx.with_eager_session(|s| {
     ///     let x = s.constant_from(Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0])?)?;
     ///     s.index_select(&x, -1, &[2, 0])
-    /// })??;
+    /// })?;
     /// assert_eq!(result.value()?.as_slice::<f64>()?, &[3.0, 1.0]);
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
@@ -398,7 +398,7 @@ impl EagerSession<'_> {
     /// let result = ctx.with_eager_session(|s| {
     ///     let x = s.constant_from(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?)?;
     ///     s.take_axis(&x, 0, &[1])
-    /// })??;
+    /// })?;
     /// assert_eq!(result.value()?.as_slice::<f64>()?, &[2.0]);
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
@@ -430,7 +430,7 @@ impl EagerSession<'_> {
     /// let result = ctx.with_eager_session(|s| {
     ///     let x = s.constant_from(Tensor::from_vec_col_major(vec![2, 1], vec![1.0_f64, 2.0])?)?;
     ///     s.take_rows(&x, &[1])
-    /// })??;
+    /// })?;
     /// assert_eq!(result.value()?.as_slice::<f64>()?, &[2.0]);
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
@@ -449,7 +449,7 @@ impl EagerSession<'_> {
     /// let result = ctx.with_eager_session(|s| {
     ///     let x = s.constant_from(Tensor::from_vec_col_major(vec![1, 2], vec![1.0_f64, 2.0])?)?;
     ///     s.take_cols(&x, &[1])
-    /// })??;
+    /// })?;
     /// assert_eq!(result.value()?.as_slice::<f64>()?, &[2.0]);
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
@@ -468,7 +468,7 @@ impl EagerSession<'_> {
     /// let result = ctx.with_eager_session(|s| {
     ///     let x = s.constant_from(Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0])?)?;
     ///     s.take_block(&x, &[1], &[0])
-    /// })??;
+    /// })?;
     /// assert_eq!(result.value()?.as_slice::<f64>()?, &[2.0]);
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
@@ -493,7 +493,7 @@ impl EagerSession<'_> {
     /// let result = ctx.with_eager_session(|s| {
     ///     let x = s.constant_from(Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0])?)?;
     ///     s.slice_axis(&x, 0, 1..3)
-    /// })??;
+    /// })?;
     /// assert_eq!(result.value()?.as_slice::<f64>()?, &[2.0, 3.0]);
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
@@ -518,7 +518,7 @@ impl EagerSession<'_> {
     ///     let a = s.constant_from(Tensor::from_vec_col_major(vec![], vec![1.0_f64])?)?;
     ///     let b = s.constant_from(Tensor::from_vec_col_major(vec![], vec![2.0_f64])?)?;
     ///     s.stack(&[&a, &b], -1)
-    /// })??;
+    /// })?;
     /// assert_eq!(result.value()?.as_slice::<f64>()?, &[1.0, 2.0]);
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```

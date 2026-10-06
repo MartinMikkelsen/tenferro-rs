@@ -21,7 +21,6 @@ fn backward_shares_one_vjp_across_leaves_and_separates_active_masks() {
             let product = s.mul(&x, &y)?;
             s.reduce_sum(&product, Some(&[0]))
         })
-        .unwrap()
         .unwrap();
     let first = loss.backward().unwrap();
     assert_eq!(first.len(), 2);

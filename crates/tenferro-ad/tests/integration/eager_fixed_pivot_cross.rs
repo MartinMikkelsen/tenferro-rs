@@ -44,7 +44,6 @@ fn take_axis_rows_cols_and_block_select_static_indices() {
 
     let rows = ctx
         .with_eager_session(|session| session.take_rows(&x, &[2, 0]))
-        .unwrap()
         .unwrap();
     assert_eq!(rows.shape(), &[2, 4]);
     assert_close_slice(
@@ -55,7 +54,6 @@ fn take_axis_rows_cols_and_block_select_static_indices() {
 
     let cols = ctx
         .with_eager_session(|session| session.take_cols(&x, &[3, 1]))
-        .unwrap()
         .unwrap();
     assert_eq!(cols.shape(), &[3, 2]);
     assert_close_slice(
@@ -66,7 +64,6 @@ fn take_axis_rows_cols_and_block_select_static_indices() {
 
     let block = ctx
         .with_eager_session(|session| session.take_block(&x, &[2, 0], &[3, 1]))
-        .unwrap()
         .unwrap();
     assert_eq!(block.shape(), &[2, 2]);
     assert_close_slice(
@@ -77,7 +74,6 @@ fn take_axis_rows_cols_and_block_select_static_indices() {
 
     let axis = ctx
         .with_eager_session(|session| session.take_axis(&x, 1, &[0, 2]))
-        .unwrap()
         .unwrap();
     assert_eq!(axis.shape(), &[3, 2]);
     assert_close_slice(
@@ -112,14 +108,12 @@ fn take_block_backward_accumulates_to_source() {
 
     let block = ctx
         .with_eager_session(|session| session.take_block(&x, &[2, 0, 2], &[3, 1]))
-        .unwrap()
         .unwrap();
     let loss = ctx
         .with_eager_session(|s| {
             let weighted = s.mul(&block, &weights)?;
             s.reduce_sum(&weighted, Some(&[0, 1]))
         })
-        .unwrap()
         .unwrap();
     let _ = loss.backward().unwrap();
 

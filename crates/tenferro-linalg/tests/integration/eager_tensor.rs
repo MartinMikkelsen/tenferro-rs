@@ -14,7 +14,7 @@ use tenferro_linalg::{
 };
 
 fn eager_svd(input: &EagerTensor) -> tenferro_ad::Result<(EagerTensor, EagerTensor, EagerTensor)> {
-    input.runtime().with_eager_session(|s| s.svd(input))?
+    input.runtime().with_eager_session(|s| s.svd(input))
 }
 
 fn test_ctx() -> Arc<EagerRuntime> {
@@ -57,7 +57,6 @@ fn eager_rank_revealing_qr_keeps_metadata_in_runtime() {
             assert!(invalid.to_string().contains("rtol"));
             session.rank_revealing_qr(&input, RankRevealingQrOptions::default().rtol(1.0e-12))
         })
-        .unwrap()
         .unwrap();
     assert!(Arc::ptr_eq(result.q.runtime(), &runtime));
     assert!(Arc::ptr_eq(result.r.runtime(), &runtime));
@@ -125,7 +124,6 @@ fn weighted_square_sum(input: &EagerTensor, weights: Vec<f64>) -> EagerTensor {
             let weighted = s.mul(&squared, &weights)?;
             s.reduce_sum(&weighted, Some(&axes))
         })
-        .unwrap()
         .unwrap()
 }
 
@@ -419,7 +417,6 @@ fn eager_decomposition_options_execute_and_return_expected_shapes() {
                     .derivative_eps(1.0e-10),
             )
         })
-        .unwrap()
         .unwrap();
     let (eigh_values, eigh_vectors) = a
         .runtime()
@@ -431,14 +428,12 @@ fn eager_decomposition_options_execute_and_return_expected_shapes() {
                     .derivative_eps(1.0e-10),
             )
         })
-        .unwrap()
         .unwrap();
     let (q, r) = a
         .runtime()
         .with_eager_session(|s| {
             s.qr_with_options(&a, QrOptions::default().gauge(QrGauge::PositiveDiagonal))
         })
-        .unwrap()
         .unwrap();
 
     assert_eq!(u.shape(), &[2, 2]);
@@ -467,7 +462,6 @@ fn svd_saved_outputs_preserve_higher_order_derivatives_after_handles_drop() {
     let loss = s
         .runtime()
         .with_eager_session(|session| session.reduce_sum(&s, Some(&[0])))
-        .unwrap()
         .unwrap();
     drop(s);
     let gradient = ctx.grad(&loss, &a).unwrap();
@@ -489,7 +483,6 @@ fn svd_saved_outputs_preserve_higher_order_derivatives_after_handles_drop() {
         let loss = s
             .runtime()
             .with_eager_session(|session| session.reduce_sum(&s, Some(&[0])))
-            .unwrap()
             .unwrap();
         ctx.grad(&loss, &input)
             .unwrap()
@@ -527,7 +520,6 @@ fn svd_singular_value_sum_backward_does_not_panic() {
     let loss = s
         .runtime()
         .with_eager_session(|session| session.reduce_sum(&s, Some(&[0])))
-        .unwrap()
         .unwrap();
 
     loss.backward().unwrap();
@@ -549,7 +541,6 @@ fn svd_vector_observable_backward_grad_is_finite() {
     let loss = a
         .runtime()
         .with_eager_session(|s| s.add(&u_loss, &vt_loss))
-        .unwrap()
         .unwrap();
 
     loss.backward().unwrap();
@@ -576,7 +567,6 @@ fn incremental_householder_qr_backward_runs_eagerly() {
             let r_sum = session.reduce_sum(&r, Some(&[0, 1]))?;
             session.add(&q_sum, &r_sum)
         })
-        .unwrap()
         .unwrap();
 
     loss.backward().unwrap();
@@ -592,11 +582,7 @@ fn qr_returns_correct_shapes() {
         test_ctx(),
     )
     .unwrap();
-    let (q, r) = a
-        .runtime()
-        .with_eager_session(|s| s.qr(&a))
-        .unwrap()
-        .unwrap();
+    let (q, r) = a.runtime().with_eager_session(|s| s.qr(&a)).unwrap();
 
     assert_eq!(q.shape(), &[2, 2]);
     assert_eq!(r.shape(), &[2, 2]);
@@ -612,7 +598,6 @@ fn cholesky_of_identity() {
     .unwrap();
     let l = ctx
         .with_eager_session(|session| session.cholesky(&a))
-        .unwrap()
         .unwrap();
 
     assert_eq!(l.shape(), &[2, 2]);
@@ -643,7 +628,6 @@ fn borrowed_cholesky_preserves_gradients_and_rejects_foreign_runtime() {
             let loss = session.reduce_sum(&factor, None)?;
             Ok::<_, tenferro_ad::Error>((factor, loss))
         })
-        .unwrap()
         .unwrap();
     assert_eq!(factor.value().unwrap().as_slice::<f64>().unwrap(), &[2.0]);
     assert_eq!(
@@ -685,7 +669,6 @@ fn borrowed_lu_determinants_preserve_gradients_and_runtime() {
             let det = session.det(&input)?;
             Ok::<_, tenferro_ad::Error>((sign, logabs, det))
         })
-        .unwrap()
         .unwrap();
     assert_eq!(sign.value().unwrap().as_slice::<f64>().unwrap(), &[1.0]);
     assert_close_slice(
@@ -746,7 +729,6 @@ fn borrowed_eigenvalues_preserve_value_and_reject_foreign_runtime() {
             ));
             Ok::<_, tenferro_ad::Error>((session.eigvalsh(&input)?, session.eigvals(&input)?))
         })
-        .unwrap()
         .unwrap();
     assert_eq!(f64_data(&hermitian.to_tensor().unwrap()), &[4.0]);
     assert_eq!(
@@ -784,7 +766,6 @@ fn borrowed_qr_and_svd_preserve_values_gradients_and_runtime() {
             let loss = session.reduce_sum(&singular_values, None)?;
             Ok::<_, tenferro_ad::Error>((q, r, singular_values, loss))
         })
-        .unwrap()
         .unwrap();
     let q_value = q.value().unwrap().as_slice::<f64>().unwrap()[0];
     let r_value = r.value().unwrap().as_slice::<f64>().unwrap()[0];
@@ -830,7 +811,6 @@ fn borrowed_norm_preserves_gradient_keepdim_and_runtime() {
             let loss = session.reduce_sum(&norm, None)?;
             Ok::<_, tenferro_ad::Error>((norm, no_op, loss))
         })
-        .unwrap()
         .unwrap();
     assert_eq!(norm.shape(), &[1]);
     assert_close_slice(
@@ -858,7 +838,6 @@ fn borrowed_norm_preserves_gradient_keepdim_and_runtime() {
             let _guard = ctx.no_grad();
             session.norm(&input, None, Some(&[0]), false)
         })
-        .unwrap()
         .unwrap();
     assert!(!guarded.tracks_grad());
 }
@@ -891,7 +870,6 @@ fn borrowed_pseudoinverse_preserves_values_gradients_and_runtime() {
             let loss = session.reduce_sum(&inverse, None)?;
             Ok::<_, tenferro_ad::Error>((inverse, explicit, loss))
         })
-        .unwrap()
         .unwrap();
     assert_close_slice(
         inverse.value().unwrap().as_slice::<f64>().unwrap(),
@@ -953,7 +931,6 @@ fn borrowed_eigendecompositions_preserve_values_gradients_and_runtime() {
             let loss = session.reduce_sum(&values, None)?;
             Ok::<_, tenferro_ad::Error>((values, vectors, general_values, general_vectors, loss))
         })
-        .unwrap()
         .unwrap();
     assert_eq!(values.value().unwrap().as_slice::<f64>().unwrap(), &[4.0]);
     assert_eq!(vectors.shape(), &[1, 1]);
@@ -1015,7 +992,6 @@ fn borrowed_decomposition_options_and_full_svd_validate_in_session() {
             let (full_u, full_s, full_vh) = session.svd_full(&wide)?;
             Ok::<_, tenferro_ad::Error>((values, q, r, full_u, full_s, full_vh))
         })
-        .unwrap()
         .unwrap();
     assert_close_slice(
         values.value().unwrap().as_slice::<f64>().unwrap(),
@@ -1070,7 +1046,6 @@ fn borrowed_lstsq_preserves_values_gradients_and_runtime() {
             let loss = session.reduce_sum(&solution, None)?;
             Ok::<_, tenferro_ad::Error>((solution, loss))
         })
-        .unwrap()
         .unwrap();
     assert_close_slice(
         solution.value().unwrap().as_slice::<f64>().unwrap(),
@@ -1113,7 +1088,6 @@ fn borrowed_inverse_preserves_values_gradients_and_runtime() {
             let loss = session.reduce_sum(&inverse, None)?;
             Ok::<_, tenferro_ad::Error>((inverse, loss))
         })
-        .unwrap()
         .unwrap();
     assert_close_slice(
         inverse.value().unwrap().as_slice::<f64>().unwrap(),
@@ -1139,11 +1113,7 @@ fn lu_returns_expected_factors_for_swap_matrix() {
         test_ctx(),
     )
     .unwrap();
-    let (p, l, u, parity) = a
-        .runtime()
-        .with_eager_session(|s| s.lu(&a))
-        .unwrap()
-        .unwrap();
+    let (p, l, u, parity) = a.runtime().with_eager_session(|s| s.lu(&a)).unwrap();
 
     assert_eq!(p.shape(), &[2, 2]);
     assert_eq!(l.shape(), &[2, 2]);
@@ -1171,7 +1141,6 @@ fn full_piv_lu_solve_returns_expected_solution() {
     let x = a
         .runtime()
         .with_eager_session(|session| session.full_piv_lu_solve(&a, &b))
-        .unwrap()
         .unwrap();
 
     assert_eq!(x.shape(), &[2, 1]);
@@ -1210,7 +1179,6 @@ fn borrowed_full_piv_lu_solve_preserves_ad_and_runtime_identity() {
             let loss = session.reduce_sum(&solution, None)?;
             Ok::<_, tenferro_ad::Error>((solution, loss))
         })
-        .unwrap()
         .unwrap();
     assert_close_slice(
         solution.value().unwrap().as_slice::<f64>().unwrap(),
@@ -1240,7 +1208,6 @@ fn full_piv_lu_reconstructs_input() {
     let (p, l, u, q, parity) = a
         .runtime()
         .with_eager_session(|session| session.full_piv_lu(&a))
-        .unwrap()
         .unwrap();
 
     assert_eq!(p.shape(), &[2, 2]);
@@ -1299,7 +1266,6 @@ fn batched_solve_sum_backward_wrt_matrix_uses_native_batch_layout() {
     let loss = x
         .runtime()
         .with_eager_session(|s| s.reduce_sum(&x, Some(&[0, 1, 2])))
-        .unwrap()
         .unwrap();
     let _ = loss.backward().unwrap();
     let grad = a.grad().unwrap().unwrap();
@@ -1481,7 +1447,6 @@ fn solve_backward_wrt_matrix_and_rhs_matches_analytic_and_finite_difference() {
     let loss = x
         .runtime()
         .with_eager_session(|s| s.reduce_sum(&x, Some(&[0, 1])))
-        .unwrap()
         .unwrap();
     let _ = loss.backward().unwrap();
 
@@ -1593,7 +1558,6 @@ fn solve_forward_and_backward_match_finite_difference_in_f32() {
     let loss = x
         .runtime()
         .with_eager_session(|s| s.reduce_sum(&x, Some(&[0, 1])))
-        .unwrap()
         .unwrap();
     let _ = loss.backward().unwrap();
     let (fd_g_a, fd_g_b) = fd_loss_grad_f64(
@@ -1713,7 +1677,6 @@ fn solve_backward_complex_uses_adjoint_and_matches_finite_difference() {
             let x_sq = s.mul(&x, &conjugated)?;
             s.reduce_sum(&x_sq, Some(&[0, 1]))
         })
-        .unwrap()
         .unwrap();
     let _ = loss.backward().unwrap();
 
@@ -1779,11 +1742,7 @@ fn eigh_returns_expected_values_for_diagonal_matrix() {
         test_ctx(),
     )
     .unwrap();
-    let (values, vectors) = a
-        .runtime()
-        .with_eager_session(|s| s.eigh(&a))
-        .unwrap()
-        .unwrap();
+    let (values, vectors) = a.runtime().with_eager_session(|s| s.eigh(&a)).unwrap();
 
     assert_eq!(values.shape(), &[2]);
     assert_eq!(vectors.shape(), &[2, 2]);
@@ -1798,11 +1757,7 @@ fn eigh_vector_observable_backward_grad_is_finite() {
         ctx,
     )
     .unwrap();
-    let (_values, vectors) = a
-        .runtime()
-        .with_eager_session(|s| s.eigh(&a))
-        .unwrap()
-        .unwrap();
+    let (_values, vectors) = a.runtime().with_eager_session(|s| s.eigh(&a)).unwrap();
     let loss = weighted_square_sum(&vectors, vec![0.6, -0.7, 1.3, 0.4]);
 
     loss.backward().unwrap();
@@ -1836,18 +1791,15 @@ fn mixed_real_constant_and_tracked_complex_eigh_vector_backward() {
     let mixed = real
         .runtime()
         .with_eager_session(|s| s.add(&real, &complex))
-        .unwrap()
         .unwrap();
     let (_values, vectors) = mixed
         .runtime()
         .with_eager_session(|s| s.eigh(&mixed))
-        .unwrap()
         .unwrap();
 
     vectors
         .runtime()
         .with_eager_session(|s| s.reduce_sum(&vectors, Some(&[0, 1])))
-        .unwrap()
         .unwrap()
         .backward()
         .unwrap();
@@ -1861,11 +1813,7 @@ fn eig_returns_expected_complex_values_for_diagonal_matrix() {
         test_ctx(),
     )
     .unwrap();
-    let (values, vectors) = a
-        .runtime()
-        .with_eager_session(|s| s.eig(&a))
-        .unwrap()
-        .unwrap();
+    let (values, vectors) = a.runtime().with_eager_session(|s| s.eig(&a)).unwrap();
 
     assert_eq!(values.shape(), &[2]);
     assert_eq!(vectors.shape(), &[2, 2]);
@@ -1897,7 +1845,6 @@ fn triangular_solve_returns_expected_solution() {
     let x = a
         .runtime()
         .with_eager_session(|s| s.triangular_solve(&a, &b, true, true, false, false))
-        .unwrap()
         .unwrap();
 
     assert_eq!(x.shape(), &[2, 1]);
@@ -1940,7 +1887,6 @@ fn cuda_borrowed_cholesky_stays_resident() {
 
     let factor = runtime
         .with_eager_session(|session| session.cholesky(&input))
-        .unwrap()
         .unwrap();
     let result = download_tensor(backend.runtime(), &factor.to_tensor().unwrap()).unwrap();
     assert_close_slice(
@@ -1968,7 +1914,6 @@ fn cuda_borrowed_qr_and_svd_options_preserve_values() {
             let (_, full_values, _) = session.svd_full(&input)?;
             Ok::<_, tenferro_ad::Error>((q, r, singular_values, full_values))
         })
-        .unwrap()
         .unwrap();
     let q = download_tensor(backend.runtime(), &q.to_tensor().unwrap()).unwrap();
     let r = download_tensor(backend.runtime(), &r.to_tensor().unwrap()).unwrap();
@@ -2021,7 +1966,6 @@ fn cuda_borrowed_householder_qr_append_preserves_residency() {
                 state.r(QrOptions::default(), session)?,
             ))
         })
-        .unwrap()
         .unwrap();
     assert_eq!(
         q.to_tensor().unwrap().placement(),
@@ -2070,10 +2014,10 @@ fn cuda_borrowed_full_piv_lu_requires_separate_owned_fallback() {
     let rhs = EagerTensor::from_tensor_in(rhs, runtime.clone()).unwrap();
     let errors = runtime
         .with_eager_session(|session| {
-            (
+            Ok::<_, tenferro_ad::Error>((
                 session.full_piv_lu(&matrix).unwrap_err(),
                 session.full_piv_lu_solve(&matrix, &rhs).unwrap_err(),
-            )
+            ))
         })
         .unwrap();
     for error in [errors.0, errors.1] {
@@ -2099,7 +2043,6 @@ fn cuda_borrowed_norm_preserves_residency_and_value() {
     let input = EagerTensor::from_tensor_in(device, runtime.clone()).unwrap();
     let result = runtime
         .with_eager_session(|session| session.norm(&input, Some(2.0), Some(&[0]), false))
-        .unwrap()
         .unwrap();
     assert_eq!(
         result.to_tensor().unwrap().placement(),
@@ -2121,10 +2064,10 @@ fn cuda_borrowed_pseudoinverse_reports_unsupported_bool_intermediate() {
     let input = EagerTensor::from_tensor_in(device, runtime.clone()).unwrap();
     let (default_error, explicit_error) = runtime
         .with_eager_session(|session| {
-            (
+            Ok::<_, tenferro_ad::Error>((
                 session.pinv(&input).unwrap_err(),
                 session.pinv_with_rtol(&input, 1e-12).unwrap_err(),
-            )
+            ))
         })
         .unwrap();
     for error in [default_error, explicit_error] {
@@ -2153,7 +2096,6 @@ fn cuda_borrowed_determinants_and_inverse_preserve_value() {
             let inverse = session.inv(&input)?;
             Ok::<_, tenferro_ad::Error>((sign, logabs, det, inverse))
         })
-        .unwrap()
         .unwrap();
     for (actual, expected) in [(sign, 1.0), (logabs, 6.0_f64.ln()), (det, 6.0)] {
         let host = download_tensor(backend.runtime(), &actual.to_tensor().unwrap()).unwrap();
@@ -2184,7 +2126,6 @@ fn cuda_eager_qr_and_svd_f64_stay_resident_and_reconstruct() {
             let (u, s, vt) = session.svd(&input)?;
             Ok::<_, tenferro_ad::Error>((q, r, rrqr, u, s, vt))
         })
-        .unwrap()
         .unwrap();
     for output in [&q, &r, &rrqr.q, &rrqr.r, &u, &s, &vt] {
         assert_eq!(output.runtime().id(), runtime.id());
@@ -2251,7 +2192,6 @@ fn cuda_eager_qr_and_svd_c64_stay_resident_and_reconstruct() {
             let (u, s, vt) = session.svd(&input)?;
             Ok::<_, tenferro_ad::Error>((q, r, u, s, vt))
         })
-        .unwrap()
         .unwrap();
     for output in [&q, &r, &u, &s, &vt] {
         assert_eq!(output.runtime().id(), runtime.id());
@@ -2341,7 +2281,6 @@ fn tracked_batched_solve_backward_matches_finite_diff() {
             let squared = s.mul(&x, &x)?;
             s.reduce_sum(&squared, Some(&[0, 1, 2]))
         })
-        .unwrap()
         .unwrap();
     let _ = loss.backward().unwrap();
     let grad_a = a.grad().unwrap().unwrap().to_tensor().unwrap();

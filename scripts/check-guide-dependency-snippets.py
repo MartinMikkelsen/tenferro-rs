@@ -63,7 +63,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let ctx = EagerRuntime::new()?;
     let u = ctx.variable_from(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?)?;
     let v = ctx.variable_from(Tensor::from_vec_col_major(vec![3], vec![3.0_f64, 4.0, 5.0])?)?;
-    let outer = ctx.with_eager_session(|s| s.einsum(&[&u, &v], "i,j->ij"))??;
+    let outer = ctx.with_eager_session(|s| s.einsum(&[&u, &v], "i,j->ij"))?;
     assert_eq!(outer.shape(), &[2, 3]);
 
     Ok(())

@@ -181,7 +181,7 @@ fn placement_bound_type_is_send_sync_and_callback_may_borrow_stack_data() {
     let borrowed = cpu
         .with_eager_session(|_| {
             calls += 1;
-            Ok(label.as_str())
+            Ok::<_, RuntimeError>(label.as_str())
         })
         .unwrap();
 
@@ -217,14 +217,15 @@ fn fallible_external_session_enters_each_core_operation_exactly_once() {
     let runtime = EagerRuntime::with_cpu_backend(external_backend(Arc::clone(&counters))).unwrap();
     let mut cpu = runtime.on_cpu(placement()).unwrap();
 
-    cpu.with_eager_session(|_| Ok(())).unwrap();
+    cpu.with_eager_session(|_| Ok::<(), RuntimeError>(()))
+        .unwrap();
     assert_eq!(counters.installs.load(Ordering::Relaxed), 0);
     cpu.with_eager_session(add_one).unwrap();
     assert_eq!(counters.installs.load(Ordering::Relaxed), 1);
     cpu.with_eager_session(|session| {
         add_one(session)?;
         add_one(session)?;
-        Ok(())
+        Ok::<(), RuntimeError>(())
     })
     .unwrap();
 
@@ -260,7 +261,7 @@ fn callback_error_and_panic_release_the_session_for_reuse() {
     let mut cpu = runtime.on_cpu(placement()).unwrap();
 
     let error = cpu
-        .with_eager_session::<()>(|_| {
+        .with_eager_session::<(), RuntimeError>(|_| {
             Err(RuntimeError::unsupported(
                 "placement_bound_callback",
                 ErrorPhase::Execution,
@@ -272,7 +273,8 @@ fn callback_error_and_panic_release_the_session_for_reuse() {
     cpu.with_eager_session(add_one).unwrap();
 
     let panicked = catch_unwind(AssertUnwindSafe(|| {
-        let _ = cpu.with_eager_session::<()>(|_| panic!("intentional callback panic"));
+        let _ =
+            cpu.with_eager_session::<(), RuntimeError>(|_| panic!("intentional callback panic"));
     }));
     assert!(panicked.is_err());
     cpu.with_eager_session(add_one).unwrap();
@@ -291,9 +293,11 @@ fn same_runtime_eager_reentry_is_rejected_without_deadlock_and_then_recovers() {
 
     let nested = cpu
         .with_eager_session(|_| {
-            Ok(runtime
-                .with_eager_session(|session| session.add(&eager, &eager))
-                .map(|_| ()))
+            Ok::<_, RuntimeError>(
+                runtime
+                    .with_eager_session(|session| session.add(&eager, &eager))
+                    .map(|_| ()),
+            )
         })
         .unwrap();
     let error = nested.expect_err("same-runtime eager re-entry must be rejected");

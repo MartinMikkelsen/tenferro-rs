@@ -90,7 +90,6 @@ fn ordinary_eager_drop_and_consuming_fft_reuse_without_input_sized_allocations()
         runtime
             .with_eager_session(|s| s.fft(&input, None, 1, FftNorm::Backward))
             .unwrap()
-            .unwrap()
     };
     let first = measured((1, INPUT_BYTES), transform);
     let second = measured((1, INPUT_BYTES), transform);

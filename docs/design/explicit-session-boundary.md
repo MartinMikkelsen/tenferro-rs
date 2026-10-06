@@ -32,7 +32,15 @@ Phase B removed the 31 paired owner one-shots and moved CPU, CUDA and WebGPU
 operation bodies to session types. Runtime and extension helpers use borrowed
 sessions, and compiled instructions share a session across their terminal-value
 probe, execution and last-use reclaim. `EagerRuntime::with_eager_session` now
-lends a runtime-bound `EagerSession` for forward operations. The former
+lends a runtime-bound `EagerSession` for forward operations. Its result is one
+level (#1982): the callback returns `Result<T, E>` with
+`E: From<tenferro_ad::Error>`, and a session-entry or poisoned-lock failure
+reaches the caller as `E::from(..)` of the typed `SessionEntry` /
+`RuntimeState` error, so callers write a single `?`.
+`CpuPlacementBoundEager::with_eager_session` has the same shape. `T` and `E`
+stay `Send` while the CPU session may run the callback on a pool thread; #2004
+owns removing those bounds. `BackendSessionHost::with_backend_session` keeps
+its `Result<R, SessionEntryError>` shape. The former
 `EagerTensor` operation methods and arithmetic overloads were removed, not
 replaced with implicit-entry shims; value/trace handles remain, as do named
 backward and runtime boundaries. Gradient-slot accumulation uses one borrowed

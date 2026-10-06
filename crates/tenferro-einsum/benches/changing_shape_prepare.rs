@@ -78,7 +78,6 @@ fn run_shape_sequence(cases: &[ShapeCase]) {
             .lhs
             .runtime()
             .with_eager_session(|s| s.einsum(&inputs, "abc,cde,ef->abdf"))
-            .unwrap()
             .unwrap();
         consume_f64(&out);
     }

@@ -127,7 +127,6 @@ fn eager_matmul_sum(lhs: &[f64], rhs: &[f64]) -> f64 {
             let product = s.dot_general(&a, &b, matmul_config())?;
             s.reduce_sum(&product, Some(&[0, 1]))
         })
-        .unwrap()
         .unwrap();
     f64_data(&loss.to_tensor().unwrap())[0]
 }
@@ -169,7 +168,6 @@ fn untracked_eager_transpose_is_exposed_as_borrowed_view_until_materialized() {
     let transposed = x
         .runtime()
         .with_eager_session(|s| s.transpose(&x, &[1, 0]))
-        .unwrap()
         .unwrap();
     assert_eq!(transposed.shape(), &[3, 2]);
 
@@ -192,11 +190,7 @@ fn matrix_eager_input_uses_column_major_values() {
         test_ctx(),
     )
     .unwrap();
-    let y = x
-        .runtime()
-        .with_eager_session(|s| s.add(&x, &x))
-        .unwrap()
-        .unwrap();
+    let y = x.runtime().with_eager_session(|s| s.add(&x, &x)).unwrap();
 
     assert_eq!(y.shape(), &[2, 3]);
     assert_eq!(
@@ -221,7 +215,6 @@ fn eager_slice_axis_and_builder_preserve_column_major_values() {
 
     let rows = test_ctx()
         .with_eager_session(|session| session.slice_axis(&x, 0, 1..3))
-        .unwrap()
         .unwrap();
     assert_eq!(rows.shape(), &[2, 4]);
     assert_eq!(
@@ -236,7 +229,6 @@ fn eager_slice_axis_and_builder_preserve_column_major_values() {
                 .axis_step(1, 0..4, 2)
                 .apply(session)
         })
-        .unwrap()
         .unwrap();
     assert_eq!(strided.shape(), &[2, 2]);
     assert_eq!(
@@ -251,7 +243,6 @@ fn eager_slice_axis_and_builder_preserve_column_major_values() {
                 .take_axis(1, &[3, 1, 3])
                 .apply(session)
         })
-        .unwrap()
         .unwrap();
     assert_eq!(mixed.shape(), &[2, 3]);
     assert_eq!(
@@ -264,7 +255,6 @@ fn eager_slice_axis_and_builder_preserve_column_major_values() {
 fn eager_concatenate_empty_reports_typed_validation_error() {
     let err = test_ctx()
         .with_eager_session(|session| session.concatenate(&[], 0))
-        .unwrap()
         .unwrap_err();
 
     assert!(matches!(
@@ -287,7 +277,6 @@ fn eager_reductions_and_reverse_validate_axes_before_ad_recording() {
 
     let out_of_bounds = ctx
         .with_eager_session(|s| s.reduce_sum(&x, Some(&[2])))
-        .unwrap()
         .unwrap_err();
     assert!(matches!(
         out_of_bounds,
@@ -299,19 +288,14 @@ fn eager_reductions_and_reverse_validate_axes_before_ad_recording() {
 
     for err in [
         ctx.with_eager_session(|s| s.reduce_sum(&x, Some(&[0, 0])))
-            .unwrap()
             .unwrap_err(),
         ctx.with_eager_session(|session| session.reduce_prod(&x, Some(&[0, 0])))
-            .unwrap()
             .unwrap_err(),
         ctx.with_eager_session(|session| session.reduce_max(&x, Some(&[0, 0])))
-            .unwrap()
             .unwrap_err(),
         ctx.with_eager_session(|session| session.reduce_min(&x, Some(&[0, 0])))
-            .unwrap()
             .unwrap_err(),
         ctx.with_eager_session(|session| session.reverse(&x, &[0, 0]))
-            .unwrap()
             .unwrap_err(),
     ] {
         assert!(
@@ -354,10 +338,7 @@ fn untracked_eager_intermediate_can_later_feed_tracked_ad() {
         ctx.clone(),
     )
     .unwrap();
-    let scale = ctx
-        .with_eager_session(|s| s.add(&plain, &plain))
-        .unwrap()
-        .unwrap();
+    let scale = ctx.with_eager_session(|s| s.add(&plain, &plain)).unwrap();
     assert!(!scale.tracks_grad());
 
     let x = EagerTensor::requires_grad_in(
@@ -371,7 +352,6 @@ fn untracked_eager_intermediate_can_later_feed_tracked_ad() {
             let weighted = s.mul(&x, &scale)?;
             s.reduce_sum(&weighted, Some(&[0]))
         })
-        .unwrap()
         .unwrap();
     let _ = loss.backward().unwrap();
 
@@ -400,7 +380,7 @@ fn untracked_leaf_functional_vjp_requires_explicit_capture() {
     // Under active-edge semantics (issue #1665 Def 1), an all-untracked chain
     // drops its semantic trace, so functional VJP w.r.t. the untracked leaf is
     // inactive unless the region is wrapped in an explicit capture.
-    let y = ctx.with_eager_session(|s| s.mul(&x, &x)).unwrap().unwrap();
+    let y = ctx.with_eager_session(|s| s.mul(&x, &x)).unwrap();
     assert!(ctx.vjp_optional(&y, &x, &seed).unwrap().is_none());
 
     let y_captured = ctx
@@ -408,7 +388,6 @@ fn untracked_leaf_functional_vjp_requires_explicit_capture() {
             let _capture = ctx.capture_trace();
             s.mul(&x, &x)
         })
-        .unwrap()
         .unwrap();
     let x_captured = x;
     let dx = ctx.vjp(&y_captured, &x_captured, &seed).unwrap();
@@ -455,7 +434,6 @@ fn eager_dot_general_with_conj_uses_untracked_fast_path() {
             let explicit = session.dot_general(&conjugated, &rhs, config)?;
             Ok::<_, RuntimeError>((fused, explicit))
         })
-        .unwrap()
         .unwrap();
 
     assert!(!fused.tracks_grad());
@@ -492,7 +470,6 @@ fn eager_dot_general_with_conj_validates_config_before_untracked_backend_dispatc
         .with_eager_session(|session| {
             session.dot_general_with_conj(&lhs, &rhs, config, true, false)
         })
-        .unwrap()
         .unwrap_err();
 
     assert_eq!(
@@ -516,12 +493,10 @@ fn eager_scalar_scaling_matches_traced_dtype_semantics() {
     .unwrap();
     let scaled = ctx
         .with_eager_session(|session| session.scale_real(&real, 2.5))
-        .unwrap()
         .unwrap();
     assert_eq!(f64_data(&scaled.to_tensor().unwrap()), &[2.5, -5.0]);
     assert!(ctx
         .with_eager_session(|session| session.scale_complex(&real, Complex64::new(0.0, 1.0)))
-        .unwrap()
         .is_err());
 
     let integer = EagerTensor::from_tensor_in(
@@ -532,7 +507,6 @@ fn eager_scalar_scaling_matches_traced_dtype_semantics() {
     assert_eq!(
         ctx.with_eager_session(|session| session.scale_real(&integer, 2.5))
             .unwrap()
-            .unwrap()
             .to_tensor()
             .unwrap()
             .as_slice::<i64>()
@@ -541,7 +515,6 @@ fn eager_scalar_scaling_matches_traced_dtype_semantics() {
     );
     assert!(ctx
         .with_eager_session(|session| session.scale_real(&integer, f64::NAN))
-        .unwrap()
         .is_err());
 
     let complex = EagerTensor::from_tensor_in(
@@ -554,7 +527,6 @@ fn eager_scalar_scaling_matches_traced_dtype_semantics() {
             &ctx.with_eager_session(
                 |session| session.scale_complex(&complex, Complex64::new(0.0, 1.0))
             )
-            .unwrap()
             .unwrap()
             .to_tensor()
             .unwrap()
@@ -573,7 +545,6 @@ fn eager_scalar_scaling_matches_traced_dtype_semantics() {
             let scaled = session.scale_real(&tracked, 2.5)?;
             session.reduce_sum(&scaled, Some(&[0]))
         })
-        .unwrap()
         .unwrap();
     loss.backward().unwrap();
     assert_eq!(
@@ -630,7 +601,6 @@ fn eager_gather_keeps_indices_integer_for_complex_operand() {
                 },
             )
         })
-        .unwrap()
         .unwrap();
 
     assert_eq!(y.shape(), &[2]);
@@ -658,7 +628,6 @@ fn eager_index_select_keeps_indices_integer_for_complex_operand() {
 
     let y = test_ctx()
         .with_eager_session(|session| session.index_select(&x, -1, &[2, 0]))
-        .unwrap()
         .unwrap();
 
     assert_eq!(y.shape(), &[2]);
@@ -683,11 +652,9 @@ fn eager_stack_trailing_axis_and_index_select_primal() {
 
     let stacked = test_ctx()
         .with_eager_session(|session| session.stack(&[&x0, &x1], -1))
-        .unwrap()
         .unwrap();
     let selected = test_ctx()
         .with_eager_session(|session| session.index_select(&stacked, -1, &[1, 0, 1]))
-        .unwrap()
         .unwrap();
 
     assert_eq!(selected.shape(), &[2, 3]);
@@ -708,7 +675,6 @@ fn eager_index_select_rejects_invalid_axis_and_position() {
 
     let axis_err = test_ctx()
         .with_eager_session(|session| session.index_select(&x, 1, &[0]))
-        .unwrap()
         .unwrap_err()
         .to_string();
     assert!(axis_err.contains("index_select"), "got: {axis_err}");
@@ -716,7 +682,6 @@ fn eager_index_select_rejects_invalid_axis_and_position() {
 
     let position_err = test_ctx()
         .with_eager_session(|session| session.index_select(&x, 0, &[2]))
-        .unwrap()
         .unwrap_err()
         .to_string();
     assert!(position_err.contains("index_select"), "got: {position_err}");
@@ -731,7 +696,6 @@ fn eager_stack_rejects_empty_mismatched_shapes_and_invalid_axis() {
     let empty: [&EagerTensor; 0] = [];
     let empty_err = test_ctx()
         .with_eager_session(|session| session.stack(&empty, 0))
-        .unwrap()
         .unwrap_err();
     assert_eq!(
         empty_err.kind(),
@@ -760,7 +724,6 @@ fn eager_stack_rejects_empty_mismatched_shapes_and_invalid_axis() {
     .unwrap();
     let shape_err = test_ctx()
         .with_eager_session(|session| session.stack(&[&a, &b], -1))
-        .unwrap()
         .unwrap_err();
     assert_eq!(
         shape_err.kind(),
@@ -776,7 +739,6 @@ fn eager_stack_rejects_empty_mismatched_shapes_and_invalid_axis() {
 
     let axis_err = test_ctx()
         .with_eager_session(|session| session.stack(&[&a], 2))
-        .unwrap()
         .unwrap_err();
     assert_eq!(
         axis_err.kind(),
@@ -797,7 +759,6 @@ fn eager_stack_rejects_empty_mismatched_shapes_and_invalid_axis() {
     .unwrap();
     let out = test_ctx()
         .with_eager_session(|session| session.stack(&[&a, &c], 0))
-        .unwrap()
         .unwrap();
     assert_eq!(out.shape(), &[2, 2]);
     assert_close_slice(
@@ -823,7 +784,6 @@ fn eager_index_select_repeated_positions_accumulates_grad() {
 
     let selected = test_ctx()
         .with_eager_session(|session| session.index_select(&x, 0, &[1, 1, 2]))
-        .unwrap()
         .unwrap();
     let loss = selected
         .runtime()
@@ -831,7 +791,6 @@ fn eager_index_select_repeated_positions_accumulates_grad() {
             let weighted = s.mul(&selected, &weights)?;
             s.reduce_sum(&weighted, Some(&[0]))
         })
-        .unwrap()
         .unwrap();
     let _ = loss.backward().unwrap();
 
@@ -856,7 +815,6 @@ fn eager_x_squared_gradient_matches_finite_difference() {
             let squared = s.mul(&x, &x)?;
             s.reduce_sum(&squared, Some(&[0]))
         })
-        .unwrap()
         .unwrap();
     let _cotangents = loss.backward().unwrap();
     let grad = x.grad().unwrap().unwrap();
@@ -886,7 +844,6 @@ fn eager_reduce_sum_squares_gradient_matches_finite_difference() {
     let loss = x
         .runtime()
         .with_eager_session(|session| session.reduce_sum_squares(&x, &[0]))
-        .unwrap()
         .unwrap();
     let _cotangents = loss.backward().unwrap();
     let grad = x.grad().unwrap().unwrap();
@@ -917,7 +874,6 @@ fn eager_repeated_backward_accumulates_across_calls() {
                 let squared = s.mul(&x, &x)?;
                 s.reduce_sum(&squared, Some(&[0]))
             })
-            .unwrap()
             .unwrap()
     };
     let loss = make_loss();
@@ -958,7 +914,6 @@ fn eager_matmul_gradients_match_finite_difference() {
             let product = s.dot_general(&a, &b, matmul_config())?;
             s.reduce_sum(&product, Some(&[0, 1]))
         })
-        .unwrap()
         .unwrap();
     let _cotangents = loss.backward().unwrap();
 
@@ -992,7 +947,6 @@ fn eager_exp_gradient_matches_primal() {
             let y = session.exp(&x)?;
             session.reduce_sum(&y, Some(&[0]))
         })
-        .unwrap()
         .unwrap();
     let _cotangents = loss.backward().unwrap();
 
@@ -1014,7 +968,6 @@ fn eager_fan_out_accumulates_gradient() {
             let doubled = s.add(&x, &x)?;
             s.reduce_sum(&doubled, Some(&[0]))
         })
-        .unwrap()
         .unwrap();
     let _cotangents = loss.backward().unwrap();
 
@@ -1041,7 +994,6 @@ fn eager_clear_grad_resets_only_one_leaf() {
             let product = s.mul(&x, &y)?;
             s.reduce_sum(&product, Some(&[0]))
         })
-        .unwrap()
         .unwrap();
     let _ = loss.backward().unwrap();
 
@@ -1059,7 +1011,6 @@ fn eager_clear_grad_resets_only_one_leaf() {
             let squared = s.mul(&x, &x)?;
             s.reduce_sum(&squared, Some(&[0]))
         })
-        .unwrap()
         .unwrap();
     let _ = loss.backward().unwrap();
 
@@ -1094,7 +1045,6 @@ fn eager_context_clear_grads_resets_all_live_leaves() {
             let product = s.mul(&x, &y)?;
             s.reduce_sum(&product, Some(&[0]))
         })
-        .unwrap()
         .unwrap()
     };
     let loss = make_loss();
@@ -1139,7 +1089,6 @@ fn eager_unrelated_backward_keeps_existing_leaf_grad() {
             let squared = s.mul(&x, &x)?;
             s.reduce_sum(&squared, Some(&[0]))
         })
-        .unwrap()
         .unwrap();
     let _ = loss_x.backward().unwrap();
     assert_close_slice(
@@ -1153,7 +1102,6 @@ fn eager_unrelated_backward_keeps_existing_leaf_grad() {
             let squared = s.mul(&y, &y)?;
             s.reduce_sum(&squared, Some(&[0]))
         })
-        .unwrap()
         .unwrap();
     let _ = loss_y.backward().unwrap();
 
@@ -1209,7 +1157,6 @@ fn eager_context_and_tensor_are_backend_erased_public_types() {
             let squared = s.mul(&x, &x)?;
             s.reduce_sum(&squared, Some(&[0]))
         })
-        .unwrap()
         .unwrap();
     loss.backward().unwrap();
 
@@ -1233,7 +1180,6 @@ fn eager_detach_cuts_one_gradient_path() {
             let product = s.mul(&detached, &x)?;
             s.reduce_sum(&product, Some(&[0]))
         })
-        .unwrap()
         .unwrap();
     let _cotangents = loss.backward().unwrap();
 
@@ -1254,11 +1200,7 @@ fn eager_untracked_tensor_behaves_like_plain_tensor() {
         test_ctx(),
     )
     .unwrap();
-    let z = x
-        .runtime()
-        .with_eager_session(|s| s.mul(&x, &y))
-        .unwrap()
-        .unwrap();
+    let z = x.runtime().with_eager_session(|s| s.mul(&x, &y)).unwrap();
 
     assert_close_slice(f64_data(&z.to_tensor().unwrap()), &[4.0, 10.0, 18.0], TOL);
     assert!(x.grad().unwrap().is_none());
@@ -1277,7 +1219,6 @@ fn eager_structural_primal_ops_transpose_and_reshape() {
     let transposed = x
         .runtime()
         .with_eager_session(|s| s.transpose(&x, &[1, 0]))
-        .unwrap()
         .unwrap();
     assert_eq!(transposed.shape(), &[3, 2]);
     assert_close_slice(
@@ -1289,7 +1230,6 @@ fn eager_structural_primal_ops_transpose_and_reshape() {
     let reshaped = x
         .runtime()
         .with_eager_session(|s| s.reshape(&x, [6]))
-        .unwrap()
         .unwrap();
     assert_eq!(reshaped.shape(), &[6]);
     assert_close_slice(
@@ -1310,7 +1250,6 @@ fn eager_untracked_structural_ops_return_lazy_views() {
     let transposed = x
         .runtime()
         .with_eager_session(|s| s.transpose(&x, &[1, 0]))
-        .unwrap()
         .unwrap();
     match transposed.tensor_read() {
         TensorRead::View(TensorView::F64(view)) => {
@@ -1323,7 +1262,6 @@ fn eager_untracked_structural_ops_return_lazy_views() {
     let reshaped = x
         .runtime()
         .with_eager_session(|s| s.reshape(&x, [6]))
-        .unwrap()
         .unwrap();
     match reshaped.tensor_read() {
         TensorRead::View(TensorView::F64(view)) => {
@@ -1345,7 +1283,6 @@ fn eager_tracked_structural_ops_return_lazy_views_and_backprop() {
     let transposed = x
         .runtime()
         .with_eager_session(|s| s.transpose(&x, &[1, 0]))
-        .unwrap()
         .unwrap();
     match transposed.tensor_read() {
         TensorRead::View(TensorView::F64(view)) => {
@@ -1358,7 +1295,6 @@ fn eager_tracked_structural_ops_return_lazy_views_and_backprop() {
     let loss = transposed
         .runtime()
         .with_eager_session(|s| s.reduce_sum(&transposed, Some(&[0, 1])))
-        .unwrap()
         .unwrap();
     let _cotangents = loss.backward().unwrap();
     let grad = x.grad().unwrap().unwrap();
@@ -1378,18 +1314,10 @@ fn eager_elementwise_primal_ops_div_abs_and_sin() {
     )
     .unwrap();
 
-    let div = x
-        .runtime()
-        .with_eager_session(|s| s.div(&x, &y))
-        .unwrap()
-        .unwrap();
+    let div = x.runtime().with_eager_session(|s| s.div(&x, &y)).unwrap();
     assert_close_slice(f64_data(&div.to_tensor().unwrap()), &[4.0, -2.0, 3.0], TOL);
 
-    let abs = x
-        .runtime()
-        .with_eager_session(|s| s.abs(&x))
-        .unwrap()
-        .unwrap();
+    let abs = x.runtime().with_eager_session(|s| s.abs(&x)).unwrap();
     assert_close_slice(f64_data(&abs.to_tensor().unwrap()), &[8.0, 6.0, 9.0], TOL);
 
     let ctx = test_ctx();
@@ -1400,7 +1328,6 @@ fn eager_elementwise_primal_ops_div_abs_and_sin() {
     .unwrap();
     let sin = ctx
         .with_eager_session(|session| session.sin(&angles))
-        .unwrap()
         .unwrap();
     assert_close_slice(f64_data(&sin.to_tensor().unwrap()), &[0.0, 1.0], TOL);
 }
@@ -1418,7 +1345,6 @@ fn eager_diagonal_primal_ops_extract_diag_and_tril() {
     .unwrap();
     let diag = test_ctx()
         .with_eager_session(|session| session.extract_diag(&matrix, 0, 1))
-        .unwrap()
         .unwrap();
     assert_close_slice(f64_data(&diag.to_tensor().unwrap()), &[1.0, 5.0, 9.0], TOL);
 
@@ -1430,7 +1356,6 @@ fn eager_diagonal_primal_ops_extract_diag_and_tril() {
     .unwrap();
     let lower = lower_ctx
         .with_eager_session(|session| session.tril(&lower_input, 0))
-        .unwrap()
         .unwrap();
     assert_close_slice(
         f64_data(&lower.to_tensor().unwrap()),
@@ -1455,7 +1380,6 @@ fn eager_reduction_primal_ops_reduce_prod() {
                 session.reduce_min(&x, Some(&[0, 1]))?,
             ))
         })
-        .unwrap()
         .unwrap();
     assert_close_slice(f64_data(&prod.to_tensor().unwrap()), &[24.0], TOL);
     assert_close_slice(f64_data(&max.to_tensor().unwrap()), &[4.0], TOL);
@@ -1481,7 +1405,6 @@ fn eager_reductions_distinguish_all_axes_from_empty_axes() {
                 session.reduce_min(&x, Some(&[1]))?,
             ))
         })
-        .unwrap()
         .unwrap();
     assert_close_slice(f64_data(&sum.to_tensor().unwrap()), &[10.0], TOL);
     assert_close_slice(f64_data(&product.to_tensor().unwrap()), &[24.0], TOL);
@@ -1509,7 +1432,6 @@ fn eager_reductions_distinguish_all_axes_from_empty_axes() {
     let scalar_sum = scalar
         .runtime()
         .with_eager_session(|s| s.reduce_sum(&scalar, None))
-        .unwrap()
         .unwrap();
     assert_eq!(scalar_sum.shape(), &[] as &[usize]);
     assert_close_slice(f64_data(&scalar_sum.to_tensor().unwrap()), &[3.0], TOL);
@@ -1540,7 +1462,6 @@ fn eager_slice_primal() {
                 },
             )
         })
-        .unwrap()
         .unwrap();
 
     assert_eq!(y.shape(), &[2, 2]);
@@ -1576,7 +1497,6 @@ fn eager_untracked_slice_returns_lazy_view() {
                 },
             )
         })
-        .unwrap()
         .unwrap();
 
     match y.tensor_read() {
@@ -1603,7 +1523,6 @@ fn eager_broadcast_in_dim_primal() {
     let y = x
         .runtime()
         .with_eager_session(|s| s.broadcast_in_dim(&x, &[3, 2], &[0]))
-        .unwrap()
         .unwrap();
 
     assert_eq!(y.shape(), &[3, 2]);
@@ -1624,7 +1543,6 @@ fn eager_untracked_broadcast_in_dim_returns_lazy_view() {
     let y = x
         .runtime()
         .with_eager_session(|s| s.broadcast_in_dim(&x, &[3, 2], &[0]))
-        .unwrap()
         .unwrap();
 
     match y.tensor_read() {
@@ -1660,7 +1578,6 @@ fn eager_pad_primal() {
                 },
             )
         })
-        .unwrap()
         .unwrap();
 
     assert_eq!(y.shape(), &[5]);
@@ -1681,7 +1598,6 @@ fn eager_reverse_primal() {
     .unwrap();
     let y = ctx
         .with_eager_session(|session| session.reverse(&x, &[0]))
-        .unwrap()
         .unwrap();
 
     assert_close_slice(
@@ -1705,7 +1621,6 @@ fn eager_concatenate_primal() {
     .unwrap();
     let z = test_ctx()
         .with_eager_session(|session| session.concatenate(&[&x, &y], 0))
-        .unwrap()
         .unwrap();
 
     assert_eq!(z.shape(), &[4]);
@@ -1742,7 +1657,6 @@ fn eager_gather_primal() {
                 },
             )
         })
-        .unwrap()
         .unwrap();
 
     assert_eq!(y.shape(), &[3]);
@@ -1771,7 +1685,6 @@ fn eager_dynamic_slice_primal() {
     .unwrap();
     let y = ctx
         .with_eager_session(|session| session.dynamic_slice(&x, &starts, &[2, 2]))
-        .unwrap()
         .unwrap();
 
     assert_eq!(y.shape(), &[2, 2]);
@@ -1793,11 +1706,7 @@ fn eager_conj_primal() {
         test_ctx(),
     )
     .unwrap();
-    let y = x
-        .runtime()
-        .with_eager_session(|s| s.conj(&x))
-        .unwrap()
-        .unwrap();
+    let y = x.runtime().with_eager_session(|s| s.conj(&x)).unwrap();
 
     assert_eq!(
         c64_data(&y.to_tensor().unwrap()),
@@ -1814,7 +1723,6 @@ fn eager_analytic_primal_ops_sign_log_sqrt_rsqrt_cos_tanh_expm1_log1p() {
     .unwrap();
     let sign = test_ctx()
         .with_eager_session(|session| session.sign(&sign_input))
-        .unwrap()
         .unwrap();
     assert_close_slice(f64_data(&sign.to_tensor().unwrap()), &[-1.0, 0.0, 1.0], TOL);
 
@@ -1825,7 +1733,6 @@ fn eager_analytic_primal_ops_sign_log_sqrt_rsqrt_cos_tanh_expm1_log1p() {
     .unwrap();
     let log = test_ctx()
         .with_eager_session(|session| session.log(&log_input))
-        .unwrap()
         .unwrap();
     assert_close_slice(f64_data(&log.to_tensor().unwrap()), &[0.0, 1.0], TOL);
 
@@ -1837,11 +1744,9 @@ fn eager_analytic_primal_ops_sign_log_sqrt_rsqrt_cos_tanh_expm1_log1p() {
     .unwrap();
     let sqrt = sqrt_ctx
         .with_eager_session(|session| session.sqrt(&sqrt_input))
-        .unwrap()
         .unwrap();
     let rsqrt = sqrt_ctx
         .with_eager_session(|session| session.rsqrt(&sqrt_input))
-        .unwrap()
         .unwrap();
     assert_close_slice(f64_data(&sqrt.to_tensor().unwrap()), &[1.0, 2.0], TOL);
     assert_close_slice(f64_data(&rsqrt.to_tensor().unwrap()), &[1.0, 0.5], TOL);
@@ -1854,7 +1759,6 @@ fn eager_analytic_primal_ops_sign_log_sqrt_rsqrt_cos_tanh_expm1_log1p() {
     .unwrap();
     let cos = cos_ctx
         .with_eager_session(|session| session.cos(&angles))
-        .unwrap()
         .unwrap();
     assert_close_slice(f64_data(&cos.to_tensor().unwrap()), &[1.0, -1.0], TOL);
 
@@ -1866,7 +1770,6 @@ fn eager_analytic_primal_ops_sign_log_sqrt_rsqrt_cos_tanh_expm1_log1p() {
     .unwrap();
     let tanh = tanh_ctx
         .with_eager_session(|session| session.tanh(&tanh_input))
-        .unwrap()
         .unwrap();
     assert_close_slice(
         f64_data(&tanh.to_tensor().unwrap()),
@@ -1882,7 +1785,6 @@ fn eager_analytic_primal_ops_sign_log_sqrt_rsqrt_cos_tanh_expm1_log1p() {
     .unwrap();
     let expm1 = expm1_ctx
         .with_eager_session(|session| session.expm1(&expm1_input))
-        .unwrap()
         .unwrap();
     assert_close_slice(
         f64_data(&expm1.to_tensor().unwrap()),
@@ -1898,7 +1800,6 @@ fn eager_analytic_primal_ops_sign_log_sqrt_rsqrt_cos_tanh_expm1_log1p() {
     .unwrap();
     let log1p = log1p_ctx
         .with_eager_session(|session| session.log1p(&log1p_input))
-        .unwrap()
         .unwrap();
     assert_close_slice(
         f64_data(&log1p.to_tensor().unwrap()),
@@ -1922,7 +1823,6 @@ fn eager_pow_maximum_and_minimum_primal() {
     let pow = base
         .runtime()
         .with_eager_session(|s| s.pow(&base, &exp))
-        .unwrap()
         .unwrap();
     assert_close_slice(f64_data(&pow.to_tensor().unwrap()), &[8.0, 3.0], TOL);
 
@@ -1940,7 +1840,6 @@ fn eager_pow_maximum_and_minimum_primal() {
         .with_eager_session(|session| {
             Ok::<_, tenferro_ad::Error>((session.maximum(&x, &y)?, session.minimum(&x, &y)?))
         })
-        .unwrap()
         .unwrap();
     assert_close_slice(
         f64_data(&maximum.to_tensor().unwrap()),
@@ -1973,7 +1872,6 @@ fn eager_select_primal() {
     .unwrap();
     let y = test_ctx()
         .with_eager_session(|session| session.select(&condition, &on_true, &on_false))
-        .unwrap()
         .unwrap();
 
     assert_close_slice(f64_data(&y.to_tensor().unwrap()), &[1.0, 20.0, 30.0], TOL);
@@ -1988,7 +1886,6 @@ fn eager_embed_diag_and_triu_primal() {
     .unwrap();
     let embedded = test_ctx()
         .with_eager_session(|session| session.embed_diag(&diagonal, 0, 1))
-        .unwrap()
         .unwrap();
     assert_eq!(embedded.shape(), &[3, 3]);
     assert_close_slice(
@@ -2009,7 +1906,6 @@ fn eager_embed_diag_and_triu_primal() {
     .unwrap();
     let upper = ctx
         .with_eager_session(|session| session.triu(&matrix, 0))
-        .unwrap()
         .unwrap();
     assert_close_slice(
         f64_data(&upper.to_tensor().unwrap()),

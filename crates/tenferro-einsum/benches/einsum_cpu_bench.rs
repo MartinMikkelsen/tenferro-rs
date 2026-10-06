@@ -79,7 +79,6 @@ fn bench_batched_einsum(c: &mut Criterion) {
                         .with_eager_session(|s| {
                             s.einsum(&[black_box(&a), black_box(&b)], "ikb,knb->inb")
                         })
-                        .expect("eager session entry should succeed")
                         .expect("batched einsum should succeed");
                     consume_f64(&out);
                 });
@@ -102,7 +101,6 @@ fn bench_einsum_patterns(c: &mut Criterion) {
         bench.iter(|| {
             let out = ctx
                 .with_eager_session(|s| s.einsum(&[black_box(&a), black_box(&b)], "ij,jk->ik"))
-                .expect("eager session entry should succeed")
                 .expect("binary einsum should succeed");
             consume_f64(&out);
         });
@@ -116,7 +114,6 @@ fn bench_einsum_patterns(c: &mut Criterion) {
                         "ij,jk,kl->il",
                     )
                 })
-                .expect("eager session entry should succeed")
                 .expect("chain einsum should succeed");
             consume_f64(&out);
         });
@@ -128,7 +125,6 @@ fn bench_einsum_patterns(c: &mut Criterion) {
         bench.iter(|| {
             let out = ctx
                 .with_eager_session(|s| s.einsum(&[black_box(&x), black_box(&y)], "ijk,jkl->il"))
-                .expect("eager session entry should succeed")
                 .expect("multi-edge einsum should succeed");
             consume_f64(&out);
         });
@@ -140,7 +136,6 @@ fn bench_einsum_patterns(c: &mut Criterion) {
         bench.iter(|| {
             let out = ctx
                 .with_eager_session(|s| s.einsum(&[black_box(&a), black_box(&b)], "ij,jk->ik"))
-                .expect("eager session entry should succeed")
                 .expect("c64 binary einsum should succeed");
             consume_c64(&out);
         });

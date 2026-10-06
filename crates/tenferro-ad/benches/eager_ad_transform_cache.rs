@@ -28,7 +28,6 @@ fn fixture() -> Fixture {
             let x3 = s.mul(&x2, &x)?;
             s.reduce_sum(&x3, Some(&[0]))
         })
-        .unwrap()
         .unwrap();
     Fixture { ctx, x, loss }
 }

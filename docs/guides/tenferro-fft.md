@@ -343,7 +343,7 @@ let (spectrum, restored) = runtime.with_eager_session(|session| {
     let spectrum = session.rfft(&x, None, -1, FftNorm::Backward)?;
     let restored = session.irfft(&spectrum, Some(4), -1, FftNorm::Backward)?;
     Ok::<_, tenferro_ad::Error>((spectrum, restored))
-})??;
+})?;
 
 assert_eq!(spectrum.shape(), &[3]);
 assert_eq!(restored.to_tensor()?.as_slice::<f64>()?, &[1.0, 2.0, 3.0, 4.0]);

@@ -28,7 +28,6 @@ fn cuda_eager_fft_rfft_irfft_select_cuda_and_keep_cpu_control_on_host() {
     let eager_real = EagerTensor::from_tensor_in(real_device, ctx.clone()).unwrap();
     let eager_spectrum = ctx
         .with_eager_session(|s| s.rfft(&eager_real, None, -1, FftNorm::Backward))
-        .unwrap()
         .unwrap();
     let first_stats = ctx.cache_stats().unwrap().extensions;
     assert_eq!(first_stats.entries, 1);
@@ -40,7 +39,6 @@ fn cuda_eager_fft_rfft_irfft_select_cuda_and_keep_cpu_control_on_host() {
 
     let _eager_spectrum_repeat = ctx
         .with_eager_session(|s| s.rfft(&eager_real, None, -1, FftNorm::Backward))
-        .unwrap()
         .unwrap();
     let eager_cache_stats = ctx.cache_stats().unwrap().extensions;
     assert_eq!(eager_cache_stats.entries, 1);
@@ -65,7 +63,6 @@ fn cuda_eager_fft_rfft_irfft_select_cuda_and_keep_cpu_control_on_host() {
 
     let eager_signal = ctx
         .with_eager_session(|s| s.irfft(&eager_spectrum, None, -1, FftNorm::Backward))
-        .unwrap()
         .unwrap();
     let signal_stats = ctx.cache_stats().unwrap().extensions;
     assert_eq!(signal_stats.entries, 2);
@@ -97,7 +94,6 @@ fn cuda_eager_fft_rfft_irfft_select_cuda_and_keep_cpu_control_on_host() {
     let eager_complex = EagerTensor::from_tensor_in(complex_device, ctx.clone()).unwrap();
     let eager_fft = ctx
         .with_eager_session(|s| s.fft(&eager_complex, None, -1, FftNorm::Backward))
-        .unwrap()
         .unwrap();
     let fft_stats = ctx.cache_stats().unwrap().extensions;
     assert_eq!(fft_stats.entries, 3);
@@ -133,7 +129,6 @@ fn cuda_eager_fft_rfft_irfft_select_cuda_and_keep_cpu_control_on_host() {
     let cpu_output = cpu_ctx
         .with_eager_session(|s| s.rfft(&cpu_input, None, -1, FftNorm::Backward))
         .unwrap()
-        .unwrap()
         .to_tensor()
         .unwrap();
     assert_eq!(
@@ -163,12 +158,10 @@ fn cuda_eager_cache_limit_reduction_evicts_and_preserves_results() {
     let first = ctx
         .with_eager_session(|s| s.rfft(&input, None, -1, FftNorm::Backward))
         .unwrap()
-        .unwrap()
         .to_tensor()
         .unwrap();
     let second = ctx
         .with_eager_session(|s| s.rfft(&input, Some(6), -1, FftNorm::Backward))
-        .unwrap()
         .unwrap()
         .to_tensor()
         .unwrap();
@@ -245,7 +238,6 @@ fn cuda_eager_zero_batch_returns_empty_outputs_without_runtime_cache() {
     let input = EagerTensor::from_tensor_in(device, ctx.clone()).unwrap();
     let output = ctx
         .with_eager_session(|s| s.fft(&input, None, 1, FftNorm::Backward))
-        .unwrap()
         .unwrap();
     let tensor = output.to_tensor().unwrap();
     support::assert_cuda_resident(&tensor, domain);
@@ -278,7 +270,6 @@ fn cuda_eager_zero_batch_returns_empty_outputs_without_runtime_cache() {
     let real_input = EagerTensor::from_tensor_in(real_device, ctx.clone()).unwrap();
     let real_output = ctx
         .with_eager_session(|s| s.rfft(&real_input, None, 2, FftNorm::Backward))
-        .unwrap()
         .unwrap();
     let real_tensor = real_output.to_tensor().unwrap();
     support::assert_cuda_resident(&real_tensor, domain);

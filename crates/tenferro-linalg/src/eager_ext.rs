@@ -86,7 +86,7 @@ impl EagerTensorLinalgExt for EagerTensor {
 /// let factor = ctx.with_eager_session(|session| {
 ///     let input = session.constant_from(Tensor::from_vec_col_major(vec![1, 1], vec![4.0_f64])?)?;
 ///     session.cholesky(&input)
-/// })??;
+/// })?;
 /// assert_eq!(factor.value()?.as_slice::<f64>()?, &[2.0]);
 /// # Ok::<(), tenferro_ad::Error>(())
 /// ```
@@ -101,7 +101,7 @@ pub trait EagerSessionLinalgExt {
     /// let factor = ctx.with_eager_session(|session| {
     ///     let input = session.constant_from(Tensor::from_vec_col_major(vec![1, 1], vec![9.0_f64])?)?;
     ///     session.cholesky(&input)
-    /// })??;
+    /// })?;
     /// assert_eq!(factor.value()?.as_slice::<f64>()?, &[3.0]);
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
@@ -119,7 +119,7 @@ pub trait EagerSessionLinalgExt {
     /// let (_u, values, _vt) = ctx.with_eager_session(|s| {
     ///     let a = s.constant_from(Tensor::from_vec_col_major([1, 1], vec![3.0_f64])?)?;
     ///     s.svd(&a)
-    /// })??;
+    /// })?;
     /// assert_eq!(values.value()?.as_slice::<f64>()?, &[3.0]);
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
@@ -137,7 +137,7 @@ pub trait EagerSessionLinalgExt {
     /// let (_u, values, _vt) = ctx.with_eager_session(|s| {
     ///     let a = s.constant_from(Tensor::from_vec_col_major([1, 1], vec![3.0_f64])?)?;
     ///     s.svd_with_options(&a, SvdOptions::default())
-    /// })??;
+    /// })?;
     /// assert_eq!(values.value()?.as_slice::<f64>()?, &[3.0]);
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
@@ -159,7 +159,7 @@ pub trait EagerSessionLinalgExt {
     /// let (u, values, vh) = ctx.with_eager_session(|s| {
     ///     let a = s.constant_from(Tensor::from_vec_col_major([1, 2], vec![1.0_f64, 1.0])?)?;
     ///     s.svd_full(&a)
-    /// })??;
+    /// })?;
     /// assert_eq!(u.shape(), &[1, 1]);
     /// assert_eq!(values.shape(), &[1]);
     /// assert_eq!(vh.shape(), &[2, 2]);
@@ -184,7 +184,7 @@ pub trait EagerSessionLinalgExt {
     /// let (q, r) = ctx.with_eager_session(|s| {
     ///     let a = s.constant_from(Tensor::from_vec_col_major([1, 1], vec![3.0_f64])?)?;
     ///     s.qr(&a)
-    /// })??;
+    /// })?;
     /// assert_eq!(q.shape(), &[1, 1]);
     /// assert_eq!(r.shape(), &[1, 1]);
     /// # Ok::<(), tenferro_ad::Error>(())
@@ -203,7 +203,7 @@ pub trait EagerSessionLinalgExt {
     /// let (q, r) = ctx.with_eager_session(|s| {
     ///     let a = s.constant_from(Tensor::from_vec_col_major([1, 1], vec![3.0_f64])?)?;
     ///     s.qr_with_options(&a, QrOptions::default())
-    /// })??;
+    /// })?;
     /// assert_eq!(q.shape(), &[1, 1]);
     /// assert_eq!(r.shape(), &[1, 1]);
     /// # Ok::<(), tenferro_ad::Error>(())
@@ -227,7 +227,7 @@ pub trait EagerSessionLinalgExt {
     ///     let a = s.constant_from(Tensor::from_vec_col_major([1, 1], vec![2.0_f64])?)?;
     ///     let b = s.constant_from(Tensor::from_vec_col_major([1, 1], vec![4.0_f64])?)?;
     ///     s.triangular_solve(&a, &b, true, true, false, false)
-    /// })??;
+    /// })?;
     /// assert_eq!(x.value()?.as_slice::<f64>()?, &[2.0]);
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
@@ -254,7 +254,7 @@ pub trait EagerSessionLinalgExt {
     ///     let a = s.constant_from(Tensor::from_vec_col_major([1, 1], vec![2.0_f64])?)?;
     ///     let b = s.constant_from(Tensor::from_vec_col_major([1, 1], vec![4.0_f64])?)?;
     ///     s.solve(&a, &b)
-    /// })??;
+    /// })?;
     /// assert_eq!(x.value()?.as_slice::<f64>()?, &[2.0]);
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
@@ -273,7 +273,7 @@ pub trait EagerSessionLinalgExt {
     ///     let a = s.constant_from(Tensor::from_vec_col_major([2, 1], vec![1.0_f64, 2.0])?)?;
     ///     let b = s.constant_from(Tensor::from_vec_col_major([2, 1], vec![2.0_f64, 4.0])?)?;
     ///     s.lstsq(&a, &b)
-    /// })??;
+    /// })?;
     /// assert!((x.value()?.as_slice::<f64>()?[0] - 2.0).abs() < 1e-12);
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
@@ -291,7 +291,7 @@ pub trait EagerSessionLinalgExt {
     /// let (_p, _l, u, _parity) = ctx.with_eager_session(|s| {
     ///     let a = s.constant_from(Tensor::from_vec_col_major([1, 1], vec![2.0_f64])?)?;
     ///     s.lu(&a)
-    /// })??;
+    /// })?;
     /// assert_eq!(u.value()?.as_slice::<f64>()?, &[2.0]);
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
@@ -312,7 +312,7 @@ pub trait EagerSessionLinalgExt {
     /// let (sign, logabs) = ctx.with_eager_session(|s| {
     ///     let a = s.constant_from(Tensor::from_vec_col_major([1, 1], vec![2.0_f64])?)?;
     ///     s.slogdet(&a)
-    /// })??;
+    /// })?;
     /// assert_eq!(sign.value()?.as_slice::<f64>()?, &[1.0]);
     /// assert!((logabs.value()?.as_slice::<f64>()?[0] - 2.0_f64.ln()).abs() < 1e-12);
     /// # Ok::<(), tenferro_ad::Error>(())
@@ -331,7 +331,7 @@ pub trait EagerSessionLinalgExt {
     /// let det = ctx.with_eager_session(|s| {
     ///     let a = s.constant_from(Tensor::from_vec_col_major([1, 1], vec![2.0_f64])?)?;
     ///     s.det(&a)
-    /// })??;
+    /// })?;
     /// assert_eq!(det.value()?.as_slice::<f64>()?, &[2.0]);
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
@@ -349,7 +349,7 @@ pub trait EagerSessionLinalgExt {
     /// let inverse = ctx.with_eager_session(|s| {
     ///     let a = s.constant_from(Tensor::from_vec_col_major([1, 1], vec![2.0_f64])?)?;
     ///     s.inv(&a)
-    /// })??;
+    /// })?;
     /// assert_eq!(inverse.value()?.as_slice::<f64>()?, &[0.5]);
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
@@ -367,7 +367,7 @@ pub trait EagerSessionLinalgExt {
     /// let values = ctx.with_eager_session(|s| {
     ///     let a = s.constant_from(Tensor::from_vec_col_major([1, 1], vec![4.0_f64])?)?;
     ///     s.eigvalsh(&a)
-    /// })??;
+    /// })?;
     /// assert_eq!(values.value()?.as_slice::<f64>()?, &[4.0]);
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
@@ -385,7 +385,7 @@ pub trait EagerSessionLinalgExt {
     /// let values = ctx.with_eager_session(|s| {
     ///     let a = s.constant_from(Tensor::from_vec_col_major([1, 1], vec![4.0_f64])?)?;
     ///     s.eigvals(&a)
-    /// })??;
+    /// })?;
     /// assert_eq!(values.value()?.as_slice::<num_complex::Complex64>()?, &[num_complex::Complex64::new(4.0, 0.0)]);
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
@@ -403,7 +403,7 @@ pub trait EagerSessionLinalgExt {
     /// let (values, vectors) = ctx.with_eager_session(|s| {
     ///     let a = s.constant_from(Tensor::from_vec_col_major([1, 1], vec![4.0_f64])?)?;
     ///     s.eigh(&a)
-    /// })??;
+    /// })?;
     /// assert_eq!(values.value()?.as_slice::<f64>()?, &[4.0]);
     /// assert_eq!(vectors.shape(), &[1, 1]);
     /// # Ok::<(), tenferro_ad::Error>(())
@@ -422,7 +422,7 @@ pub trait EagerSessionLinalgExt {
     /// let (values, _vectors) = ctx.with_eager_session(|s| {
     ///     let a = s.constant_from(Tensor::from_vec_col_major([1, 1], vec![4.0_f64])?)?;
     ///     s.eigh_with_options(&a, EighOptions::default())
-    /// })??;
+    /// })?;
     /// assert_eq!(values.value()?.as_slice::<f64>()?, &[4.0]);
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
@@ -448,7 +448,7 @@ pub trait EagerSessionLinalgExt {
     /// let (values, vectors) = ctx.with_eager_session(|s| {
     ///     let a = s.constant_from(Tensor::from_vec_col_major([1, 1], vec![4.0_f64])?)?;
     ///     s.eig(&a)
-    /// })??;
+    /// })?;
     /// assert_eq!(values.value()?.as_slice::<num_complex::Complex64>()?, &[num_complex::Complex64::new(4.0, 0.0)]);
     /// assert_eq!(vectors.shape(), &[1, 1]);
     /// # Ok::<(), tenferro_ad::Error>(())
@@ -471,7 +471,7 @@ pub trait EagerSessionLinalgExt {
     /// let inverse = ctx.with_eager_session(|s| {
     ///     let a = s.constant_from(Tensor::from_vec_col_major([1, 1], vec![2.0_f64])?)?;
     ///     s.pinv(&a)
-    /// })??;
+    /// })?;
     /// assert_eq!(inverse.value()?.as_slice::<f64>()?, &[0.5]);
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
@@ -492,7 +492,7 @@ pub trait EagerSessionLinalgExt {
     /// let inverse = ctx.with_eager_session(|s| {
     ///     let a = s.constant_from(Tensor::from_vec_col_major([1, 1], vec![2.0_f64])?)?;
     ///     s.pinv_with_rtol(&a, 1.0e-12)
-    /// })??;
+    /// })?;
     /// assert_eq!(inverse.value()?.as_slice::<f64>()?, &[0.5]);
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
@@ -515,7 +515,7 @@ pub trait EagerSessionLinalgExt {
     /// let result = ctx.with_eager_session(|s| {
     ///     let a = s.constant_from(Tensor::from_vec_col_major([2], vec![3.0_f64, 4.0])?)?;
     ///     s.norm(&a, Some(2.0), Some(&[0]), false)
-    /// })??;
+    /// })?;
     /// assert_eq!(result.value()?.as_slice::<f64>()?, &[5.0]);
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
@@ -541,7 +541,7 @@ pub trait EagerSessionLinalgExt {
     /// let (p, _l, _u, q, parity) = ctx.with_eager_session(|s| {
     ///     let a = s.constant_from(Tensor::from_vec_col_major([2, 2], vec![1.0_f64, 3.0, 2.0, 4.0])?)?;
     ///     s.full_piv_lu(&a)
-    /// })??;
+    /// })?;
     /// assert_eq!(p.shape(), &[2, 2]);
     /// assert_eq!(q.shape(), &[2, 2]);
     /// assert_eq!(parity.shape(), &[] as &[usize]);
@@ -571,7 +571,7 @@ pub trait EagerSessionLinalgExt {
     ///     let a = s.constant_from(Tensor::from_vec_col_major([1, 1], vec![2.0_f64])?)?;
     ///     let b = s.constant_from(Tensor::from_vec_col_major([1, 1], vec![4.0_f64])?)?;
     ///     s.full_piv_lu_solve(&a, &b)
-    /// })??;
+    /// })?;
     /// assert_eq!(x.value()?.as_slice::<f64>()?, &[2.0]);
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
@@ -590,7 +590,7 @@ pub trait EagerSessionLinalgExt {
     /// let result = ctx.with_eager_session(|s| {
     ///     let a = s.constant_from(Tensor::from_vec_col_major([2, 2], vec![1.0_f64, 0.0, 0.0, 2.0])?)?;
     ///     s.rank_revealing_qr(&a, RankRevealingQrOptions::default())
-    /// })??;
+    /// })?;
     /// assert_eq!(result.column_permutation.shape(), &[2]);
     /// assert_eq!(result.rank.value()?.as_slice::<i64>()?, &[2]);
     /// # Ok::<(), tenferro_ad::Error>(())
@@ -617,7 +617,7 @@ pub trait EagerSessionLinalgExt {
     /// let state = ctx.with_eager_session(|s| {
     ///     let a = s.constant_from(Tensor::from_vec_col_major([2, 1], vec![1.0_f64, 2.0])?)?;
     ///     s.householder_qr(&a)
-    /// })??;
+    /// })?;
     /// assert!(format!("{state:?}").starts_with("HouseholderQr"));
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```

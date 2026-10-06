@@ -89,11 +89,18 @@ session with `runtime.with_eager_session(|session| { ... })`. This includes
 `stack`, `gather`, and the borrowed index-selection/diagonal routes. Do not call a remaining implicit
 `EagerTensor` operation while holding a borrowed session.
 
+`with_eager_session` returns the callback's own `Result<T, E>`, so one `?`
+propagates both a failed session entry and a failed operation. `E` is any error
+type with `From<tenferro_ad::Error>`, including your own application error.
+A callback that ends in `Ok(..)` after `?`-chains may need the error type named,
+for example `Ok::<_, tenferro_ad::Error>(value)`, and a tensor-level error from
+`session.backend_session()` converts with `.map_err(tenferro_ad::Error::from)`.
+
 Operation-family crates add eager extension traits. For example,
 `tenferro_linalg::EagerTensorLinalgExt` owns linalg eager methods and
 `tenferro_einsum::EagerSessionEinsumExt` owns eager einsum and `tensordot` on a
 borrowed session, for example
-`ctx.with_eager_session(|s| s.einsum(&[&a, &b], "ij,jk->ik"))??`.
+`ctx.with_eager_session(|s| s.einsum(&[&a, &b], "ij,jk->ik"))?`.
 
 For CUDA, eager means the operation is submitted immediately. It does not mean
 the host waits after every GPU kernel. Host synchronization happens at
@@ -255,7 +262,7 @@ means summing down each column and keeping one value per column.
 ## Einsum
 
 Use `tenferro_einsum::EagerSessionEinsumExt` on a borrowed session when working
-with `EagerTensor`: `ctx.with_eager_session(|s| s.einsum(&[&a, &b], "ij,jk->ik"))??`.
+with `EagerTensor`: `ctx.with_eager_session(|s| s.einsum(&[&a, &b], "ij,jk->ik"))?`.
 For traced graph execution, use `tenferro_einsum::TraceContextEinsumExt` and
 install `tenferro_einsum::extension_module` on the `Runtime`.
 
@@ -313,7 +320,7 @@ let y = EagerTensor::requires_grad_in(Tensor::from_vec_col_major(vec![2], vec![3
 let make_loss = || ctx.with_eager_session(|s| {
     let product = s.mul(&x, &y)?;
     s.reduce_sum(&product, Some(&[0]))
-}).unwrap().unwrap();
+}).unwrap();
 let loss = make_loss();
 loss.backward().unwrap();
 assert_eq!(x.grad().unwrap().unwrap().as_slice::<f64>().unwrap(), &[3.0, 4.0]);
@@ -356,7 +363,7 @@ let seed = EagerTensor::from_tensor_in(
     ctx,
 ).unwrap();
 
-let y = x.runtime().with_eager_session(|s| s.mul(&x, &x))??;
+let y = x.runtime().with_eager_session(|s| s.mul(&x, &x))?;
 y.backward_with(&seed).unwrap();
 assert_eq!(x.grad().unwrap().unwrap().as_slice::<f64>().unwrap(), &[4.0, 12.0]);
 Ok(())
@@ -377,7 +384,7 @@ let x = EagerTensor::requires_grad_in(
     Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0]).unwrap(),
     ctx.clone(),
 ).unwrap();
-let y = ctx.with_eager_session(|s| s.mul(&x, &x))??;
+let y = ctx.with_eager_session(|s| s.mul(&x, &x))?;
 let seed = EagerTensor::from_tensor_in(
     Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 1.0]).unwrap(),
     ctx.clone(),
@@ -421,7 +428,7 @@ let tangent = EagerTensor::from_tensor_in(
 let loss = ctx.with_eager_session(|s| {
     let square = s.mul(&x, &x)?;
     s.mul(&square, &x)
-})??;
+})?;
 let grad = ctx.grad(&loss, &x).unwrap();
 let hvp = ctx.jvp(&grad, &x, &tangent).unwrap();
 
@@ -451,7 +458,7 @@ let x = EagerTensor::requires_grad_in(
 let y = ctx.with_eager_session(|s| {
     let _guard = ctx.no_grad();
     s.mul(&x, &x)
-})??;
+})?;
 assert!(!y.tracks_grad());
 Ok(())
 }
@@ -476,14 +483,14 @@ let x = EagerTensor::requires_grad_in(
     ctx.clone(),
 ).unwrap();
 
-let y = ctx.with_eager_session(|session| session.matmul(&a, &x))??;
+let y = ctx.with_eager_session(|session| session.matmul(&a, &x))?;
 let y_tensor = y.to_tensor().unwrap();
 assert_eq!(y_tensor.as_slice::<f64>().unwrap(), &[23.0, 34.0]);
 
 let loss = ctx.with_eager_session(|s| {
     let squared = s.mul(&y, &y)?;
     s.reduce_sum(&squared, Some(&[0, 1]))
-})??;
+})?;
 let loss_tensor = loss.to_tensor().unwrap();
 assert_eq!(loss_tensor.as_slice::<f64>().unwrap(), &[1685.0]);
 
