@@ -2959,3 +2959,176 @@ fn complex_division_is_scale_robust() {
         "{value32_mixed:?}"
     )
 }
+
+fn ulp_distance_f64(a: f64, b: f64) -> u64 {
+    let key = |v: f64| {
+        let bits = v.to_bits() as i64;
+        if bits < 0 {
+            i64::MIN - bits
+        } else {
+            bits
+        }
+    };
+    if a == b {
+        0
+    } else {
+        key(a).abs_diff(key(b))
+    }
+}
+
+fn ulp_distance_f32(a: f32, b: f32) -> u64 {
+    let key = |v: f32| {
+        let bits = i64::from(v.to_bits() as i32);
+        if bits < 0 {
+            i64::from(i32::MIN) - bits
+        } else {
+            bits
+        }
+    };
+    if a == b {
+        0
+    } else {
+        key(a).abs_diff(key(b))
+    }
+}
+
+/// Inputs spanning the core interval, both tails, the saturation region,
+/// subnormals and the IEEE specials.
+fn erf_parity_inputs() -> Vec<f64> {
+    let mut values = vec![
+        0.0,
+        -0.0,
+        5e-324,
+        1e-300,
+        1e-20,
+        1e-8,
+        1e-3,
+        0.1,
+        0.25,
+        0.5,
+        0.84375,
+        1.0,
+        1.25,
+        2.0,
+        3.0,
+        4.0,
+        5.0,
+        5.9,
+        6.0,
+        10.0,
+        30.0,
+        f64::INFINITY,
+    ];
+    values.extend((0..200).map(|i| -7.0 + 0.07 * f64::from(i)));
+    let negated: Vec<f64> = values.iter().map(|v| -v).collect();
+    values.extend(negated);
+    values.push(f64::NAN);
+    values
+}
+
+/// CUDA `erf` agrees with the CPU kernel (itself checked to 1 ulp against an
+/// mpmath reference) within the CUDA math library's documented 2 ulp, and
+/// exactly on the IEEE specials.
+#[test]
+#[ignore = "requires CUDA 12.8+ GPU"]
+fn test_erf_cuda_matches_cpu_within_ulp_bound() {
+    assert!(gpu_available(), "CUDA test requires an available device");
+    let mut cpu = cpu_backend();
+    let mut gpu = gpu_backend();
+    let values = erf_parity_inputs();
+
+    let input = tensor_f64(vec![values.len()], values.clone());
+    let expected = cpu
+        .with_backend_session(|s| s.erf_read(TensorRead::from_tensor(&input)))
+        .unwrap()
+        .unwrap();
+    let gpu_input = upload(&gpu, &input);
+    let actual = gpu
+        .with_backend_session(|s| s.erf_read(TensorRead::from_tensor(&gpu_input)))
+        .unwrap()
+        .unwrap();
+    let actual = download(&gpu, &actual);
+    let pairs = actual
+        .as_slice::<f64>()
+        .unwrap()
+        .iter()
+        .zip(expected.as_slice::<f64>().unwrap());
+    for ((&got, &want), &x) in pairs.zip(&values) {
+        if want.is_nan() {
+            assert!(got.is_nan(), "erf({x}) = {got}");
+        } else if want == 0.0 || want.is_infinite() || want.abs() == 1.0 {
+            assert_eq!(got.to_bits(), want.to_bits(), "erf({x})");
+        } else {
+            let ulps = ulp_distance_f64(got, want);
+            assert!(ulps <= 4, "erf({x}): cuda {got}, cpu {want} ({ulps} ulp)");
+        }
+    }
+
+    let values32: Vec<f32> = values.iter().map(|&v| v as f32).collect();
+    let input = tensor_f32(vec![values32.len()], values32.clone());
+    let expected = cpu
+        .with_backend_session(|s| s.erf_read(TensorRead::from_tensor(&input)))
+        .unwrap()
+        .unwrap();
+    let gpu_input = upload(&gpu, &input);
+    let actual = gpu
+        .with_backend_session(|s| s.erf_read(TensorRead::from_tensor(&gpu_input)))
+        .unwrap()
+        .unwrap();
+    let actual = download(&gpu, &actual);
+    let pairs = actual
+        .as_slice::<f32>()
+        .unwrap()
+        .iter()
+        .zip(expected.as_slice::<f32>().unwrap());
+    for ((&got, &want), &x) in pairs.zip(&values32) {
+        if want.is_nan() {
+            assert!(got.is_nan(), "erff({x}) = {got}");
+        } else if want == 0.0 || want.is_infinite() || want.abs() == 1.0 {
+            assert_eq!(got.to_bits(), want.to_bits(), "erff({x})");
+        } else {
+            let ulps = ulp_distance_f32(got, want);
+            assert!(ulps <= 4, "erff({x}): cuda {got}, cpu {want} ({ulps} ulp)");
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires CUDA 12.8+ GPU"]
+fn test_erf_cuda_reads_strided_views_and_rejects_complex() {
+    assert!(gpu_available(), "CUDA test requires an available device");
+    let mut gpu = gpu_backend();
+    let input = tensor_f64(vec![2, 3], vec![0.1, -0.2, 0.3, -0.4, 0.5, -0.6]);
+    let gpu_input = upload(&gpu, &input);
+    let typed = gpu_input.as_typed::<f64>().unwrap();
+    let transposed = typed.as_view().transpose_view([1, 0]).unwrap();
+    let out = gpu
+        .with_backend_session(|s| s.erf_read(TensorRead::from_view(TensorView::F64(transposed))))
+        .unwrap()
+        .unwrap();
+    let out = download(&gpu, &out);
+    // The transposed [3, 2] view reads 0.1, 0.3, 0.5, -0.2, -0.4, -0.6.
+    let expected = [0.1_f64, 0.3, 0.5, -0.2, -0.4, -0.6];
+    for (got, x) in out.as_slice::<f64>().unwrap().iter().zip(expected) {
+        let want = libm_free_erf_reference(x);
+        assert!((got - want).abs() < 1e-15, "erf({x}) = {got}, want {want}");
+    }
+
+    let complex = upload(&gpu, &tensor_c64(vec![1], vec![Complex64::new(0.5, 0.0)]));
+    let err = gpu
+        .with_backend_session(|s| s.erf_read(TensorRead::from_tensor(&complex)))
+        .unwrap()
+        .unwrap_err();
+    assert_eq!(err.kind(), ErrorKind::Unsupported, "{err:?}");
+}
+
+/// `erf` on the CPU backend, the validated reference for the CUDA checks.
+fn libm_free_erf_reference(x: f64) -> f64 {
+    let mut cpu = cpu_backend();
+    let input = tensor_f64(vec![1], vec![x]);
+    let out = cpu
+        .with_backend_session(|s| s.erf_read(TensorRead::from_tensor(&input)))
+        .unwrap()
+        .unwrap();
+    out.as_slice::<f64>().unwrap()[0]
+}

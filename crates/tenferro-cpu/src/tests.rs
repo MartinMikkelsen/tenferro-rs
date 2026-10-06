@@ -747,6 +747,8 @@ mod context;
 mod dot_structural_analytic;
 #[path = "tests/cpu_tests/elementwise_reduction_helpers.rs"]
 mod elementwise_reduction_helpers;
+#[path = "tests/cpu_tests/erf.rs"]
+mod erf;
 #[path = "tests/cpu_tests/indexing.rs"]
 mod indexing;
 #[path = "tests/cpu_indexing_coverage_tests.rs"]

@@ -4,6 +4,8 @@
 //! provides backend-parametric session-explicit operation methods through
 //! [`TensorSessionOpsExt`].
 
+use crate::composite;
+use crate::composite::session::{borrowed, run_session_composite};
 use std::borrow::Cow;
 
 use num_complex::Complex64;
@@ -107,6 +109,10 @@ impl TensorSessionOpsExt for Tensor {
 
     fn log1p(&self, session: &mut dyn BackendSession) -> Result<Tensor> {
         session.log1p_read(TensorRead::from_tensor(self))
+    }
+
+    fn erf(&self, session: &mut dyn BackendSession) -> Result<Tensor> {
+        session.erf_read(TensorRead::from_tensor(self))
     }
 
     fn sin(&self, session: &mut dyn BackendSession) -> Result<Tensor> {
@@ -338,6 +344,128 @@ impl TensorSessionOpsExt for Tensor {
         let scalar = crate::scale::complex_scale_scalar(self.dtype(), factor)?;
         let scalar = session.upload_host_tensor(TensorRead::from_tensor(&scalar))?;
         TensorSessionOpsExt::mul(self, &scalar, session)
+    }
+
+    fn sigmoid(&self, session: &mut dyn BackendSession) -> Result<Tensor> {
+        run_session_composite(session, |ops| composite::sigmoid(ops, &borrowed(self)))
+    }
+
+    fn silu(&self, session: &mut dyn BackendSession) -> Result<Tensor> {
+        run_session_composite(session, |ops| composite::silu(ops, &borrowed(self)))
+    }
+
+    fn softplus(&self, session: &mut dyn BackendSession) -> Result<Tensor> {
+        run_session_composite(session, |ops| composite::softplus(ops, &borrowed(self)))
+    }
+
+    fn gelu(&self, session: &mut dyn BackendSession) -> Result<Tensor> {
+        run_session_composite(session, |ops| composite::gelu(ops, &borrowed(self)))
+    }
+
+    fn gelu_tanh(&self, session: &mut dyn BackendSession) -> Result<Tensor> {
+        run_session_composite(session, |ops| composite::gelu_tanh(ops, &borrowed(self)))
+    }
+
+    fn reduce_mean(
+        &self,
+        axes: Option<&[usize]>,
+        session: &mut dyn BackendSession,
+    ) -> Result<Tensor> {
+        run_session_composite(session, |ops| {
+            composite::reduce_mean(ops, &borrowed(self), axes)
+        })
+    }
+
+    fn softmax(&self, axis: usize, session: &mut dyn BackendSession) -> Result<Tensor> {
+        run_session_composite(session, |ops| {
+            composite::softmax(ops, &borrowed(self), axis)
+        })
+    }
+
+    fn log_softmax(&self, axis: usize, session: &mut dyn BackendSession) -> Result<Tensor> {
+        run_session_composite(session, |ops| {
+            composite::log_softmax(ops, &borrowed(self), axis)
+        })
+    }
+
+    fn masked_softmax(
+        &self,
+        mask: &Tensor,
+        axis: usize,
+        session: &mut dyn BackendSession,
+    ) -> Result<Tensor> {
+        let mask = borrowed(mask);
+        run_session_composite(session, |ops| {
+            composite::masked_softmax(ops, &borrowed(self), &mask, axis)
+        })
+    }
+
+    fn masked_log_softmax(
+        &self,
+        mask: &Tensor,
+        axis: usize,
+        session: &mut dyn BackendSession,
+    ) -> Result<Tensor> {
+        let mask = borrowed(mask);
+        run_session_composite(session, |ops| {
+            composite::masked_log_softmax(ops, &borrowed(self), &mask, axis)
+        })
+    }
+
+    fn layer_norm(
+        &self,
+        axis: usize,
+        weight: Option<&Tensor>,
+        bias: Option<&Tensor>,
+        eps: f64,
+        session: &mut dyn BackendSession,
+    ) -> Result<Tensor> {
+        let weight = weight.map(borrowed);
+        let bias = bias.map(borrowed);
+        run_session_composite(session, |ops| {
+            composite::layer_norm(
+                ops,
+                &borrowed(self),
+                axis,
+                weight.as_ref(),
+                bias.as_ref(),
+                eps,
+            )
+        })
+    }
+
+    fn rms_norm(
+        &self,
+        axis: usize,
+        weight: Option<&Tensor>,
+        bias: Option<&Tensor>,
+        eps: f64,
+        session: &mut dyn BackendSession,
+    ) -> Result<Tensor> {
+        let weight = weight.map(borrowed);
+        let bias = bias.map(borrowed);
+        run_session_composite(session, |ops| {
+            composite::rms_norm(
+                ops,
+                &borrowed(self),
+                axis,
+                weight.as_ref(),
+                bias.as_ref(),
+                eps,
+            )
+        })
+    }
+
+    fn take_along_axis(
+        &self,
+        indices: &Tensor,
+        axis: usize,
+        session: &mut dyn BackendSession,
+    ) -> Result<Tensor> {
+        let indices = borrowed(indices);
+        run_session_composite(session, |ops| {
+            composite::take_along_axis(ops, &borrowed(self), &indices, axis)
+        })
     }
 }
 

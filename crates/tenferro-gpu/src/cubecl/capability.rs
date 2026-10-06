@@ -195,6 +195,8 @@ const CUDA_CAPABILITIES: &[OperationCapability] = &[
     same_dtype(PrimitiveOpKind::Log1p, DType::F64, N),
     same_dtype(PrimitiveOpKind::Log1p, DType::C32, U),
     same_dtype(PrimitiveOpKind::Log1p, DType::C64, U),
+    same_dtype(PrimitiveOpKind::Erf, DType::F32, N),
+    same_dtype(PrimitiveOpKind::Erf, DType::F64, N),
     same_dtype(PrimitiveOpKind::ReduceSum, DType::F32, N),
     same_dtype(PrimitiveOpKind::ReduceSum, DType::F64, N),
     same_dtype(PrimitiveOpKind::ReduceSum, DType::I32, N),

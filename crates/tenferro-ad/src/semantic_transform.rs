@@ -10,7 +10,8 @@ use std::collections::{HashMap, HashSet};
 use tenferro_ops::{dim_expr::DimExpr, ShapeExtent};
 use tenferro_runtime::program::{
     CoreSemanticOp, FrozenProgram, ProgramBuildError, ProgramFinishError, ProgramImport,
-    ProgramInputSpec, ProgramQueryError, ProgramValue, SemanticOpRef, SemanticProgramBuilder,
+    ProgramInputSpec, ProgramQueryError, ProgramValue, ProgramValueMetadata, SemanticOpRef,
+    SemanticProgramBuilder,
 };
 use tenferro_runtime::{CompareDir, DType, DotGeneralConfig};
 
@@ -578,7 +579,8 @@ fn linearize_core(
         | CoreSemanticOp::Sqrt
         | CoreSemanticOp::Rsqrt
         | CoreSemanticOp::Expm1
-        | CoreSemanticOp::Log1p => {
+        | CoreSemanticOp::Log1p
+        | CoreSemanticOp::Erf => {
             linearize_analytic_unary(builder, op, primal_inputs[0], tangent_inputs[0])?
         }
         CoreSemanticOp::Transpose { .. }
@@ -781,7 +783,8 @@ fn vjp_core(
         | CoreSemanticOp::Sqrt
         | CoreSemanticOp::Rsqrt
         | CoreSemanticOp::Expm1
-        | CoreSemanticOp::Log1p => {
+        | CoreSemanticOp::Log1p
+        | CoreSemanticOp::Erf => {
             let coefficient = match op {
                 CoreSemanticOp::Exp => primal_outputs[0],
                 CoreSemanticOp::Tanh => {
@@ -1843,6 +1846,19 @@ fn analytic_unary_coefficient(
             let denominator = builder.add_op(CoreSemanticOp::Add, &[primal_input, one])?[0];
             builder.add_op(CoreSemanticOp::Div, &[one, denominator])?[0]
         }
+        CoreSemanticOp::Erf => {
+            // d erf(x) = 2/sqrt(pi) * exp(-x^2)
+            let square = builder.add_op(CoreSemanticOp::Mul, &[primal_input, primal_input])?[0];
+            let negated = builder.add_op(CoreSemanticOp::Neg, &[square])?[0];
+            let gaussian = builder.add_op(CoreSemanticOp::Exp, &[negated])?[0];
+            let scale = real_float_constant_like(
+                builder,
+                primal_input,
+                std::f64::consts::FRAC_2_SQRT_PI,
+                role,
+            )?;
+            builder.add_op(CoreSemanticOp::Mul, &[scale, gaussian])?[0]
+        }
         _ => return Err(unsupported_core(role, op)),
     };
     Ok(coefficient)
@@ -1876,18 +1892,60 @@ fn one_like(
         }
     };
     let scalar = builder.add_op(CoreSemanticOp::Constant { dtype, bytes }, &[])?[0];
+    broadcast_scalar_like(builder, scalar, anchor, &metadata, role, "one-like anchor")
+}
+
+/// Broadcast a rank-0 `scalar` to `anchor`'s (possibly dynamic) shape.
+fn broadcast_scalar_like(
+    builder: &mut SemanticProgramBuilder,
+    scalar: ProgramValue,
+    anchor: ProgramValue,
+    metadata: &ProgramValueMetadata,
+    role: SemanticTransformRole,
+    what: &'static str,
+) -> Result<ProgramValue, SemanticAdTransformError> {
     if metadata.shape().is_empty() {
         Ok(scalar)
     } else {
-        let shape = shape_plan(metadata.shape(), role, "one-like anchor")?;
-        let one = broadcast_value_in_dim_to_shape(builder, scalar, anchor, &shape, Vec::new())?;
+        let shape = shape_plan(metadata.shape(), role, what)?;
+        let value = broadcast_value_in_dim_to_shape(builder, scalar, anchor, &shape, Vec::new())?;
         Ok(truncate_value_to_dynamic_axes(
             builder,
-            one,
+            value,
             anchor,
             &shape.dynamic_axes,
         )?)
     }
+}
+
+/// Build the real constant `value` shaped like a real floating `anchor`.
+fn real_float_constant_like(
+    builder: &mut SemanticProgramBuilder,
+    anchor: ProgramValue,
+    value: f64,
+    role: SemanticTransformRole,
+) -> Result<ProgramValue, SemanticAdTransformError> {
+    let metadata = builder.value_metadata(anchor)?.clone();
+    let dtype = metadata.dtype();
+    let bytes = match dtype {
+        DType::F32 => (value as f32).to_le_bytes().to_vec(),
+        DType::F64 => value.to_le_bytes().to_vec(),
+        _ => {
+            return Err(SemanticAdTransformError::UnsupportedMetadata {
+                role,
+                message: format!("cannot construct a real floating constant for {dtype:?}"),
+            });
+        }
+    };
+    let scalar = builder.add_op(CoreSemanticOp::Constant { dtype, bytes }, &[])?[0];
+    broadcast_scalar_like(
+        builder,
+        scalar,
+        anchor,
+        &metadata,
+        role,
+        "real-constant anchor",
+    )
 }
 
 /// Build a true dtype-aware zero shaped like `anchor`.

@@ -25,6 +25,26 @@ trait UnaryAnalyticElem: Copy + Clone + One + Zero {
     fn log1p_elem(self) -> Self;
 }
 
+/// Analytic functions defined only on the real floating dtypes.
+trait RealAnalyticElem: Copy + Clone {
+    fn erf_elem(self) -> Self;
+}
+
+// `erf` comes from `libm` (a port of musl's correctly-rounded-within-1-ulp
+// implementation): `f64::erf` is unstable in std and no existing workspace
+// dependency provides it.
+impl RealAnalyticElem for f32 {
+    fn erf_elem(self) -> Self {
+        libm::erff(self)
+    }
+}
+
+impl RealAnalyticElem for f64 {
+    fn erf_elem(self) -> Self {
+        libm::erf(self)
+    }
+}
+
 trait PowElem: Copy + Clone + Zero {
     fn pow_elem(self, exponent: Self) -> Self;
 }
@@ -419,6 +439,15 @@ where
 
 macro_rules! define_unary_analytic_dispatch {
     ($dispatch_fn:ident, $dispatch_read_with_pool_fn:ident, $op_kind:ident, $elem_fn:ident) => {
+        define_unary_analytic_dispatch!(
+            $dispatch_fn,
+            $dispatch_read_with_pool_fn,
+            $op_kind,
+            UnaryAnalyticElem::$elem_fn,
+            float_complex
+        );
+    };
+    ($dispatch_fn:ident, $dispatch_read_with_pool_fn:ident, $op_kind:ident, $elem:path, $dtypes:ident) => {
         #[cfg(test)]
         pub(crate) fn $dispatch_fn(input: &Tensor) -> crate::Result<Tensor> {
             with_test_pool(|buffers| {
@@ -439,7 +468,7 @@ macro_rules! define_unary_analytic_dispatch {
             )?;
             tenferro_tensor::with_scalar_read!(
                 input,
-                float_complex,
+                $dtypes,
                 backend = BackendId::Cpu,
                 op = stringify!($dispatch_fn),
                 |view| -> crate::Result<Tensor> {
@@ -447,7 +476,7 @@ macro_rules! define_unary_analytic_dispatch {
                         stringify!($dispatch_fn),
                         buffers,
                         &view,
-                        UnaryAnalyticElem::$elem_fn,
+                        $elem,
                     )
                 }
             )
@@ -464,6 +493,13 @@ define_unary_analytic_dispatch!(sqrt, sqrt_read_with_pool, Sqrt, sqrt_elem);
 define_unary_analytic_dispatch!(rsqrt, rsqrt_read_with_pool, Rsqrt, rsqrt_elem);
 define_unary_analytic_dispatch!(expm1, expm1_read_with_pool, Expm1, expm1_elem);
 define_unary_analytic_dispatch!(log1p, log1p_read_with_pool, Log1p, log1p_elem);
+define_unary_analytic_dispatch!(
+    erf,
+    erf_read_with_pool,
+    Erf,
+    RealAnalyticElem::erf_elem,
+    float_only
+);
 
 #[cfg(test)]
 pub(crate) fn pow(lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {

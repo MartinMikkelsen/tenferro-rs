@@ -57,6 +57,8 @@ thiserror.workspace = true
 
 [dev-dependencies]
 criterion.workspace = true
+# Independent scalar `erf` reference for the GELU and `erf` derivative tests.
+libm.workspace = true
 trybuild.workspace = true
 # The eager leaf test builds a caller-owned external payload to cover the
 # materialization predicate's decline branch.

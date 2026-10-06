@@ -47,6 +47,8 @@ mod fallible_api;
 mod gpu_ad_tests;
 #[path = "integration/gpu_f32_fusion.rs"]
 mod gpu_f32_fusion;
+#[path = "integration/gpu_nn_composites.rs"]
+mod gpu_nn_composites;
 #[path = "integration/graph_compile.rs"]
 mod graph_compile;
 #[path = "integration/hvp.rs"]
@@ -57,6 +59,8 @@ mod iterative_ad;
 mod memory_order_api;
 #[path = "integration/multi_input_traced.rs"]
 mod multi_input_traced;
+#[path = "integration/nn_composites.rs"]
+mod nn_composites;
 #[path = "integration/numpy_api.rs"]
 mod numpy_api;
 #[path = "integration/placement_bound_eager.rs"]

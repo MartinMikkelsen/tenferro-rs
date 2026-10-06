@@ -1121,6 +1121,19 @@ pub(super) fn log1p_read(
     )
 }
 
+pub(super) fn erf_read(backend: &mut CudaBackend, input: TensorRead<'_>) -> crate::Result<Tensor> {
+    if let Some(result) = backend.unary_read_native(UnaryReadOp::Erf, input.clone()) {
+        return result;
+    }
+    let input = backend.read_input(input)?;
+    dispatch::dispatch_unary_float_only!(
+        backend,
+        input.as_tensor(),
+        PrimitiveOpKind::Erf,
+        erf_float
+    )
+}
+
 pub(super) fn transpose_read(
     backend: &mut CudaBackend,
     input: TensorRead<'_>,
@@ -1374,10 +1387,13 @@ pub(super) fn to_contiguous_read(
             DType::I64 => {
                 materialize_cubecl!(I64, contiguous_read_typed::<i64>(tensor)?.as_view())
             }
-            DType::Bool => Err(unsupported_dtype(
-                "CudaBackend::to_contiguous_read",
-                crate::DType::Bool,
-            )),
+            // Eager AD retains `Bool` select conditions through this copy.
+            DType::Bool => backend
+                .duplicate_bool(
+                    contiguous_read_typed::<bool>(tensor)?,
+                    "CudaBackend::to_contiguous_read",
+                )
+                .map(Tensor::from_typed::<bool>),
             DType::C32 => {
                 materialize_cutensor!(C32, contiguous_read_typed::<Complex32>(tensor)?.as_view())
             }
@@ -1394,10 +1410,9 @@ pub(super) fn to_contiguous_read(
         TensorRead::View(TensorView::F64(input)) => materialize_cutensor!(F64, input),
         TensorRead::View(TensorView::I32(input)) => materialize_cubecl!(I32, input),
         TensorRead::View(TensorView::I64(input)) => materialize_cubecl!(I64, input),
-        TensorRead::View(TensorView::Bool(_)) => Err(unsupported_dtype(
-            "CudaBackend::to_contiguous_read",
-            crate::DType::Bool,
-        )),
+        TensorRead::View(TensorView::Bool(input)) => backend
+            .to_contiguous_view_bool(&input, "CudaBackend::to_contiguous_read")
+            .map(Tensor::from_typed::<bool>),
         TensorRead::View(TensorView::C32(input)) => materialize_cutensor!(C32, input),
         TensorRead::View(TensorView::C64(input)) => materialize_cutensor!(C64, input),
     }

@@ -3,9 +3,9 @@ use crate::ad::support::{
     conjugate_primal_if_any_dtype_complex, convert_fixed_ref_to_dtype, convert_linear_to_dtype,
     dtype_of_or_real, project_linear_to_dtype, promote_dtype_div_like,
 };
-use crate::ad::zeros::build_one_like;
-use crate::ad::ADRuleResult;
+use crate::ad::zeros::{build_one_like, build_real_float_like};
 use crate::ad::PrimitiveRuleBuilder;
+use crate::ad::{ADRuleError, ADRuleKind, ADRuleResult};
 use computegraph::types::{LocalValueId, OperationRole, ValueKey, ValueRef};
 
 use crate::std_tensor_op::StdTensorOp;
@@ -440,6 +440,82 @@ pub fn linearize_log1p(
                 builder,
                 dx,
                 ValueRef::Local(denom),
+            ))])
+        }
+        None => Ok(vec![None]),
+    }
+}
+
+/// `2 / sqrt(pi)`, the scale of the error function's derivative.
+const TWO_OVER_SQRT_PI: f64 = std::f64::consts::FRAC_2_SQRT_PI;
+
+/// Emit the fixed coefficient `2/sqrt(pi) * exp(-x^2)` of `d erf(x) = coeff * dx`.
+fn emit_erf_derivative(
+    builder: &mut dyn PrimitiveRuleBuilder,
+    x: ValueRef<StdTensorOp>,
+    rule: ADRuleKind,
+    ctx: &mut ShapeGuardContext,
+) -> ADRuleResult<LocalValueId> {
+    let dtype = dtype_of_or_real(ctx, &x);
+    let rank = ctx.rank_of(&x)?;
+    let scale = build_real_float_like(builder, dtype, TWO_OVER_SQRT_PI, x.clone(), rank)
+        .ok_or_else(|| {
+            ADRuleError::invalid_input(
+                "erf",
+                rule,
+                format!("erf is defined for real F32/F64 inputs, got {dtype:?}"),
+            )
+        })?;
+    let x_squared = emit_fixed_mul(builder, x.clone(), x);
+    let neg_x_squared = emit_fixed_neg(builder, ValueRef::Local(x_squared));
+    let gaussian = emit_fixed_unary(builder, StdTensorOp::Exp, ValueRef::Local(neg_x_squared));
+    Ok(emit_fixed_mul(
+        builder,
+        ValueRef::Local(scale),
+        ValueRef::Local(gaussian),
+    ))
+}
+
+/// Linearize `erf`: `d erf(x) = 2/sqrt(pi) * exp(-x^2) * dx`.
+pub fn linearize_erf(
+    builder: &mut dyn PrimitiveRuleBuilder,
+    primal_in: &[ValueKey<StdTensorOp>],
+    tangent_in: &[Option<LocalValueId>],
+    ctx: &mut ShapeGuardContext,
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
+    match tangent_in[0] {
+        Some(dx) => {
+            let x = ValueRef::External(primal_in[0].clone());
+            let coeff = emit_erf_derivative(builder, x, ADRuleKind::Jvp, ctx)?;
+            Ok(vec![Some(emit_linear_mul_fixed(
+                builder,
+                ValueRef::Local(coeff),
+                dx,
+            ))])
+        }
+        None => Ok(vec![None]),
+    }
+}
+
+/// Transpose the linearized `erf`: the coefficient is real, so no conjugation applies.
+pub fn transpose_erf(
+    builder: &mut dyn PrimitiveRuleBuilder,
+    cotangent_out: &[Option<LocalValueId>],
+    inputs: &[ValueRef<StdTensorOp>],
+    mode: &OperationRole,
+    ctx: &mut ShapeGuardContext,
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
+    if !unary_is_active(mode) {
+        return Ok(vec![None]);
+    }
+    match cotangent_out[0] {
+        Some(ct) => {
+            let coeff =
+                emit_erf_derivative(builder, inputs[0].clone(), ADRuleKind::Transpose, ctx)?;
+            Ok(vec![Some(emit_linear_mul_fixed(
+                builder,
+                ValueRef::Local(coeff),
+                ct,
             ))])
         }
         None => Ok(vec![None]),

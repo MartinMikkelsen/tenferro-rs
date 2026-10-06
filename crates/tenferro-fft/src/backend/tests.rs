@@ -149,6 +149,7 @@ mod default_session_impls {
             rsqrt_read(input: TensorRead<'_>) -> Result<Tensor>;
             expm1_read(input: TensorRead<'_>) -> Result<Tensor>;
             log1p_read(input: TensorRead<'_>) -> Result<Tensor>;
+            erf_read(input: TensorRead<'_>) -> Result<Tensor>;
             pow_read(lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> Result<Tensor>;
         }
     }

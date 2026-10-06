@@ -534,6 +534,30 @@ pub trait TensorSessionOpsExt {
     /// dtype or [`tenferro_tensor::Error::BackendSource`] for a typed backend
     /// failure.
     fn log1p(&self, session: &mut dyn BackendSession) -> tenferro_tensor::Result<Tensor>;
+    /// Elementwise error function `erf(x)` inside a session, for real `F32`/`F64`.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_cpu::CpuBackend;
+    /// use tenferro_runtime::{Tensor, TensorSessionOpsExt};
+    /// use tenferro_tensor::BackendSessionHost;
+    ///
+    /// let mut backend = CpuBackend::new();
+    /// let x = Tensor::from_vec_col_major(vec![2], vec![0.0_f64, 1.0]).unwrap();
+    /// let y = backend.with_backend_session(|session| x.erf(session))??;
+    /// let y = y.as_slice::<f64>().unwrap();
+    /// assert_eq!(y[0], 0.0);
+    /// assert!((y[1] - 0.842_700_792_949_714_9).abs() < 1.0e-15);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_tensor::Error::UnsupportedDType`] for complex,
+    /// integer, or `Bool` input, or [`tenferro_tensor::Error::BackendSource`]
+    /// for a typed backend failure.
+    fn erf(&self, session: &mut dyn BackendSession) -> tenferro_tensor::Result<Tensor>;
     /// Elementwise sine inside a session.
     ///
     /// # Examples
@@ -1377,6 +1401,408 @@ pub trait TensorSessionOpsExt {
     fn scale_complex(
         &self,
         factor: Complex64,
+        session: &mut dyn BackendSession,
+    ) -> tenferro_tensor::Result<Tensor>;
+    /// Logistic sigmoid `1 / (1 + exp(-x))` inside a session, overflow-free.
+    ///
+    /// Evaluated as `1 / (1 + e)` for `x > 0` and `e / (1 + e)` otherwise, with
+    /// `e = exp(-|x|)`. Real `F32`/`F64` only.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_cpu::CpuBackend;
+    /// use tenferro_runtime::{Tensor, TensorSessionOpsExt};
+    /// use tenferro_tensor::BackendSessionHost;
+    ///
+    /// let mut backend = CpuBackend::new();
+    /// let x = Tensor::from_vec_col_major(vec![3], vec![-700.0_f64, 0.0, 1000.0])?;
+    /// let y = backend.with_backend_session(|session| x.sigmoid(session))??;
+    /// let y = y.as_slice::<f64>()?;
+    /// assert_eq!(y[1], 0.5);
+    /// assert!(y[0] > 0.0 && y[0] < 1e-300);
+    /// assert_eq!(y[2], 1.0);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_tensor::Error::UnsupportedDType`] for complex,
+    /// integer, or `Bool` input, or [`tenferro_tensor::Error::BackendSource`]
+    /// for a typed backend failure.
+    fn sigmoid(&self, session: &mut dyn BackendSession) -> tenferro_tensor::Result<Tensor>;
+    /// SiLU (swish) `x * sigmoid(x)` inside a session.
+    ///
+    /// Real `F32`/`F64` only.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_cpu::CpuBackend;
+    /// use tenferro_runtime::{Tensor, TensorSessionOpsExt};
+    /// use tenferro_tensor::BackendSessionHost;
+    ///
+    /// let mut backend = CpuBackend::new();
+    /// let x = Tensor::from_vec_col_major(vec![3], vec![-1.0_f64, 0.0, 1.0])?;
+    /// let y = backend.with_backend_session(|session| x.silu(session))??;
+    /// let y = y.as_slice::<f64>()?;
+    /// assert_eq!(y[1], 0.0);
+    /// assert!((y[2] - 1.0 / (1.0 + (-1.0_f64).exp())).abs() < 1e-15);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_tensor::Error::UnsupportedDType`] for complex,
+    /// integer, or `Bool` input, or [`tenferro_tensor::Error::BackendSource`]
+    /// for a typed backend failure.
+    fn silu(&self, session: &mut dyn BackendSession) -> tenferro_tensor::Result<Tensor>;
+    /// Softplus `log(1 + exp(x))` inside a session, in the stable form `max(x, 0) + log1p(exp(-|x|))`.
+    ///
+    /// Real `F32`/`F64` only; never overflows.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_cpu::CpuBackend;
+    /// use tenferro_runtime::{Tensor, TensorSessionOpsExt};
+    /// use tenferro_tensor::BackendSessionHost;
+    ///
+    /// let mut backend = CpuBackend::new();
+    /// let x = Tensor::from_vec_col_major(vec![3], vec![-1000.0_f64, 0.0, 1000.0])?;
+    /// let y = backend.with_backend_session(|session| x.softplus(session))??;
+    /// let y = y.as_slice::<f64>()?;
+    /// assert_eq!(y[0], 0.0);
+    /// assert!((y[1] - 2.0_f64.ln()).abs() < 1e-15);
+    /// assert_eq!(y[2], 1000.0);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_tensor::Error::UnsupportedDType`] for complex,
+    /// integer, or `Bool` input, or [`tenferro_tensor::Error::BackendSource`]
+    /// for a typed backend failure.
+    fn softplus(&self, session: &mut dyn BackendSession) -> tenferro_tensor::Result<Tensor>;
+    /// Exact GELU `x/2 * (1 + erf(x / sqrt(2)))` inside a session.
+    ///
+    /// Real `F32`/`F64` only (PyTorch `approximate="none"`).
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_cpu::CpuBackend;
+    /// use tenferro_runtime::{Tensor, TensorSessionOpsExt};
+    /// use tenferro_tensor::BackendSessionHost;
+    ///
+    /// let mut backend = CpuBackend::new();
+    /// let x = Tensor::from_vec_col_major(vec![3], vec![-1.0_f64, 0.0, 1.0])?;
+    /// let y = backend.with_backend_session(|session| x.gelu(session))??;
+    /// let y = y.as_slice::<f64>()?;
+    /// assert_eq!(y[1], 0.0);
+    /// assert!((y[2] - 0.841_344_746_068_542_9).abs() < 1e-15);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_tensor::Error::UnsupportedDType`] for complex,
+    /// integer, or `Bool` input, or [`tenferro_tensor::Error::BackendSource`]
+    /// for a typed backend failure.
+    fn gelu(&self, session: &mut dyn BackendSession) -> tenferro_tensor::Result<Tensor>;
+    /// GELU tanh approximation inside a session (PyTorch `approximate="tanh"`).
+    ///
+    /// `x/2 * (1 + tanh(sqrt(2/pi) * (x + 0.044715 x^3)))`; real `F32`/`F64` only.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_cpu::CpuBackend;
+    /// use tenferro_runtime::{Tensor, TensorSessionOpsExt};
+    /// use tenferro_tensor::BackendSessionHost;
+    ///
+    /// let mut backend = CpuBackend::new();
+    /// let x = Tensor::from_vec_col_major(vec![3], vec![-1.0_f64, 0.0, 1.0])?;
+    /// let y = backend.with_backend_session(|session| x.gelu_tanh(session))??;
+    /// let y = y.as_slice::<f64>()?;
+    /// assert_eq!(y[1], 0.0);
+    /// assert!((y[2] - 0.841_191_990_608_276_8).abs() < 1e-12);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_tensor::Error::UnsupportedDType`] for complex,
+    /// integer, or `Bool` input, or [`tenferro_tensor::Error::BackendSource`]
+    /// for a typed backend failure.
+    fn gelu_tanh(&self, session: &mut dyn BackendSession) -> tenferro_tensor::Result<Tensor>;
+    /// Arithmetic mean over `axes` inside a session (`None` reduces every axis).
+    ///
+    /// Float and complex dtypes. The sum is divided by the element count; a mean
+    /// over zero elements is `NaN`, and `Some(&[])` is the identity.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_cpu::CpuBackend;
+    /// use tenferro_runtime::{Tensor, TensorSessionOpsExt};
+    /// use tenferro_tensor::BackendSessionHost;
+    ///
+    /// let mut backend = CpuBackend::new();
+    /// let x = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0])?;
+    /// let y = backend.with_backend_session(|session| x.reduce_mean(Some(&[1]), session))??;
+    /// assert_eq!(y.as_slice::<f64>()?, &[2.0, 3.0]);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_tensor::Error::UnsupportedDType`] for integer or
+    /// `Bool` input, [`tenferro_tensor::Error::Validation`] with
+    /// `AxisOutOfBounds` or `DuplicateAxis` for invalid axes, or
+    /// [`tenferro_tensor::Error::BackendSource`] for a typed backend failure.
+    fn reduce_mean(
+        &self,
+        axes: Option<&[usize]>,
+        session: &mut dyn BackendSession,
+    ) -> tenferro_tensor::Result<Tensor>;
+    /// Max-subtracted softmax along `axis` inside a session.
+    ///
+    /// Real `F32`/`F64` only. A slice that is entirely `-inf` returns zeros
+    /// instead of `NaN`; a `NaN` or `+inf` entry makes its slice `NaN`.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_cpu::CpuBackend;
+    /// use tenferro_runtime::{Tensor, TensorSessionOpsExt};
+    /// use tenferro_tensor::BackendSessionHost;
+    ///
+    /// let mut backend = CpuBackend::new();
+    /// let x = Tensor::from_vec_col_major(vec![2], vec![0.0_f64, f64::NEG_INFINITY])?;
+    /// let y = backend.with_backend_session(|session| x.softmax(0, session))??;
+    /// assert_eq!(y.as_slice::<f64>()?, &[1.0, 0.0]);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_tensor::Error::UnsupportedDType`] for complex,
+    /// integer, or `Bool` input, [`tenferro_tensor::Error::Validation`] with
+    /// `AxisOutOfBounds` for an invalid axis, or
+    /// [`tenferro_tensor::Error::BackendSource`] for a typed backend failure.
+    fn softmax(
+        &self,
+        axis: usize,
+        session: &mut dyn BackendSession,
+    ) -> tenferro_tensor::Result<Tensor>;
+    /// Max-subtracted log-softmax along `axis` inside a session.
+    ///
+    /// Real `F32`/`F64` only. A slice that is entirely `-inf` returns `-inf`
+    /// instead of `NaN`.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_cpu::CpuBackend;
+    /// use tenferro_runtime::{Tensor, TensorSessionOpsExt};
+    /// use tenferro_tensor::BackendSessionHost;
+    ///
+    /// let mut backend = CpuBackend::new();
+    /// let x = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 1.0])?;
+    /// let y = backend.with_backend_session(|session| x.log_softmax(0, session))??;
+    /// assert_eq!(y.as_slice::<f64>()?, &[-std::f64::consts::LN_2; 2]);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_tensor::Error::UnsupportedDType`] for complex,
+    /// integer, or `Bool` input, [`tenferro_tensor::Error::Validation`] with
+    /// `AxisOutOfBounds` for an invalid axis, or
+    /// [`tenferro_tensor::Error::BackendSource`] for a typed backend failure.
+    fn log_softmax(
+        &self,
+        axis: usize,
+        session: &mut dyn BackendSession,
+    ) -> tenferro_tensor::Result<Tensor>;
+    /// Softmax along `axis` over the entries where the `Bool` `mask` is true.
+    ///
+    /// `mask` broadcasts to the input shape. Masked-out entries are `0` whatever
+    /// their value; a slice with no unmasked entry is all zeros.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_cpu::CpuBackend;
+    /// use tenferro_runtime::{Tensor, TensorSessionOpsExt};
+    /// use tenferro_tensor::BackendSessionHost;
+    ///
+    /// let mut backend = CpuBackend::new();
+    /// let x = Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 1.0, f64::NAN])?;
+    /// let mask = Tensor::from_vec_col_major(vec![3], vec![true, true, false])?;
+    /// let y = backend.with_backend_session(|session| x.masked_softmax(&mask, 0, session))??;
+    /// assert_eq!(y.as_slice::<f64>()?, &[0.5, 0.5, 0.0]);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_tensor::Error::UnsupportedDType`] for complex,
+    /// integer, or `Bool` input, [`tenferro_tensor::Error::Validation`] with
+    /// `DTypeMismatch` for a non-`Bool` mask, `ShapeMismatch` for a mask that
+    /// does not broadcast to the input, or `AxisOutOfBounds` for an invalid
+    /// axis, or [`tenferro_tensor::Error::BackendSource`] for a typed backend
+    /// failure.
+    fn masked_softmax(
+        &self,
+        mask: &Tensor,
+        axis: usize,
+        session: &mut dyn BackendSession,
+    ) -> tenferro_tensor::Result<Tensor>;
+    /// Log-softmax along `axis` over the entries where the `Bool` `mask` is true.
+    ///
+    /// Masked-out entries are `-inf`; a slice with no unmasked entry is all `-inf`.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_cpu::CpuBackend;
+    /// use tenferro_runtime::{Tensor, TensorSessionOpsExt};
+    /// use tenferro_tensor::BackendSessionHost;
+    ///
+    /// let mut backend = CpuBackend::new();
+    /// let x = Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 1.0, 5.0])?;
+    /// let mask = Tensor::from_vec_col_major(vec![3], vec![true, true, false])?;
+    /// let y = backend.with_backend_session(|session| x.masked_log_softmax(&mask, 0, session))??;
+    /// let ln_half = -std::f64::consts::LN_2;
+    /// assert_eq!(y.as_slice::<f64>()?, &[ln_half, ln_half, f64::NEG_INFINITY]);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_tensor::Error::UnsupportedDType`] for complex,
+    /// integer, or `Bool` input, [`tenferro_tensor::Error::Validation`] with
+    /// `DTypeMismatch` for a non-`Bool` mask, `ShapeMismatch` for a mask that
+    /// does not broadcast to the input, or `AxisOutOfBounds` for an invalid
+    /// axis, or [`tenferro_tensor::Error::BackendSource`] for a typed backend
+    /// failure.
+    fn masked_log_softmax(
+        &self,
+        mask: &Tensor,
+        axis: usize,
+        session: &mut dyn BackendSession,
+    ) -> tenferro_tensor::Result<Tensor>;
+    /// Layer normalization along `axis` with optional affine `weight` / `bias`, inside a session.
+    ///
+    /// `(x - mean) / sqrt(var + eps) * weight + bias` with the biased variance;
+    /// `weight` and `bias` are rank-1 of length `shape[axis]`. Real `F32`/`F64` only.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_cpu::CpuBackend;
+    /// use tenferro_runtime::{Tensor, TensorSessionOpsExt};
+    /// use tenferro_tensor::BackendSessionHost;
+    ///
+    /// let mut backend = CpuBackend::new();
+    /// let x = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 3.0])?;
+    /// let bias = Tensor::from_vec_col_major(vec![2], vec![10.0_f64, 10.0])?;
+    /// let y = backend.with_backend_session(|session| x.layer_norm(0, None, Some(&bias), 0.0, session))??;
+    /// assert_eq!(y.as_slice::<f64>()?, &[9.0, 11.0]);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_tensor::Error::UnsupportedDType`] for complex,
+    /// integer, or `Bool` input, [`tenferro_tensor::Error::Validation`] with
+    /// `AxisOutOfBounds` for an invalid axis, `InvalidArgument` for a negative
+    /// or non-finite `eps`, or `DTypeMismatch` / `ShapeMismatch` for a weight or
+    /// bias that is not a same-dtype vector of the axis length, or
+    /// [`tenferro_tensor::Error::BackendSource`] for a typed backend failure.
+    fn layer_norm(
+        &self,
+        axis: usize,
+        weight: Option<&Tensor>,
+        bias: Option<&Tensor>,
+        eps: f64,
+        session: &mut dyn BackendSession,
+    ) -> tenferro_tensor::Result<Tensor>;
+    /// RMS normalization along `axis` with optional affine `weight` / `bias`, inside a session.
+    ///
+    /// `x / sqrt(mean(x^2) + eps) * weight + bias`; `weight` and `bias` are rank-1
+    /// of length `shape[axis]`. Real `F32`/`F64` only.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_cpu::CpuBackend;
+    /// use tenferro_runtime::{Tensor, TensorSessionOpsExt};
+    /// use tenferro_tensor::BackendSessionHost;
+    ///
+    /// let mut backend = CpuBackend::new();
+    /// let x = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0])?;
+    /// let weight = Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 1.0])?;
+    /// let y = backend.with_backend_session(|session| x.rms_norm(0, Some(&weight), None, 0.0, session))??;
+    /// let y = y.as_slice::<f64>()?;
+    /// let rms = 12.5_f64.sqrt();
+    /// assert!((y[0] - 6.0 / rms).abs() < 1e-15 && (y[1] - 4.0 / rms).abs() < 1e-15);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_tensor::Error::UnsupportedDType`] for complex,
+    /// integer, or `Bool` input, [`tenferro_tensor::Error::Validation`] with
+    /// `AxisOutOfBounds` for an invalid axis, `InvalidArgument` for a negative
+    /// or non-finite `eps`, or `DTypeMismatch` / `ShapeMismatch` for a weight or
+    /// bias that is not a same-dtype vector of the axis length, or
+    /// [`tenferro_tensor::Error::BackendSource`] for a typed backend failure.
+    fn rms_norm(
+        &self,
+        axis: usize,
+        weight: Option<&Tensor>,
+        bias: Option<&Tensor>,
+        eps: f64,
+        session: &mut dyn BackendSession,
+    ) -> tenferro_tensor::Result<Tensor>;
+    /// NumPy-style `take_along_axis` over `gather`, inside a session.
+    ///
+    /// `out[.., i, ..] = self[.., indices[.., i, ..], ..]` along `axis`. `indices`
+    /// (I32/I64) has the input's rank; every other dimension is either the
+    /// input's extent (batch-varying indices) or `1` (the whole extent is taken).
+    /// Indices must be in bounds.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_cpu::CpuBackend;
+    /// use tenferro_runtime::{Tensor, TensorSessionOpsExt};
+    /// use tenferro_tensor::BackendSessionHost;
+    ///
+    /// let mut backend = CpuBackend::new();
+    /// // Per-batch row gather: out[i, j, b] = x[idx[i, b], j, b].
+    /// let x = Tensor::from_vec_col_major(vec![2, 2, 2], (0..8).map(f64::from).collect::<Vec<_>>())?;
+    /// let idx = Tensor::from_vec_col_major(vec![2, 1, 2], vec![1_i64, 0, 0, 0])?;
+    /// let y = backend.with_backend_session(|session| x.take_along_axis(&idx, 0, session))??;
+    /// assert_eq!(y.as_slice::<f64>()?, &[1.0, 0.0, 3.0, 2.0, 4.0, 4.0, 6.0, 6.0]);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_tensor::Error::Validation`] with `RankMismatch` or
+    /// `ShapeMismatch` for incompatible index shapes, `AxisOutOfBounds` for an
+    /// invalid axis, or `InvalidArgument` when taking from a zero-length axis;
+    /// [`tenferro_tensor::Error::UnsupportedDType`] for a non-integer index
+    /// dtype; or [`tenferro_tensor::Error::BackendSource`] for a typed backend
+    /// failure.
+    fn take_along_axis(
+        &self,
+        indices: &Tensor,
+        axis: usize,
         session: &mut dyn BackendSession,
     ) -> tenferro_tensor::Result<Tensor>;
 }

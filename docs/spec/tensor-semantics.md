@@ -306,7 +306,90 @@ The trailing-batch convention also applies to `DotGeneral` / `BatchedGemm`
 
 ---
 
-## VIII. Source of Truth
+## VIII. Composite Operations and `erf`
+
+`erf` is a core primitive; the operations below it are composites of existing
+primitives. Each is offered under the same name on the eager surface
+(`EagerSession`), the traced surface (`TracedTensor`) and the concrete-session
+surface (`TensorSessionOpsExt`; `TypedTensorSessionOpsExt` for all but
+`take_along_axis`, which is an indexing operation). The formulation and the
+edge-case policy live once in `tenferro-runtime/src/composite.rs`, so every
+surface and backend computes the same primitive sequence; AD of the eager and
+traced forms follows from the primitives' rules. The traced composites require
+concrete input shapes (their scalar constants and reductions are broadcast
+against known extents) and report an `InvalidArgument` validation error at
+`GraphBuild` for a symbolic shape; the `erf` primitive itself accepts
+symbolic shapes.
+
+**`erf`** is defined for real `F32` and `F64` only. Complex, integer and `Bool`
+input is a typed `UnsupportedDType` error on CPU and CUDA (and `Unsupported` at
+`GraphBuild` on the traced surface). `erf(+-0) = +-0`, `erf(+-inf) = +-1`, and
+`NaN` stays `NaN`. The CPU kernel uses `libm` (within 1 ulp of a
+high-precision reference); CUDA uses the CUDA math library through CubeCL's
+`Arithmetic::Erf` (within 2 ulp). The derivative is `2/sqrt(pi) * exp(-x^2)`.
+CPU elementwise fusion declines regions containing `erf` (`strided_fused` has
+no instruction for it), and the StableHLO lowering rejects it explicitly
+(`erf` is the CHLO op `chlo.erf`).
+
+**Activations** (real `F32`/`F64`; other dtypes are `UnsupportedDType`):
+
+| Operation | Formulation | Edge-case policy |
+|---|---|---|
+| `sigmoid` | with `e = exp(-abs(x))`: `1/(1+e)` for `x > 0`, `e/(1+e)` otherwise | no intermediate overflows; `sigmoid(+-inf) = 1, 0`; derivatives finite everywhere, `sigmoid'(0) = 1/4`, `sigmoid''(0) = 0` |
+| `silu` | `x * sigmoid(x)` | `silu(-inf)` is `-inf * 0 = NaN` (as PyTorch) |
+| `softplus` | `max(x, 0) + log1p(exp(-abs(x)))` | never overflows; `softplus'(0) = 1/2`, `softplus''(0) = 1/4`; the derivative tends to `1` / `0` at large positive / negative `x` |
+| `gelu` | `x/2 * (1 + erf(x/sqrt(2)))` (PyTorch `approximate="none"`) | the far negative tail loses relative accuracy to the cancellation in `1 + erf` (as PyTorch); `gelu(-inf)` is `NaN` |
+| `gelu_tanh` | `x/2 * (1 + tanh(sqrt(2/pi) (x + 0.044715 x^3)))` (`approximate="tanh"`) | `gelu_tanh(-inf)` is `NaN`; the derivative is `NaN` once `x^2` overflows |
+
+`-abs(x)` is written `select(x > 0, -x, x)`, so its derivative at `x = 0` is
+`1`; this is what gives the exact derivatives at zero above.
+
+**`reduce_mean(axes)`** divides the sum by the element count and is defined for
+float and complex dtypes (integers and `Bool` are `UnsupportedDType`). `None`
+reduces every axis and `Some(&[])` is the identity. A mean over zero elements
+is `NaN` (0/0), with the reduced shape, as in NumPy and PyTorch.
+
+**`softmax` / `log_softmax` / `masked_softmax` / `masked_log_softmax`** reduce
+along one `axis` (real `F32`/`F64`). They subtract the slice maximum before
+`exp`. The masked forms take a `Bool` mask that broadcasts to the input; a
+`false` entry is treated as `-inf`. The policy:
+
+- a masked-out entry is `0` (softmax) or `-inf` (log-softmax), and its
+  gradient is exactly `0`, even when its value is `NaN` or infinite;
+- a slice with no participating entry (all masked out, or all `-inf` in the
+  unmasked form) is all `0` / all `-inf` instead of the `NaN` of the naive
+  `-inf - (-inf)`. Its gradient is finite, and in the masked forms it is `0`.
+  The implementation replaces the slice maximum by `0` and the slice sum by
+  `1` where the maximum is `-inf`;
+- a participating `NaN` or `+inf` makes the whole slice `NaN`; other slices are
+  unaffected;
+- a zero-length `axis` returns an empty result of the input shape.
+
+**`layer_norm` / `rms_norm`** normalize along one `axis` (real `F32`/`F64`):
+`(x - mean) / sqrt(var + eps)` with the biased variance of the centered values,
+and `x / sqrt(mean(x^2) + eps)`, then `* weight + bias`. `weight` and `bias` are
+optional rank-1 tensors of length `shape[axis]` and the input's dtype; `eps`
+must be finite and non-negative (`InvalidArgument` otherwise). A zero-variance
+(layer) or all-zero (RMS) slice normalizes to `0`, then `bias`, with a finite
+gradient when `eps > 0`; with `eps = 0` it is `0/0 = NaN`, as in PyTorch. A
+zero-length `axis` returns an empty result. These are the composed forms; a
+fused CPU kernel is tracked separately (#2006).
+
+**`take_along_axis(indices, axis)`** follows NumPy:
+`out[.., i, ..] = x[.., indices[.., i, ..], ..]` along `axis`. `indices`
+(`I32` or `I64`) has the input's rank; every other dimension of `indices` is
+either the input's extent (a batch dimension, indexed per element) or `1`
+(broadcast: the whole extent is taken). The output has the input's shape with
+`indices.shape[axis]` along `axis`. It is one `gather` whose index tuples pair
+each index with its batch coordinates; the coordinates are built on the
+backend from scalar constants, so no host index data is transferred. Indices
+must be in `[0, shape[axis])`; out-of-range indices follow `gather` (see the
+indexing bounds contract in `ad-contract.md`). The gradient flows to `x` only.
+Index views (`TensorRead`) are not accepted yet (#1930).
+
+---
+
+## IX. Source of Truth
 
 Current implementation ownership:
 
@@ -319,6 +402,7 @@ Current implementation ownership:
   placement metadata
 - `crates/tenferro-tensor/src/backend.rs` for backend traits
 - `crates/tenferro-runtime/src/*` for graph execution and extension runtime dispatch
+- `crates/tenferro-runtime/src/composite.rs` for the composite operations
 
 If this document conflicts with those files, the implementation wins and this
 document should be updated.

@@ -35,7 +35,8 @@ CPU execution, and backend-parametric concrete tensor kernels.
 
 - Elementwise: add, multiply, negate, conjugate, divide, abs, sign, maximum,
   minimum, compare, select, clamp.
-- Analytic: exp, log, sin, cos, tanh, sqrt, rsqrt, pow, expm1, log1p.
+- Analytic: exp, log, sin, cos, tanh, sqrt, rsqrt, pow, expm1, log1p, erf
+  (real only).
 - Structural: transpose, reshape, broadcast, convert, diagonal
   extraction/embedding, triangular masks.
 - Reductions: sum, product, max, min.
@@ -44,7 +45,24 @@ CPU execution, and backend-parametric concrete tensor kernels.
 - Shape packing helpers: `Tensor::stack` and `Tensor::index_select` compose
   reshape/concatenate/gather for host-known positions.
 - Placement: explicit host/device upload and download hooks.
-- Optional backend elementwise fusion.
+- Optional backend elementwise fusion. CPU fusion declines regions containing
+  `erf` (no `strided_fused` instruction); CUDA fusion emits CubeCL `Erf`.
+
+### Composite Operations
+
+`sigmoid`, `silu`, `softplus`, `gelu`, `gelu_tanh`, `reduce_mean`, the softmax
+family, `layer_norm`, `rms_norm` and `take_along_axis` are not primitives.
+Each is written once in `tenferro-runtime/src/composite.rs` over a small
+primitive vocabulary (`CompositeOps`) that the traced (`TracedTensor`), eager
+(`EagerSession`, implemented in `tenferro-ad`) and concrete-session
+(`TensorSessionOpsExt` / `TypedTensorSessionOpsExt`) surfaces implement, so the
+formulation, validation and edge-case policy cannot drift between surfaces or
+backends; backend parity reduces to the parity of the primitives used. Index
+tuples for `take_along_axis` are built on the backend from scalar constants
+(an `O(log n)` doubling `iota`), so no host index data crosses a device
+boundary and the traced form runs on device runtimes. New composites follow
+the same pattern; a composite that later gets a fused kernel (B2 of #2010 for
+the normalizations) keeps this as its specification and reference.
 
 ### CPU Status
 

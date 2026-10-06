@@ -373,6 +373,7 @@ impl TensorAnalytic for RecordingBackend {
         fn pow_read("pow"; lhs, rhs);
         fn expm1_read("expm1"; input);
         fn log1p_read("log1p"; input);
+        fn erf_read("erf"; input);
     }
 }
 

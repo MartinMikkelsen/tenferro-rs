@@ -90,7 +90,10 @@ fixed-shape N-ary einsum plans that `tenferro-einsum` expands into
 
 Phase 2 is reserved for operations that need additional dtype or semantic
 contracts: `Compare`, `Select`, `Maximum`, `Minimum`, `Clamp`, `Sign`, and
-complex-oriented `Conj`.
+complex-oriented `Conj`. `Erf` is rejected with an explicit `UnsupportedOp`
+until the emitter produces the CHLO op `chlo.erf`. The composites built on
+`Compare`/`Select` (`sigmoid`, `softplus`, the softmax family) are outside
+Phase 1 for the same reason as those primitives.
 
 ## Shape and Layout
 

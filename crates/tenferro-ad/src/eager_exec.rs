@@ -499,6 +499,7 @@ pub(crate) fn exec_standard_op_on_tensor_reads_in_session(
         }
         StdTensorOp::Expm1 => vec![exec.expm1_read(inputs[0].clone())?],
         StdTensorOp::Log1p => vec![exec.log1p_read(inputs[0].clone())?],
+        StdTensorOp::Erf => vec![exec.erf_read(inputs[0].clone())?],
         StdTensorOp::Convert { to, .. } => {
             let input = concrete_tensor_read(exec, inputs[0].clone())?;
             vec![exec.cast(input.tensor(), *to)?]

@@ -686,6 +686,14 @@ pub(crate) fn bool_tensor_array_arg(
     Ok(prepared.into_array_arg(tensor.n_elements()))
 }
 
+pub(crate) fn bool_view_array_arg(
+    view: &TypedTensorView<'_, bool, impl TensorRank>,
+    op: &'static str,
+) -> crate::Result<ArrayArg<CubeclCudaRuntime>> {
+    let prepared = downcast_prepared(view.prepare_device_read(op)?, op)?;
+    Ok(prepared.into_array_arg(view.n_elements()))
+}
+
 pub(crate) fn typed_tensor_array_arg_as<T, U>(
     tensor: &TypedTensor<T, impl TensorRank>,
     len: usize,

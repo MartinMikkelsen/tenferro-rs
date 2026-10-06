@@ -445,6 +445,7 @@ impl TensorAnalytic for CpuExecSession<'_> {
     delegate_with_pool!(pow_read(lhs: TensorRead<'_>, rhs: TensorRead<'_>) => analytic::pow_read_with_pool);
     delegate_with_pool!(expm1_read(input: TensorRead<'_>) => analytic::expm1_read_with_pool);
     delegate_with_pool!(log1p_read(input: TensorRead<'_>) => analytic::log1p_read_with_pool);
+    delegate_with_pool!(erf_read(input: TensorRead<'_>) => analytic::erf_read_with_pool);
 }
 
 impl TensorStructural for CpuExecSession<'_> {

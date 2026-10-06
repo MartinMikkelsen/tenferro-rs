@@ -50,6 +50,7 @@ host	tenferro-xla::integration	stablehlo_lowering::lowers_static_symbolic_nary_e
 host	tenferro-xla::integration	stablehlo_lowering::lowers_structural_ops_and_convert
 host	tenferro-xla::integration	stablehlo_lowering::lowers_sum_squares_to_multiply_then_reduce
 host	tenferro-xla::integration	stablehlo_lowering::lowers_unbatched_dot_general
+host	tenferro-xla::integration	unsupported::rejects_erf_explicitly_instead_of_emitting_chlo
 host	tenferro-xla::integration	unsupported::rejects_dynamic_upper_bound_extents
 host	tenferro-xla::integration	unsupported::rejects_extension_without_standard_op_lowering
 host	tenferro-xla::integration	unsupported::rejects_i64_dtype_before_emitting_mlir

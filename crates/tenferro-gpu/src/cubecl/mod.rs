@@ -150,8 +150,8 @@ pub use workspace_retirement::WorkspaceRetirementStats;
 pub use gemm::CutensorWorkspaceStats;
 
 use dispatch::{
-    alloc_bool_output, alloc_output, bool_tensor_array_arg, comptime_sequence, cube_count_for_len,
-    cube_dim_1d, dtype_mismatch, ensure_axes_unique, ensure_axis, ensure_rank,
+    alloc_bool_output, alloc_output, bool_tensor_array_arg, bool_view_array_arg, comptime_sequence,
+    cube_count_for_len, cube_dim_1d, dtype_mismatch, ensure_axes_unique, ensure_axis, ensure_rank,
     ensure_resident_on_runtime, ensure_view_mut_resident_on_runtime,
     ensure_view_resident_on_runtime, launch_binary, launch_binary_bool_tensor, launch_binary_parts,
     launch_binary_tensor, launch_bool_tensor_into, launch_compare_bool, launch_nullary_bool_into,
@@ -1449,6 +1449,37 @@ impl CudaBackend {
         let output_arg = typed_tensor_array_arg(&output, op)?;
         let input_arg = typed_view_array_arg(view, op)?;
         launch_native_materialization::<T>(self, output_arg, input_arg, &plan, op)?;
+        Ok(output)
+    }
+
+    /// Materialize a strided `Bool` view through the `u8` storage it shares
+    /// with the native permutation kernel, like [`Self::to_contiguous_view_typed`].
+    fn to_contiguous_view_bool<R: TensorRank>(
+        &self,
+        view: &TypedTensorView<'_, bool, R>,
+        op: &'static str,
+    ) -> crate::Result<TypedTensor<bool>> {
+        ensure_view_resident_on_runtime(self.runtime(), view, op)?;
+        let len = checked_dim_product(op, "output shape", view.shape())?;
+        let source_allocation_len = view
+            .backend_buffer()
+            .map(|buffer| buffer.len())
+            .ok_or_else(|| {
+                crate::Error::runtime_state(op, "expected CUDA backend view, got host view")
+            })?;
+        let plan = NativePermutationPlan::for_contiguous_output(
+            op,
+            view.shape(),
+            view.strides(),
+            view.offset(),
+            source_allocation_len,
+            len,
+            false,
+        )?;
+        let output = alloc_bool_output(self.runtime(), view.shape())?;
+        let output_arg = bool_tensor_array_arg(&output, op)?;
+        let input_arg = bool_view_array_arg(view, op)?;
+        launch_native_materialization::<u8>(self, output_arg, input_arg, &plan, op)?;
         Ok(output)
     }
 
@@ -4313,6 +4344,7 @@ enum UnaryReadOp {
     Rsqrt,
     Expm1,
     Log1p,
+    Erf,
 }
 
 /// Operand accepted by a CUDA `_read` entry point.
@@ -4687,6 +4719,7 @@ impl CudaBackend {
                                 UnaryReadOp::Rsqrt => "rsqrt",
                                 UnaryReadOp::Expm1 => "expm1",
                                 UnaryReadOp::Log1p => "log1p",
+                                UnaryReadOp::Erf => "erf",
                             },
                             // SAFETY: launch_unary_view validates the shape, zero-offset
                             // compact layout and residency, and allocates a fresh output.
@@ -4728,6 +4761,8 @@ impl CudaBackend {
             (DType::F64, UnaryReadOp::Expm1) => unary!(F64, f64, expm1_float),
             (DType::F32, UnaryReadOp::Log1p) => unary!(F32, f32, log1p_float),
             (DType::F64, UnaryReadOp::Log1p) => unary!(F64, f64, log1p_float),
+            (DType::F32, UnaryReadOp::Erf) => unary!(F32, f32, erf_float),
+            (DType::F64, UnaryReadOp::Erf) => unary!(F64, f64, erf_float),
             _ => None,
         }
     }

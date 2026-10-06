@@ -74,6 +74,22 @@ Common import recipes:
 - `tenferro_linalg::EagerSessionLinalgExt` for borrowed eager linear algebra (`EagerTensorLinalgExt::solve` remains a calling-thread `no_grad` exception).
 - `tenferro_ad::{EagerRuntime, Tensor}` for eager values and runtime AD.
 
+## Activations, softmax and normalization
+
+`erf`, `sigmoid`, `silu`, `softplus`, `gelu` (exact) / `gelu_tanh`,
+`reduce_mean`, `softmax` / `log_softmax`, `masked_softmax` /
+`masked_log_softmax` (Bool mask, `true` participates), `layer_norm` /
+`rms_norm` (optional rank-1 `weight` / `bias`, `eps`) and NumPy-style
+`take_along_axis` have one name on every tier: `s.softmax(&x, axis)` on an
+`EagerSession`, `x.softmax(axis)` on a `TracedTensor`, and
+`x.softmax(axis, session)` through `TensorSessionOpsExt`. They are stable
+compositions (no overflow, max-subtracted softmax, all-masked slices give 0 /
+`-inf` with a zero gradient) and differentiate through eager and traced AD; do
+not hand-roll them. The edge-case policy is in
+[`docs/spec/tensor-semantics.md`](../../../../docs/spec/tensor-semantics.md),
+Section VIII. `take_along_axis` is not on `TypedTensorSessionOpsExt` (an
+indexing op); `erf` is real-only and does not lower to StableHLO.
+
 ## Traced tensors and extensions
 
 Traced core operations compile into a graph. Standard operation families are

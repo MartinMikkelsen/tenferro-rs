@@ -71,6 +71,7 @@ use crate::AdContext;
 pub(crate) type GradSlot = Arc<Mutex<Option<Arc<AdValueRecord>>>>;
 pub(crate) type WeakGradSlot = Weak<Mutex<Option<Arc<AdValueRecord>>>>;
 
+mod composite;
 mod residuals;
 pub(crate) use residuals::{finish_residuals, EagerTrace};
 
@@ -1476,6 +1477,33 @@ impl EagerSession<'_> {
     /// Returns a typed foreign-runtime, unsupported-dtype, or backend error.
     pub fn log1p(&mut self, input: &EagerTensor) -> Result<EagerTensor> {
         self.run_unary(input, StdTensorOp::Log1p)
+    }
+
+    /// Compute the error function `erf(x)` elementwise on this borrowed session.
+    ///
+    /// Defined for real `F32`/`F64` tensors; `erf(+-0) = +-0`,
+    /// `erf(+-inf) = +-1`, and `NaN` stays `NaN`. The derivative is
+    /// `2/sqrt(pi) * exp(-x^2)`.
+    ///
+    /// # Examples
+    /// ```rust
+    /// use tenferro_ad::{EagerRuntime, Tensor};
+    /// let ctx = EagerRuntime::new()?;
+    /// let y = ctx.with_eager_session(|s| {
+    ///     let x = s.constant_from(Tensor::from_vec_col_major(vec![2], vec![0.0_f64, 1.0])?)?;
+    ///     s.erf(&x)
+    /// })?;
+    /// let y = y.value()?;
+    /// let y = y.as_slice::<f64>()?;
+    /// assert_eq!(y[0], 0.0);
+    /// assert!((y[1] - 0.842_700_792_949_714_9).abs() < 1.0e-15);
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
+    /// # Errors
+    /// Returns a typed foreign-runtime error, a typed unsupported-dtype error
+    /// for complex, integer, or `Bool` input, or a backend error.
+    pub fn erf(&mut self, input: &EagerTensor) -> Result<EagerTensor> {
+        self.run_unary(input, StdTensorOp::Erf)
     }
 
     /// Convert a tensor under the checked dtype-promotion lattice.

@@ -451,7 +451,8 @@ fn cuda_operation_kind(op: &CoreSemanticOp) -> Option<CudaPreparedKind> {
         | CoreSemanticOp::Rsqrt
         | CoreSemanticOp::Pow
         | CoreSemanticOp::Expm1
-        | CoreSemanticOp::Log1p => CudaPreparedKind::Elementwise,
+        | CoreSemanticOp::Log1p
+        | CoreSemanticOp::Erf => CudaPreparedKind::Elementwise,
         CoreSemanticOp::ReduceSum { .. }
         | CoreSemanticOp::ReduceSumSquares { .. }
         | CoreSemanticOp::ReduceProd { .. }
@@ -626,6 +627,7 @@ fn core_operation_name(op: &CoreSemanticOp) -> &'static str {
         CoreSemanticOp::Pow => "pow",
         CoreSemanticOp::Expm1 => "expm1",
         CoreSemanticOp::Log1p => "log1p",
+        CoreSemanticOp::Erf => "erf",
         CoreSemanticOp::ExtractDiag { .. } => "extract_diag",
         CoreSemanticOp::EmbedDiag { .. } => "embed_diag",
         CoreSemanticOp::Tril { .. } => "tril",

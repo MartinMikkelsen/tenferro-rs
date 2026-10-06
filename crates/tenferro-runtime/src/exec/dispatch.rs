@@ -149,6 +149,7 @@ define_backend_dispatch! {
     PrimitiveOpKind::Pow => execute_pow,
     PrimitiveOpKind::Expm1 => execute_expm1,
     PrimitiveOpKind::Log1p => execute_log1p,
+    PrimitiveOpKind::Erf => execute_erf,
     PrimitiveOpKind::Gather => execute_gather,
     PrimitiveOpKind::GatherDynamicSliceSizes => execute_gather_dynamic_slice_sizes,
     PrimitiveOpKind::Scatter => execute_scatter,
@@ -768,6 +769,14 @@ fn execute_log1p(
     inst: &ExecInstruction,
 ) -> Result<Tensor> {
     Ok(exec.log1p_read(get_read(slots, &inst.input_slots, 0)?)?)
+}
+
+fn execute_erf(
+    exec: &mut dyn BackendSession,
+    slots: &mut [Option<ExecSlot<'_>>],
+    inst: &ExecInstruction,
+) -> Result<Tensor> {
+    Ok(exec.erf_read(get_read(slots, &inst.input_slots, 0)?)?)
 }
 
 fn execute_gather(

@@ -2028,6 +2028,15 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
             })
             .unwrap()
         }
+
+        fn erf_read(&mut self, input: tenferro_tensor::TensorRead<'_>) -> crate::Result<Tensor> {
+            let input = tenferro_tensor::backend::read_owned_tensor("erf", input)?;
+            let mut backend = CpuBackend::new();
+            tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
+                __s.erf_read(TensorRead::from_tensor(input))
+            })
+            .unwrap()
+        }
     }
 
     impl TensorStructural for DefaultOnlyBackend {
@@ -2559,6 +2568,15 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
             let mut backend = CpuBackend::new();
             tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
                 __s.log1p_read(TensorRead::from_tensor(input))
+            })
+            .unwrap()
+        }
+
+        fn erf_read(&mut self, input: tenferro_tensor::TensorRead<'_>) -> crate::Result<Tensor> {
+            let input = tenferro_tensor::backend::read_owned_tensor("erf", input)?;
+            let mut backend = CpuBackend::new();
+            tenferro_tensor::BackendSessionHost::with_backend_session(&mut backend, |__s| {
+                __s.erf_read(TensorRead::from_tensor(input))
             })
             .unwrap()
         }

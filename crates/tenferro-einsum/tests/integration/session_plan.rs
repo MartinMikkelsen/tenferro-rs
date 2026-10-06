@@ -370,6 +370,11 @@ macro_rules! panic_analytic {
                 let _ = tenferro_tensor::backend::read_owned_tensor("log1p", input)?;
                 panic!("log1p should not be called in this test")
             }
+
+            fn erf_read(&mut self, input: tenferro_tensor::TensorRead<'_>) -> TensorResult {
+                let _ = tenferro_tensor::backend::read_owned_tensor("erf", input)?;
+                panic!("erf should not be called in this test")
+            }
         }
     };
 }
@@ -657,6 +662,11 @@ impl TensorAnalytic for SessionCountingBackend {
     fn log1p_read(&mut self, input: tenferro_tensor::TensorRead<'_>) -> TensorResult {
         let _ = tenferro_tensor::backend::read_owned_tensor("log1p", input)?;
         panic!("log1p should not be called in this test")
+    }
+
+    fn erf_read(&mut self, input: tenferro_tensor::TensorRead<'_>) -> TensorResult {
+        let _ = tenferro_tensor::backend::read_owned_tensor("erf", input)?;
+        panic!("erf should not be called in this test")
     }
 }
 

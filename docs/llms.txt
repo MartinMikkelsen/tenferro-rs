@@ -9,6 +9,7 @@
 - **Explicit backend.** Direct operations take an explicit backend argument; construct the backend/runtime once and reuse it — per-call construction discards the buffer pool.
 - **WARNING — einsum dialect.** Equations need the explicit arrow (`"ij,jk->ik"`); omitting it is rejected during parsing with `Error::InvalidSubscripts`. Flat notation supports one right-aligned, broadcastable `...` ellipsis per term, and `EinsumNotation` is the programmatic form. Parenthesized contraction order containing ellipsis is also rejected during parsing.
 - **Result-returning operators.** Traced operators return `Result`; propagate with `?`.
+- **Built-in NN composites.** `erf`, `sigmoid`, `silu`, `softplus`, `gelu` / `gelu_tanh`, `reduce_mean`, `softmax` / `log_softmax` (and `masked_` forms), `layer_norm`, `rms_norm` and `take_along_axis` exist with the same name on the eager, traced and concrete-session surfaces, in numerically stable forms with a specified edge-case policy (all-masked softmax slices are 0 / `-inf`, not `NaN`); use them instead of hand composition.
 - **No `Clone` on tensors.** `Tensor` and the dynamic `TypedTensor` do not implement `Clone`; `duplicate()` returns an independent copy and fails for device-only storage. Share one tensor with `Arc<Tensor>` or views instead of copying.
 
 ## Recipes and references
@@ -46,7 +47,7 @@
 ## Specification
 
 - [API Conventions](https://tensor4all.org/tenferro-rs/spec/api-conventions.html): Normative public API naming, module shape, feature naming, and documentation-surface conventions.
-- [Tensor Semantics](https://tensor4all.org/tenferro-rs/spec/tensor-semantics.html): Defines dense tensor metadata, storage, placement, typed views, and backend boundaries.
+- [Tensor Semantics](https://tensor4all.org/tenferro-rs/spec/tensor-semantics.html): Defines dense tensor metadata, storage, placement, typed views, backend boundaries, and the composite (activation, softmax, normalization, `take_along_axis`) edge-case policy.
 - [Backend Contract](https://tensor4all.org/tenferro-rs/spec/backend-contract.html): Defines the execution pipeline from traced values and extension registration through compiled backend execution.
 
 ## Agent skills

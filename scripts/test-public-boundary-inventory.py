@@ -38,7 +38,7 @@ def rejects(mutator, phrase: str) -> None:
 
 def test_current_inventory_is_exhaustive() -> None:
     _, auth, rows = inventory()
-    assert len(rows) == 186
+    assert len(rows) == 188
     assert [row["operation"] for row in rows if row["id"].endswith("ordinary.eager")] == ["add", "einsum"]
     new_routes = {
         row["id"]: (row["surface"], row["phase"])

@@ -317,6 +317,14 @@ impl TensorAnalytic for WrongDTypeBackend {
         let _ = tenferro_tensor::backend::read_owned_tensor("log1p", input)?;
         panic!("log1p should not be called in this test")
     }
+
+    fn erf_read(
+        &mut self,
+        input: tenferro_tensor::TensorRead<'_>,
+    ) -> tenferro_tensor::Result<Tensor> {
+        let _ = tenferro_tensor::backend::read_owned_tensor("erf", input)?;
+        panic!("erf should not be called in this test")
+    }
 }
 
 impl TensorStructural for WrongDTypeBackend {

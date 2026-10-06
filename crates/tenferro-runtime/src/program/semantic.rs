@@ -211,6 +211,7 @@ fn core_semantic_op_retained_bytes(op: &CoreSemanticOp) -> Option<usize> {
         | CoreSemanticOp::Pow
         | CoreSemanticOp::Expm1
         | CoreSemanticOp::Log1p
+        | CoreSemanticOp::Erf
         | CoreSemanticOp::ExtractDiag { .. }
         | CoreSemanticOp::EmbedDiag { .. }
         | CoreSemanticOp::Tril { .. }

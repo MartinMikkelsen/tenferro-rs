@@ -142,7 +142,7 @@ The current typed wrapper set covers:
 
 - elementwise arithmetic and analytic operations: `add`, `sub`, `mul`, `div`,
   `pow`, `maximum`, `minimum`, `neg`, `abs`, `sign`, `conj`, `exp`, `log`,
-  `sin`, `cos`, `tanh`, `sqrt`, `rsqrt`, `expm1`, and `log1p`;
+  `sin`, `cos`, `tanh`, `sqrt`, `rsqrt`, `expm1`, `log1p`, and `erf`;
 - boolean-producing and selection operations: `compare`, `where_select`, and
   `clamp`;
 - reduction and structural operations that preserve scalar type: `reduce_sum`,
