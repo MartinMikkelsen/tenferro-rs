@@ -18,9 +18,17 @@ fn invalid_dot_general_config(message: impl Into<String>) -> Error {
 /// the exec layer. This separation makes it structurally impossible for
 /// stored ranks to drift from actual tensor ranks (issue #664).
 ///
+/// # Output layout
+///
 /// The output shape is `[lhs_free..., rhs_free..., batch...]` (col-major
-/// batch-trailing convention). Batch dims have the largest stride so that
-/// each batch slice occupies a contiguous block of memory.
+/// batch-trailing convention): batch axes come **last**, unlike PyTorch's
+/// batch-leading `bmm`. Batch dims have the largest stride so that each batch
+/// slice occupies a contiguous block of memory. Free axes keep their input
+/// order. For attention scores, `q[d, lq, b]` against `k[d, lk, b]` with
+/// `d` contracted and `b` batched gives `[lq, lk, b]`; see the
+/// "Contraction Output Layout" section of the tensor-operations guide for a
+/// worked example. Transpose afterwards only where a consumer needs batch
+/// first.
 ///
 /// # Examples
 ///

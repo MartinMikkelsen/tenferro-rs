@@ -1874,6 +1874,9 @@ impl TracedTensor {
 
     /// Generalized tensor contraction.
     ///
+    /// The output layout is `[lhs free..., rhs free..., batch...]`: batch axes
+    /// come last (see [`DotGeneralConfig`]).
+    ///
     /// # Examples
     ///
     /// ```rust

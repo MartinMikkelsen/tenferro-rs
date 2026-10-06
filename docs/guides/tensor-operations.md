@@ -416,3 +416,59 @@ assert_eq!(total.shape(), &[] as &[usize]);
 assert_eq!(total.as_slice::<f64>().unwrap(), &[21.0]);
 ```
 <!-- end-snippet-source -->
+
+## Contraction Output Layout
+
+`dot_general` returns `[lhs free..., rhs free..., batch...]`: the batch axes
+come **last**, unlike PyTorch's batch-leading `matmul`/`bmm`. With column-major
+storage this keeps each batch slice contiguous. When porting attention or GQA
+code written for `(B, H, L, D)`, store tensors as `[D, L, H, B]` (or flatten
+`H, B` into one batch axis) and expect `[Lq, Lk, batch...]` scores; transpose
+only where a consumer needs batch first.
+
+<!-- snippet-source: docs/tutorial-code/src/bin/core_tensor_snippets.rs#tensor_operations_dot_general_layout -->
+```rust
+use tenferro_cpu::CpuBackend;
+use tenferro_runtime::{DotGeneralConfig, Tensor, TensorSessionOpsExt};
+use tenferro_tensor::BackendSessionHost;
+
+// Attention scores: q[d, lq, b] and k[d, lk, b] (column-major, batch last).
+let (d, lq, lk, b) = (2, 3, 4, 2);
+let q_data: Vec<f64> = (0..d * lq * b).map(|v| v as f64).collect();
+let k_data: Vec<f64> = (0..d * lk * b).map(|v| 0.5 * v as f64).collect();
+let q = Tensor::from_vec_col_major(vec![d, lq, b], q_data.clone())?;
+let k = Tensor::from_vec_col_major(vec![d, lk, b], k_data.clone())?;
+let config = DotGeneralConfig {
+    lhs_contracting_dims: [0].as_slice().into(),
+    rhs_contracting_dims: [0].as_slice().into(),
+    lhs_batch_dims: [2].as_slice().into(),
+    rhs_batch_dims: [2].as_slice().into(),
+};
+let mut backend = CpuBackend::new();
+let (scores, batch_leading) = backend.with_backend_session(|session| {
+    let scores = q.dot_general(&k, config, session)?;
+    // Output is [lhs free..., rhs free..., batch...] = [lq, lk, b].
+    // Move batch first only if a consumer needs [b, lq, lk].
+    let batch_leading = scores.transpose(&[2, 0, 1], session)?;
+    Ok::<_, tenferro_tensor::Error>((scores, batch_leading))
+})??;
+assert_eq!(scores.shape(), &[lq, lk, b]);
+assert_eq!(batch_leading.shape(), &[b, lq, lk]);
+
+// scores[i, j, n] = sum_c q[c, i, n] * k[c, j, n]
+let at = |data: &[f64], dims: [usize; 3], idx: [usize; 3]| {
+    data[idx[0] + dims[0] * (idx[1] + dims[1] * idx[2])]
+};
+let s = scores.as_slice::<f64>()?;
+for n in 0..b {
+    for j in 0..lk {
+        for i in 0..lq {
+            let expected: f64 = (0..d)
+                .map(|c| at(&q_data, [d, lq, b], [c, i, n]) * at(&k_data, [d, lk, b], [c, j, n]))
+                .sum();
+            assert_eq!(s[i + lq * (j + lk * n)], expected);
+        }
+    }
+}
+```
+<!-- end-snippet-source -->

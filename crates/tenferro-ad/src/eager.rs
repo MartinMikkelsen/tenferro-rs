@@ -2485,6 +2485,9 @@ impl EagerSession<'_> {
 
     /// Contract eager tensors according to a dot-general dimension mapping.
     ///
+    /// The output layout is `[lhs free..., rhs free..., batch...]`: batch axes
+    /// come last (see [`DotGeneralConfig`](tenferro_runtime::DotGeneralConfig)).
+    ///
     /// # Examples
     ///
     /// ```rust

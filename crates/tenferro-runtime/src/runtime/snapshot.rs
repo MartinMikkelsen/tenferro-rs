@@ -952,7 +952,7 @@ impl Runtime {
     ///
     /// Returns [`crate::Error::RuntimeState`] when the snapshot cannot be read
     /// or an engine's preparation fails, with the typed
-    /// [`PrepareError`]/[`RuntimeStateError`] source retained.
+    /// [`PrepareError`](super::PrepareError)/[`RuntimeStateError`] source retained.
     pub fn prepare_extension_immediate(
         &self,
         engine_id: &EngineId,
