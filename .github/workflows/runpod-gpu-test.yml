@@ -894,7 +894,7 @@ jobs:
             conclusion="failure"
             kind="failed"
             title="RunPod CI GPU gate failed"
-            summary="$(printf 'RunPod GPU validation did not complete successfully.\\n\\n%s\\n\\nRetry with `gh run rerun %s --failed`.' "$(cat "${failures_file}")" "${GITHUB_RUN_ID}")"
+            summary="$(printf 'RunPod GPU validation did not complete successfully.\\n\\n%s\\n\\nRetry with: gh run rerun %s --failed' "$(cat "${failures_file}")" "${GITHUB_RUN_ID}")"
           fi
           external_id=""
           if [ -n "${TESTED_REF}" ]; then
