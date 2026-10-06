@@ -3,12 +3,14 @@
 //! Operation families that are no longer part of core, including einsum, live
 //! in their extension crates.
 
+use num_complex::Complex64;
 use tenferro_ops::broadcast::{
     broadcast_input_plan, broadcast_shape, broadcast_shapes, BroadcastError,
 };
 use tenferro_tensor::validate::matmul_config_for_shapes;
 use tenferro_tensor::{
-    BackendSession, CompareDir, Error, Result, Tensor, TensorRead, TensorScalar, ValidationError,
+    BackendSession, CompareDir, DotGeneralConfig, Error, Result, Tensor, TensorRead, TensorScalar,
+    ValidationError,
 };
 
 use crate::{TypedTensorMaskSessionOpsExt, TypedTensorSessionOpsExt};
@@ -45,15 +47,8 @@ impl<T: TensorScalar> TypedTensorSessionOpsExt<T> for TypedTensor<T> {
         axes: Option<&[usize]>,
         session: &mut dyn BackendSession,
     ) -> Result<TypedTensor<T>> {
-        let all;
-        let axes = match axes {
-            Some(axes) => axes,
-            None => {
-                all = (0..self.shape().len()).collect::<Vec<_>>();
-                &all
-            }
-        };
-        let out = session.reduce_sum_read(T::tensor_read(self), axes)?;
+        let axes = crate::tensor::all_axes_if_none(self.shape().len(), axes);
+        let out = session.reduce_sum_read(T::tensor_read(self), &axes)?;
         into_typed_result("reduce_sum", out)
     }
 
@@ -235,6 +230,92 @@ impl<T: TensorScalar> TypedTensorSessionOpsExt<T> for TypedTensor<T> {
     ) -> Result<TypedTensor<T>> {
         let out = session.broadcast_in_dim_read(T::tensor_read(self), shape, dims)?;
         into_typed_result("broadcast_in_dim", out)
+    }
+
+    fn reduce_max(
+        &self,
+        axes: Option<&[usize]>,
+        session: &mut dyn BackendSession,
+    ) -> Result<TypedTensor<T>> {
+        let axes = crate::tensor::all_axes_if_none(self.shape().len(), axes);
+        let out = session.reduce_max_read(T::tensor_read(self), &axes)?;
+        into_typed_result("reduce_max", out)
+    }
+
+    fn reduce_min(
+        &self,
+        axes: Option<&[usize]>,
+        session: &mut dyn BackendSession,
+    ) -> Result<TypedTensor<T>> {
+        let axes = crate::tensor::all_axes_if_none(self.shape().len(), axes);
+        let out = session.reduce_min_read(T::tensor_read(self), &axes)?;
+        into_typed_result("reduce_min", out)
+    }
+
+    fn reduce_prod(
+        &self,
+        axes: Option<&[usize]>,
+        session: &mut dyn BackendSession,
+    ) -> Result<TypedTensor<T>> {
+        let axes = crate::tensor::all_axes_if_none(self.shape().len(), axes);
+        let out = session.reduce_prod_read(T::tensor_read(self), &axes)?;
+        into_typed_result("reduce_prod", out)
+    }
+
+    fn reduce_sum_squares(
+        &self,
+        axes: Option<&[usize]>,
+        session: &mut dyn BackendSession,
+    ) -> Result<TypedTensor<T>> {
+        let axes = crate::tensor::all_axes_if_none(self.shape().len(), axes);
+        let out = session.reduce_sum_squares_read(T::tensor_read(self), &axes)?;
+        into_typed_result("reduce_sum_squares", out)
+    }
+
+    fn dot_general(
+        &self,
+        rhs: &TypedTensor<T>,
+        config: DotGeneralConfig,
+        session: &mut dyn BackendSession,
+    ) -> Result<TypedTensor<T>> {
+        let out = session.dot_general_read(T::tensor_read(self), T::tensor_read(rhs), &config)?;
+        into_typed_result("dot_general", out)
+    }
+
+    fn dot_general_with_conj(
+        &self,
+        rhs: &TypedTensor<T>,
+        config: DotGeneralConfig,
+        lhs_conj: bool,
+        rhs_conj: bool,
+        session: &mut dyn BackendSession,
+    ) -> Result<TypedTensor<T>> {
+        let out = session.dot_general_with_conj_read(
+            T::tensor_read(self),
+            T::tensor_read(rhs),
+            &config,
+            lhs_conj,
+            rhs_conj,
+        )?;
+        into_typed_result("dot_general_with_conj", out)
+    }
+
+    fn scale_real(&self, factor: f64, session: &mut dyn BackendSession) -> Result<TypedTensor<T>> {
+        let scalar = crate::scale::real_scale_scalar(T::dtype(), factor)?;
+        let scalar = session.upload_host_tensor(TensorRead::from_tensor(&scalar))?;
+        let scalar = into_typed_result::<T>("scale_real", scalar)?;
+        TypedTensorSessionOpsExt::mul(self, &scalar, session)
+    }
+
+    fn scale_complex(
+        &self,
+        factor: Complex64,
+        session: &mut dyn BackendSession,
+    ) -> Result<TypedTensor<T>> {
+        let scalar = crate::scale::complex_scale_scalar(T::dtype(), factor)?;
+        let scalar = session.upload_host_tensor(TensorRead::from_tensor(&scalar))?;
+        let scalar = into_typed_result::<T>("scale_complex", scalar)?;
+        TypedTensorSessionOpsExt::mul(self, &scalar, session)
     }
 }
 

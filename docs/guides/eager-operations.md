@@ -160,6 +160,63 @@ independent copy, and fails for device-only storage instead of silently
 downloading it. To share one tensor without copying, wrap it in `Arc<Tensor>`
 or pass views.
 
+## Mixing eager and concrete work
+
+There are three ways to reach a backend session from eager code:
+
+| Entry | Use for |
+|---|---|
+| `EagerRuntime::with_eager_session(\|s\| ...)` | The canonical entry: eager operations on `s`, plus AD-free `Tensor` operations through `s.backend_session()`. |
+| `EagerRuntime::on_cpu(placement)?.with_eager_session(\|session\| ...)` | Core `Tensor` operations on the runtime's CPU backend with an explicit CPU placement. |
+| `EagerRuntime::with_execution_session(\|session\| ...)` | Raw backend access for extension code; no eager operations. |
+
+The callback must be `Send` (the CPU backend may run it on a pool thread) and
+returns one `Result`; see `with_eager_session` above. Do all work for one region
+inside one callback: entering the same runtime again from inside the callback,
+or calling an operation that opens its own session, returns a typed
+`SessionEntry` error (`Reentered`) instead of running, and never deadlocks.
+
+<!-- snippet-source: docs/tutorial-code/src/bin/core_tensor_snippets.rs#eager_operations_mixing -->
+```rust
+use tenferro_ad::{EagerRuntime, EagerTensor};
+use tenferro_cpu::{CpuBackend, CpuPlacement};
+use tenferro_runtime::{Tensor, TensorSessionOpsExt};
+
+let runtime = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
+let x = EagerTensor::from_tensor_in(
+    Tensor::from_vec_col_major(vec![2], vec![1.0_f64, -2.0])?,
+    runtime.clone(),
+)?;
+
+// Canonical entry: eager ops on a borrowed `EagerSession`.
+let y = runtime.with_eager_session(|s| s.mul(&x, &x))?;
+let values = y.to_tensor()?;
+
+// AD-free work in the same session: the eager session lends its backend session.
+let total = runtime.with_eager_session(|s| {
+    values
+        .reduce_sum(None, s.backend_session())
+        .map_err(tenferro_ad::Error::from)
+})?;
+assert_eq!(total.as_slice::<f64>()?, &[5.0]);
+
+// CPU placement bridge: core ops on the runtime's CPU backend session.
+let mut cpu = runtime.on_cpu(CpuPlacement::Auto)?;
+let doubled = cpu.with_eager_session(|session| {
+    values
+        .scale_real(2.0, session)
+        .map_err(tenferro_ad::Error::from)
+})?;
+assert_eq!(doubled.as_slice::<f64>()?, &[2.0, 8.0]);
+
+// A nested entry into the same runtime is rejected, not deadlocked.
+let nested = runtime.with_eager_session(|_| {
+    Ok::<_, tenferro_ad::Error>(runtime.with_eager_session(|s| s.neg(&x)).is_err())
+})?;
+assert!(nested);
+```
+<!-- end-snippet-source -->
+
 ## Materializing metadata-only views
 
 View transforms such as transpose and slice only change layout metadata. When

@@ -13,7 +13,7 @@ use std::sync::{Arc, Mutex, MutexGuard, OnceLock, Weak};
 use std::time::{Duration, Instant};
 
 use lru::LruCache;
-use num_complex::{Complex32, Complex64};
+use num_complex::Complex64;
 
 use crate::extension::{
     validate_eager_extension_target, EagerExtensionBackendKind, EagerExtensionTarget,
@@ -2546,26 +2546,7 @@ impl EagerSession<'_> {
     /// Returns a typed foreign-runtime, invalid-factor/dtype, or backend error.
     pub fn scale_real(&mut self, input: &EagerTensor, factor: f64) -> Result<EagerTensor> {
         self.ensure_runtime(input)?;
-        let scalar = match input.dtype() {
-            DType::F64 => Tensor::from_vec_col_major(vec![], vec![factor])?,
-            DType::F32 => Tensor::from_vec_col_major(vec![], vec![factor as f32])?,
-            DType::I32 => Tensor::from_vec_col_major(vec![], vec![round_real_to_i32(factor)?])?,
-            DType::I64 => Tensor::from_vec_col_major(vec![], vec![round_real_to_i64(factor)?])?,
-            DType::Bool => Tensor::from_vec_col_major(vec![], vec![bool_from_real(factor)?])?,
-            DType::C64 => Tensor::from_vec_col_major(vec![], vec![Complex64::new(factor, 0.0)])?,
-            DType::C32 => {
-                Tensor::from_vec_col_major(vec![], vec![Complex32::new(factor as f32, 0.0)])?
-            }
-            DType::External(_) => {
-                return Err(Error::TensorRuntime(
-                    tenferro_tensor::Error::invalid_argument(
-                        "scale_real",
-                        "dtype",
-                        "an externally defined scalar has no eager constant",
-                    ),
-                ));
-            }
-        };
+        let scalar = tenferro_runtime::scale::real_scale_scalar(input.dtype(), factor)?;
         let scalar = self.constant_from(scalar)?;
         self.mul(input, &scalar)
     }
@@ -2591,22 +2572,7 @@ impl EagerSession<'_> {
     /// or [`Error::TensorRuntime`] for a typed backend failure.
     pub fn scale_complex(&mut self, input: &EagerTensor, factor: Complex64) -> Result<EagerTensor> {
         self.ensure_runtime(input)?;
-        let scalar = match input.dtype() {
-            DType::C64 => Tensor::from_vec_col_major(vec![], vec![factor])?,
-            DType::C32 => Tensor::from_vec_col_major(
-                vec![],
-                vec![Complex32::new(factor.re as f32, factor.im as f32)],
-            )?,
-            dtype => {
-                return Err(Error::TensorRuntime(
-                    tenferro_tensor::Error::invalid_argument(
-                        "scale_complex",
-                        "dtype",
-                        format!("requires complex tensor dtype, got {dtype:?}"),
-                    ),
-                ));
-            }
-        };
+        let scalar = tenferro_runtime::scale::complex_scale_scalar(input.dtype(), factor)?;
         let scalar = self.constant_from(scalar)?;
         self.mul(input, &scalar)
     }
@@ -6562,49 +6528,6 @@ pub(crate) fn one_like_tensor(input: &Tensor, session: &mut dyn BackendSession) 
     session
         .upload_host_tensor(TensorRead::from_tensor(&host))
         .map_err(Error::from)
-}
-
-fn finite_real_factor(value: f64) -> Result<f64> {
-    if value.is_finite() {
-        Ok(value)
-    } else {
-        Err(Error::TensorRuntime(
-            tenferro_tensor::Error::invalid_argument(
-                "scale_real",
-                "factor",
-                format!("real scalar must be finite, got {value}"),
-            ),
-        ))
-    }
-}
-
-fn round_real_to_i64(value: f64) -> Result<i64> {
-    let rounded = finite_real_factor(value)?.round();
-    if rounded < i64::MIN as f64 || rounded >= -(i64::MIN as f64) {
-        return Err(Error::TensorRuntime(
-            tenferro_tensor::Error::invalid_argument(
-                "scale_real",
-                "factor",
-                format!("rounded real scalar {rounded} is out of i64 range"),
-            ),
-        ));
-    }
-    Ok(rounded as i64)
-}
-
-fn round_real_to_i32(value: f64) -> Result<i32> {
-    let rounded = round_real_to_i64(value)?;
-    i32::try_from(rounded).map_err(|_| {
-        Error::TensorRuntime(tenferro_tensor::Error::invalid_argument(
-            "scale_real",
-            "factor",
-            format!("rounded real scalar {rounded} is out of i32 range"),
-        ))
-    })
-}
-
-fn bool_from_real(value: f64) -> Result<bool> {
-    Ok(finite_real_factor(value)? != 0.0)
 }
 
 #[cfg(test)]

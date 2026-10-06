@@ -1,6 +1,20 @@
 # Session-Oriented Concrete APIs (issue #1673)
 
-Status: design (pre-implementation review target).
+Status: implemented and partly superseded; the sections below are the
+original design record.
+
+**Current state (2026-10, #1858).** The one-shot traits were deleted (#1680
+Phase 2) and the `_in` names became the plain names: the concrete surface is
+`TensorSessionOpsExt` / `TypedTensorSessionOpsExt` (plus
+`TypedTensorMaskSessionOpsExt` for bool-mask selection), every method takes
+`session: &mut dyn BackendSession` last, and the methods are entered with
+`BackendSessionHost::with_backend_session`. Where this document says the
+one-shot API stays and wraps the session implementation, or prefers `_in`
+names, it describes the pre-#1680 plan, not the code. #1858 brought the
+tensor-receiver surface to parity with the borrowed session for indexing,
+reductions, structural, dot and scaling operations; operations whose backend
+hooks take owned erased tensors are on `Tensor` only (see
+[review-decision-records.md](./review-decision-records.md#concrete-session-surface-parity-1858)).
 
 ## Overview
 

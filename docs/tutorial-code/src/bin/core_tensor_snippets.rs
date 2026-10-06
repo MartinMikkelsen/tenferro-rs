@@ -19,6 +19,51 @@ let mut backend = CpuBackend::new();
         Ok(())
     }
 
+    snippet_eager_operations_mixing()?;
+
+    // snippet source: docs/guides/eager-operations.md (Mixing eager and concrete work)
+    fn snippet_eager_operations_mixing() -> Result<(), Box<dyn std::error::Error>> {
+        // snippet-start:eager_operations_mixing
+use tenferro_ad::{EagerRuntime, EagerTensor};
+use tenferro_cpu::{CpuBackend, CpuPlacement};
+use tenferro_runtime::{Tensor, TensorSessionOpsExt};
+
+let runtime = EagerRuntime::with_cpu_backend(CpuBackend::new())?;
+let x = EagerTensor::from_tensor_in(
+    Tensor::from_vec_col_major(vec![2], vec![1.0_f64, -2.0])?,
+    runtime.clone(),
+)?;
+
+// Canonical entry: eager ops on a borrowed `EagerSession`.
+let y = runtime.with_eager_session(|s| s.mul(&x, &x))?;
+let values = y.to_tensor()?;
+
+// AD-free work in the same session: the eager session lends its backend session.
+let total = runtime.with_eager_session(|s| {
+    values
+        .reduce_sum(None, s.backend_session())
+        .map_err(tenferro_ad::Error::from)
+})?;
+assert_eq!(total.as_slice::<f64>()?, &[5.0]);
+
+// CPU placement bridge: core ops on the runtime's CPU backend session.
+let mut cpu = runtime.on_cpu(CpuPlacement::Auto)?;
+let doubled = cpu.with_eager_session(|session| {
+    values
+        .scale_real(2.0, session)
+        .map_err(tenferro_ad::Error::from)
+})?;
+assert_eq!(doubled.as_slice::<f64>()?, &[2.0, 8.0]);
+
+// A nested entry into the same runtime is rejected, not deadlocked.
+let nested = runtime.with_eager_session(|_| {
+    Ok::<_, tenferro_ad::Error>(runtime.with_eager_session(|s| s.neg(&x)).is_err())
+})?;
+assert!(nested);
+        // snippet-end:eager_operations_mixing
+        Ok(())
+    }
+
     snippet_eager_operations_2()?;
 
     // snippet source: docs/guides/eager-operations.md:97

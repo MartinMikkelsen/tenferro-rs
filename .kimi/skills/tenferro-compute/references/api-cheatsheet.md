@@ -36,7 +36,11 @@ assert_eq!(projected.host_data()?, &[3.0, 6.0, 3.5, 11.0]);
 The important shape is
 `backend.with_backend_session(|session| x.matmul(&weights, session))`. For
 dynamic dtypes use `TensorSessionOpsExt`; for static scalar types use
-`TypedTensorSessionOpsExt`.
+`TypedTensorSessionOpsExt`. The receiver methods mirror the eager session
+methods with the session last (`x.gather(&idx, config, session)`,
+`x.reduce_max(None, session)`, `x.dot_general(&y, config, session)`);
+indexing, padding, concatenation and triangular/diagonal ops are on `Tensor`
+only (`Tensor::from_typed` moves a typed tensor there without a copy).
 
 ## Eager tensors
 
