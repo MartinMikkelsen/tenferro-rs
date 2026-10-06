@@ -689,7 +689,8 @@ fn candidate_contraction_cost(
 /// ports `OMEinsumContractionOrders.jl`), with the deterministic vertex and
 /// tie ordering adopted upstream after omeco 0.2.6. omeco 0.2.6 iterates a
 /// `HashMap` to break ties, so its path differed between processes (#1963);
-/// tenferro plans its default (non-annealing) path here instead. Only the
+/// tenferro plans its default (non-annealing) path here instead, until an
+/// omeco release carries the fix (<https://github.com/GiggleLiu/omeco/issues/44>). Only the
 /// pairs whose operands changed are re-scored after each step, because the
 /// cost of any other pair is unaffected by the merge.
 fn optimize_self_greedy_pairs(
