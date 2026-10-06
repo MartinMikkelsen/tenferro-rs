@@ -28,6 +28,43 @@
 //! let dx = ad.grad(&loss, &x).unwrap();
 //! assert_eq!(dx.rank, 0);
 //! ```
+//!
+//! # Errors
+//!
+//! [`Error`] (the runtime error type, re-exported here) has public
+//! constructors for the failures downstream code reports itself:
+//! [`Error::invalid_argument`], [`Error::unsupported`],
+//! [`Error::dtype_mismatch`], [`Error::validation`], [`Error::runtime_state`],
+//! and [`Error::extension`] for a typed source error. Each takes the operation
+//! name and an [`ErrorPhase`]. A `tenferro_tensor::Error` converts with
+//! `From`, so `?` works on tensor-level results inside functions returning
+//! [`Result`]. Match on [`Error::kind`] rather than on variant shapes.
+//!
+//! ```rust
+//! use tenferro_ad::{Error, ErrorPhase};
+//!
+//! fn check_rank(rank: usize) -> tenferro_ad::Result<()> {
+//!     if rank != 2 {
+//!         return Err(Error::invalid_argument(
+//!             "my_crate::attention",
+//!             ErrorPhase::Execution,
+//!             "query",
+//!             format!("expected a rank-2 query, got rank {rank}"),
+//!         ));
+//!     }
+//!     Ok(())
+//! }
+//!
+//! let error = check_rank(3).unwrap_err();
+//! assert_eq!(
+//!     error.kind(),
+//!     tenferro_tensor::ErrorKind::Validation(tenferro_tensor::ValidationKind::InvalidArgument)
+//! );
+//! let unsupported = Error::unsupported("my_crate::op", ErrorPhase::Execution, "no GPU path yet");
+//! assert_eq!(unsupported.kind(), tenferro_tensor::ErrorKind::Unsupported);
+//! let tensor_error: Error = tenferro_tensor::Error::invalid_argument("op", "arg", "bad").into();
+//! assert!(matches!(tensor_error.kind(), tenferro_tensor::ErrorKind::Validation(_)));
+//! ```
 
 mod context;
 mod eager;
@@ -62,10 +99,10 @@ pub use tenferro_runtime::{
 };
 pub use traced::TracedTensorAdExt;
 
-pub use tenferro_runtime::{ContextId, Error, Result};
+pub use tenferro_runtime::{ContextId, Error, ErrorPhase, Result};
 
 pub mod error {
-    pub use tenferro_runtime::{ContextId, Error, Result};
+    pub use tenferro_runtime::{ContextId, Error, ErrorPhase, Result};
 }
 
 pub(crate) mod metadata {
