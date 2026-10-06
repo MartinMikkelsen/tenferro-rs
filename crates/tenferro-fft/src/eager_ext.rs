@@ -21,6 +21,7 @@ use crate::{
 /// Consuming in-place FFT methods for [`EagerTensor`].
 /// Ordinary eager FFT operations use [`EagerSessionFftExt`] inside a borrowed
 /// `EagerRuntime::with_eager_session` region.
+#[cfg_attr(docsrs, doc(cfg(feature = "autodiff")))]
 pub trait EagerTensorFftExt {
     /// Consume a uniquely owned, untracked, compact column-major CPU complex
     /// tensor and overwrite it with its FFT. Shape and allocation are preserved; no implicit copy occurs.
@@ -113,6 +114,7 @@ impl EagerTensorFftExt for EagerTensor {
 /// assert_eq!(result.shape(), &[2]);
 /// # Ok::<(), tenferro_ad::Error>(())
 /// ```
+#[cfg_attr(docsrs, doc(cfg(feature = "autodiff")))]
 pub trait EagerSessionFftExt {
     /// Perform a complex or full-spectrum real FFT on this borrowed session.
     ///

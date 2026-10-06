@@ -42,6 +42,7 @@ use crate::{RankRevealingQrOptions, RankRevealingQrResult};
 /// assert_eq!(x.shape(), &[1, 1]);
 /// # Ok::<(), tenferro_ad::Error>(())
 /// ```
+#[cfg_attr(docsrs, doc(cfg(feature = "autodiff")))]
 pub trait EagerTensorLinalgExt {
     /// # Errors
     ///
@@ -90,6 +91,7 @@ impl EagerTensorLinalgExt for EagerTensor {
 /// assert_eq!(factor.value()?.as_slice::<f64>()?, &[2.0]);
 /// # Ok::<(), tenferro_ad::Error>(())
 /// ```
+#[cfg_attr(docsrs, doc(cfg(feature = "autodiff")))]
 pub trait EagerSessionLinalgExt {
     /// Compute the lower Cholesky factor without reopening the eager backend.
     ///

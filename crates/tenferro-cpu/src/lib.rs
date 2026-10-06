@@ -94,7 +94,7 @@
 //! let mut backend = CpuBackend::new();
 //! requires_cached_dot(&mut backend);
 //! ```
-
+#![cfg_attr(docsrs, feature(doc_cfg))]
 // `provider-inject` unit tests deliberately omit the broad default-backend
 // suite below because no fixture has registered its FFI symbols. That makes
 // private helpers referenced only by the broad suite appear unused in this one

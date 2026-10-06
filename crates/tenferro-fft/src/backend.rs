@@ -87,7 +87,7 @@ impl<'a> FftExecutionCache<'a> {
 ///
 /// This is a backend SPI: third-party backend implementers implement this
 /// trait on their execution sessions to provide FFT capability. The concrete
-/// [`TensorFftExt`]/[`TensorReadFftExt`] methods and [`FftExecutor`] take an
+/// [`TensorFftExt`](crate::TensorFftExt)/[`TensorReadFftExt`](crate::TensorReadFftExt) methods and [`FftExecutor`](crate::FftExecutor) take an
 /// erased `&mut dyn BackendSession` and dispatch **internally** to the
 /// built-in CPU/CUDA/WebGPU execution sessions; a session without this
 /// capability returns a typed `Error::Unsupported` instead of being accepted

@@ -67,6 +67,7 @@ use crate::{
 /// assert_eq!(product.value()?.as_slice::<f64>()?, &[24.0]);
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
+#[cfg_attr(docsrs, doc(cfg(feature = "autodiff")))]
 pub trait EagerSessionEinsumExt {
     /// Execute an einsum from string notation.
     ///
