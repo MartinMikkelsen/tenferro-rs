@@ -1448,7 +1448,9 @@ fn cubecl_pad_mapping_avoids_signed_edge_subtraction_overflow() {
         "pub fn gather_kernel",
     );
     assert!(!pad_kernel.contains("out_idx[axis] as i64 - low"));
-    assert!(pad_kernel.contains("low.unsigned_abs()"));
+    // The edge padding is a runtime argument, so the kernel computes the
+    // magnitude itself; unsigned wrapping keeps `i64::MIN` exact.
+    assert!(pad_kernel.contains("0_u64 - low_bits"));
     assert_ordered_needles(
         "pad_kernel candidate bounds check",
         pad_kernel,

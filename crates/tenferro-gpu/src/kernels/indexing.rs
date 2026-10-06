@@ -174,17 +174,16 @@ pub(crate) fn update_window_len<E: CubePrimitive>(
 pub fn slice_kernel<E: CubePrimitive>(
     out: &mut Tensor<E>,
     input: &Tensor<E>,
-    #[comptime] starts: Sequence<usize>,
+    starts: Sequence<usize>,
     #[comptime] strides: Sequence<usize>,
 ) {
     if ABSOLUTE_POS < out.len() {
-        let rank = starts.len();
+        let rank = comptime! { strides.len() };
         let out_idx = flat_to_tensor_index(ABSOLUTE_POS, out, rank);
         let mut input_idx = Array::<usize>::new(rank);
         #[unroll]
         for axis in 0..rank {
-            input_idx[axis] = comptime! { *starts.index(axis) }
-                + out_idx[axis] * comptime! { *strides.index(axis) };
+            input_idx[axis] = starts[axis] + out_idx[axis] * comptime! { *strides.index(axis) };
         }
         out[ABSOLUTE_POS] = input[multi_to_tensor_index(&input_idx, input, rank)];
     }
@@ -195,17 +194,17 @@ pub fn dynamic_slice_kernel<E: CubePrimitive, I: Numeric + CubePrimitive>(
     out: &mut Tensor<E>,
     input: &Tensor<E>,
     starts: &Tensor<I>,
-    #[comptime] slice_sizes: Sequence<usize>,
+    slice_sizes: Sequence<usize>,
+    #[comptime] rank: usize,
 ) {
     if ABSOLUTE_POS < out.len() {
-        let rank = slice_sizes.len();
         let out_idx = flat_to_tensor_index(ABSOLUTE_POS, out, rank);
         let mut input_idx = Array::<usize>::new(rank);
         #[unroll]
         for axis in 0..rank {
             let start = starts[axis];
             let dim_size = input.shape(axis);
-            let window_size = comptime! { *slice_sizes.index(axis) };
+            let window_size = slice_sizes[axis];
             input_idx[axis] = clamp_window_start::<I>(start, dim_size, window_size) + out_idx[axis];
         }
         out[ABSOLUTE_POS] = input[multi_to_tensor_index(&input_idx, input, rank)];
@@ -216,22 +215,25 @@ pub fn dynamic_slice_kernel<E: CubePrimitive, I: Numeric + CubePrimitive>(
 pub fn pad_kernel<E: CubePrimitive>(
     out: &mut Tensor<E>,
     input: &Tensor<E>,
-    #[comptime] edge_padding_low: Sequence<i64>,
-    #[comptime] interior_padding: Sequence<i64>,
+    edge_padding_low: Sequence<i64>,
+    interior_padding: Sequence<i64>,
+    #[comptime] rank: usize,
 ) {
     if ABSOLUTE_POS < out.len() {
-        let rank = edge_padding_low.len();
         let out_idx = flat_to_tensor_index(ABSOLUTE_POS, out, rank);
         let mut input_idx = Array::<usize>::new(rank);
         let mut in_bounds = true;
         #[unroll]
         for axis in 0..rank {
-            let low = comptime! { *edge_padding_low.index(axis) };
-            let low_magnitude = comptime! { low.unsigned_abs() };
-            let spacing = comptime! { (*interior_padding.index(axis) + 1) as u64 };
+            let low = edge_padding_low[axis];
+            // `unsigned_abs` in unsigned arithmetic: `0 - low as u64` wraps to
+            // the magnitude for every negative `low`, `i64::MIN` included.
+            let low_bits = low as u64;
+            let low_magnitude = if low < 0 { 0_u64 - low_bits } else { low_bits };
+            let spacing = (interior_padding[axis] + 1) as u64;
             let out_pos = out_idx[axis] as u64;
             let mut shifted = 0_u64;
-            if comptime! { low < 0 } {
+            if low < 0 {
                 shifted = out_pos + low_magnitude;
             } else if out_pos < low_magnitude {
                 in_bounds = false;
@@ -265,7 +267,7 @@ pub fn gather_kernel<E: CubePrimitive, I: Numeric + CubePrimitive>(
     #[comptime] window_dims: Sequence<usize>,
     #[comptime] offset_dims: Sequence<usize>,
     #[comptime] start_index_map: Sequence<usize>,
-    #[comptime] slice_sizes: Sequence<usize>,
+    slice_sizes: Sequence<usize>,
     #[comptime] index_vector_dim: usize,
     #[comptime] operand_rank: usize,
     #[comptime] out_rank: usize,
@@ -325,7 +327,7 @@ pub fn gather_kernel<E: CubePrimitive, I: Numeric + CubePrimitive>(
                 start_indices_rank,
             );
             let dim_size = operand.shape(operand_dim);
-            let window_size = comptime! { *slice_sizes.index(operand_dim) };
+            let window_size = slice_sizes[operand_dim];
             operand_idx[operand_dim] = clamp_window_start::<I>(start, dim_size, window_size);
         }
 
