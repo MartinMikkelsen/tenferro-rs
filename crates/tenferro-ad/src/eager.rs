@@ -2111,6 +2111,12 @@ impl EagerSession<'_> {
 
     /// Import an untracked leaf within this borrowed session.
     ///
+    /// `tensor` must already be usable by this runtime's backend: a host
+    /// tensor on a CPU runtime, or a tensor already on the device of a CUDA
+    /// or WebGPU runtime. No host/device transfer happens here. To import host
+    /// data into a device runtime, use [`Self::constant_from_host`], which
+    /// uploads first; on a CPU runtime the two are equivalent.
+    ///
     /// # Examples
     ///
     /// ```rust
@@ -2134,7 +2140,13 @@ impl EagerSession<'_> {
     }
 
     /// Upload a host tensor and import it as an untracked leaf in this session.
-    /// Unlike [`Self::constant_from`], this explicitly crosses the host/device boundary.
+    ///
+    /// Unlike [`Self::constant_from`], this explicitly crosses the host/device
+    /// boundary: the host `tensor` is uploaded to this runtime's backend
+    /// (a host copy on a CPU runtime) and the uploaded value becomes the leaf.
+    /// Use it whenever the source data lives on the host and the runtime may
+    /// be a device runtime; use [`Self::constant_from`] for a tensor that is
+    /// already resident on the backend.
     ///
     /// # Examples
     /// ```rust
@@ -4169,7 +4181,10 @@ impl EagerRuntime {
     ///
     /// The returned tensor does not participate in gradient tracking.
     /// Use this for fixed masks, quadrature weights, physical constants,
-    /// and other data that should not receive gradients.
+    /// and other data that should not receive gradients. Like
+    /// [`EagerSession::constant_from`], it performs no host/device transfer;
+    /// use [`EagerSession::constant_from_host`] to upload host data into a
+    /// device runtime.
     ///
     /// # Examples
     ///

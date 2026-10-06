@@ -143,6 +143,17 @@ Owned tensors stay compact column-major. Metadata-only strided views live on
 storage may copy a view into compact storage on the same device, but they do
 not silently upload CPU tensors or download CUDA tensors.
 
+To bring a `Tensor` into an eager runtime as an untracked constant, pick by
+where the data lives:
+
+| Source | Call | Transfer |
+|---|---|---|
+| Already on the runtime's backend (any tensor on a CPU runtime; a device tensor on CUDA/WebGPU) | `session.constant_from(tensor)` or `runtime.constant_from(tensor)` | none |
+| Host data, runtime possibly on a device | `session.constant_from_host(tensor)` | uploads to the backend (a host copy on CPU) |
+
+On a CPU runtime both give the same result. Trainable leaves use
+`variable_from` with the same residency rule as `constant_from`.
+
 ## Materializing metadata-only views
 
 View transforms such as transpose and slice only change layout metadata. When
