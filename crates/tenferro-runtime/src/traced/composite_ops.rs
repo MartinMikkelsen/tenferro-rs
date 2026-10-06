@@ -59,6 +59,7 @@ impl CompositeOps for TracedComposite {
             CompositeBinary::Sub => lhs.sub(rhs),
             CompositeBinary::Mul => lhs.mul(rhs),
             CompositeBinary::Div => lhs.div(rhs),
+            CompositeBinary::Maximum => lhs.maximum(rhs),
         }
     }
 
@@ -89,6 +90,7 @@ impl CompositeOps for TracedComposite {
         match op {
             CompositeReduce::Sum => value.reduce_sum(Some(axes)),
             CompositeReduce::Max => value.reduce_max(Some(axes)),
+            CompositeReduce::SumSquares => value.reduce_sum_squares(Some(axes)),
         }
     }
 

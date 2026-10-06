@@ -19,17 +19,28 @@
   `sigmoid'(0) = 1/4`). All intermediates and derivatives stay finite for
   finite and infinite inputs, except where the documented product
   `-inf * 0` gives `NaN` (`silu`, `gelu` at `-inf`, matching PyTorch).
-- Softmax detects an all-masked slice with `max == -inf` (`Eq`, so a `NaN`
-  maximum still propagates). It substitutes `max := 0` and `sum := 1` there,
-  which makes the value `0` / `-inf` and the gradient finite. The masked forms'
-  `select(mask, x, -inf)` makes masked-out gradients exactly zero.
+- Softmax handles an all-masked slice by clamping the slice maximum to the
+  lowest finite value and the slice sum to the smallest positive normal, with
+  a NaN-propagating `maximum`. The value is then `0` / `-inf`, the gradient
+  stays finite (it reaches the clamp constants, not `x`), and a `NaN` maximum
+  still propagates. The first version used `compare(max == -inf)` and two
+  `select`s, which cost three extra small ops and three constants per call.
+  The masked forms' `select(mask, x, -inf)` makes masked-out gradients exactly
+  zero.
+- Composites emit no more ops than the corresponding hand composition. Scalar
+  constants are broadcast once to the shape they are used at (`splat`), never
+  per binary op. The normalizations use the fused `reduce_sum_squares` and
+  `scale_real`, exactly like the hand composition in the
+  tenferro-benchmark `cpu/perf_issues` #2006 case. The first version spent an
+  extra full-size `mul` and per-op scalar broadcasts, which made the
+  single-call API slower than the hand composition (follow-up PR to #2017).
 - `take_along_axis` builds `(index, batch coordinates)` tuples on the backend
   from scalar constants with a log-depth doubling `iota`, one-hot `pad` vectors
   and broadcasting arithmetic. Host-built coordinate tensors were rejected:
   a traced graph cannot carry shaped constants, and an attached host input has
   no ingress on a device runtime. `concatenate` is used only between constants,
   because concatenating distinct traced inputs fails at compile without input
-  specs (a separate, pre-existing traced bug).
+  specs (a separate, pre-existing traced bug, #2018).
 - CUDA `to_contiguous_read` now materializes `Bool` tensors and strided views
   (bool copy kernel, `u8` native permutation). Eager AD retains `select`
   conditions through it, so tracked `where_select` on CUDA failed before.
