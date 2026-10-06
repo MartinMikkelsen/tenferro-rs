@@ -1189,8 +1189,8 @@ fn cubecl_interop_download_validates_buffer_before_empty_fast_path() {
             "dispatch::ensure_resident_on_runtime(rt, tensor, op)?;",
             "let prepared = dispatch::prepared_tensor_access(tensor, op)?;",
             "if tensor.n_elements() == 0",
-            "rt.synchronize()?;",
-            ".read_one(prepared.into_handle())",
+            "let handle = prepared.into_handle();",
+            "download_owned_vec::<T>(rt, handle, len, byte_len, op)?",
         ],
     );
 }

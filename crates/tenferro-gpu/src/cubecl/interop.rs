@@ -190,7 +190,8 @@ where
     T: CubeElement + TensorScalar + Clone + Send + Sync + 'static,
 {
     let byte_len = T::as_bytes(&data).len();
-    let handle = rt.client().create_from_slice(T::as_bytes(&data));
+    // `data` is owned: hand its allocation to CubeCL instead of staging a copy.
+    let handle = rt.client().create(cubecl::bytes::Bytes::from_elems(data));
     dispatch::typed_from_cubecl(
         shape,
         crate::CubeclBuffer::new(
@@ -222,12 +223,23 @@ where
     if tensor.n_elements() == 0 {
         return TypedTensor::from_vec_col_major(tensor.shape().to_vec(), Vec::new());
     }
-    rt.synchronize()?;
-    let bytes = rt
-        .client()
-        .read_one(prepared.into_handle())
-        .map_err(|err| crate::Error::backend_source(op, err))?;
-    TypedTensor::from_vec_col_major(tensor.shape().to_vec(), T::from_bytes(&bytes).to_vec())
+    let handle = prepared.into_handle();
+    let len = tensor.n_elements();
+    let byte_len = len.checked_mul(std::mem::size_of::<T>()).ok_or_else(|| {
+        crate::Error::invalid_argument(op, "shape", "download byte length overflows")
+    })?;
+    let data = if handle.size_in_used() == byte_len as u64 {
+        // Copy straight into the vector the host tensor will own (#2009).
+        super::memory::download_owned_vec::<T>(rt, handle, len, byte_len, op)?
+    } else {
+        rt.synchronize()?;
+        let bytes = rt
+            .client()
+            .read_one(handle)
+            .map_err(|err| crate::Error::backend_source(op, err))?;
+        T::from_bytes(&bytes).to_vec()
+    };
+    TypedTensor::from_vec_col_major(tensor.shape().to_vec(), data)
 }
 
 /// Allocate a CubeCL-owned byte workspace and return its CUDA pointer.

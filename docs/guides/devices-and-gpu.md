@@ -49,6 +49,15 @@ compact CUDA memory, a WebGPU backend may copy a WebGPU view into compact
 WebGPU memory, and host code may copy a host view into compact host memory, but
 tenferro does not use that copy as a hidden CPU/GPU transfer.
 
+CUDA transfers make one host-side copy at most. `upload_tensor` borrows the
+host tensor, so CubeCL copies it once into a staging buffer before queueing the
+device write; the call returns without waiting, and the host tensor can be
+changed or dropped immediately. `download_tensor` has the driver copy straight
+into the vector the returned host tensor owns and waits for that copy. Both
+allocate fresh pageable host memory per call, so large transfers still pay
+first-touch page faults; pinned and asynchronous transfers are not part of the
+public API yet (#1885 §1.1).
+
 ## Eager GPU Synchronization
 
 Eager GPU execution submits work immediately and returns a provider-resident

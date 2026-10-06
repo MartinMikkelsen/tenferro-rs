@@ -30,6 +30,7 @@ mod reduction_tests;
 mod runtime_tests;
 mod shared_workspace_tests;
 mod structural_tests;
+mod transfer_tests;
 
 /// Enter a CUDA execution session through the erased backend-session surface.
 ///

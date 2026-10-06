@@ -596,6 +596,33 @@ let gpu_c = backend.with_backend_session(|session| {
 let cpu_c = download_tensor(backend.runtime(), &gpu_c)?;
 ```
 
+### CUDA transfer copies
+
+Each explicit transfer crosses host memory once on the host side (#2009):
+
+- **Borrowed upload** (`upload_tensor(&Tensor)`): CubeCL's `create_from_slice`
+  copies the caller's buffer exactly once, into an owned aligned staging buffer,
+  before the asynchronous device write is queued. That staging copy is the
+  lifetime guarantee that lets the caller reuse or drop its buffer as soon as
+  the call returns, without a barrier. It is not removed until a
+  lifetime-safe alternative exists (a pinned staging pool, or a synchronous
+  upload that waits for the copy).
+- **Owned upload** (tenferro-internal paths that build their own host vector,
+  such as `upload_typed_tensor` and the `Bool` byte conversion): the vector's
+  allocation is handed to CubeCL with `ComputeClient::create(Bytes::from_elems)`
+  and nothing is copied on the host.
+- **Download** (`download_tensor`): payloads above the 16-byte pinned scalar
+  slot are copied by the driver straight into the `Vec<T>` that becomes the
+  host tensor's storage. The download flushes pending CubeCL work, resolves the
+  allocation on the current stream with `get_resource` (which orders writes
+  queued on other CubeCL streams, as `read_one` does), enqueues the copy on that
+  stream and synchronizes it. The vector is allocated with its final element
+  type, so it has `T`'s alignment, and it becomes visible only after the copy
+  completed; if the copy or barrier fails, both the vector and the source
+  allocation are leaked rather than freed while the device may still use them.
+  A handle that does not span exactly the tensor's elements keeps the
+  `read_one` path.
+
 The execution pipeline handles placement internally for compiled programs:
 constants are uploaded through `upload_host_tensor()`, metadata-only operations
 read metadata without bulk host transfer, and host-dependent scalar cases
