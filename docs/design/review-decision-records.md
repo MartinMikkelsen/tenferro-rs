@@ -32,3 +32,19 @@ should address the recorded rationale directly.
 
 This keeps review feedback aligned with repository intent and avoids repeatedly
 re-litigating decisions that were already made explicit.
+
+## Recorded decisions
+
+Short API-contract decisions that have no larger design document of their own.
+
+### Unused placeholder in `compile_with_input_specs` (#1968)
+
+`GraphCompiler::compile_with_input_specs` rejects a declared placeholder that
+the output does not depend on (`Validation` / `InvalidArgument`, phase
+`Compile`). Before, such a placeholder was silently dropped from the program
+inputs, so a tensor passed for it at run time was either rejected as an extra
+input or, when the input counts happened to match, bound to a retained constant
+input in its place. Keeping unused placeholders as ignored program inputs was
+rejected because it needs a semantic input that no operation reads; rejecting
+the declaration is the fail-fast contract. Callers drop the binding, as the
+kdv-pinn `pde::tests` do for the constant third derivative of `x^3`.

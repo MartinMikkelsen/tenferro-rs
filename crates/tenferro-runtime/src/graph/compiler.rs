@@ -283,6 +283,13 @@ impl GraphCompiler {
 
     /// Compile one traced output with concrete placeholder specs.
     ///
+    /// The compiled program's explicit inputs follow the order of `bindings`,
+    /// and every declared placeholder must be one the output depends on. A
+    /// declared placeholder that the output does not use (for example the
+    /// variable of a derivative that is constant) is rejected at compile time:
+    /// it would not be a program input, so a tensor passed for it at run time
+    /// could not be matched to any placeholder.
+    ///
     /// # Examples
     ///
     /// ```
@@ -295,6 +302,13 @@ impl GraphCompiler {
     ///     .compile_with_input_specs(&y, &[(&x, DType::F64, &[3])])
     ///     .unwrap();
     /// assert_eq!(program.input_count(), 1);
+    ///
+    ///
+    /// // `z` does not depend on `x`, so declaring `x` is rejected.
+    /// let z = TracedTensor::from_vec_col_major(vec![3], vec![1.0_f64; 3]).unwrap();
+    /// assert!(compiler
+    ///     .compile_with_input_specs(&z, &[(&x, DType::F64, &[3])])
+    ///     .is_err());
     /// ```
     ///
     /// # Errors
@@ -303,10 +317,12 @@ impl GraphCompiler {
     /// [`Error::DuplicateBinding`] for repeated placeholders,
     /// [`Error::PlaceholderDtypeMismatch`],
     /// [`Error::PlaceholderShapeMismatch`], or
-    /// [`Error::PlaceholderRankMismatch`] for incompatible specs, and
-    /// [`Error::Validation`] with `ShapeMismatch`, `RankMismatch`,
-    /// `DTypeMismatch`, or `InvalidArgument` / [`Error::RuntimeState`] when
-    /// compilation or metadata lowering fails.
+    /// [`Error::PlaceholderRankMismatch`] for incompatible specs,
+    /// [`Error::Validation`] with `InvalidArgument` (phase
+    /// [`ErrorPhase::Compile`](crate::ErrorPhase::Compile)) for a declared placeholder the output does not
+    /// depend on, and [`Error::Validation`] with `ShapeMismatch`,
+    /// `RankMismatch`, `DTypeMismatch`, or `InvalidArgument` /
+    /// [`Error::RuntimeState`] when compilation or metadata lowering fails.
     pub fn compile_with_input_specs(
         &mut self,
         output: &TracedTensor,
@@ -341,14 +357,29 @@ impl GraphCompiler {
             input_order.push(key);
         }
 
-        self.compile_many_with_descriptors(
+        let program = self.compile_many_with_descriptors(
             &[output],
             &binding_specs,
             output.inputs_map.as_ref(),
             Some(&input_order),
             false,
             false,
-        )
+        )?;
+        if let Some(binding_index) = input_order
+            .iter()
+            .position(|key| program.input_key_index(key).is_none())
+        {
+            return Err(Error::invalid_argument(
+                "GraphCompiler::compile_with_input_specs",
+                crate::ErrorPhase::Compile,
+                "bindings",
+                format!(
+                    "binding {binding_index} declares a placeholder the output does not \
+                     depend on; remove it from the bindings"
+                ),
+            ));
+        }
+        Ok(program)
     }
 
     /// Return the compiler options used for future graph lowerings.

@@ -47,7 +47,9 @@ fn jvp_higher_order_derivatives_of_cube() -> TestResult {
 
     let x_tensor = Tensor::from_vec_col_major(vec![3, 1], vec![1.0_f64, 2.0, 3.0])?;
     let out_xx = eval(&y_xx, &[(&x, &x_tensor)]);
-    let out_xxx = eval(&y_xxx, &[(&x, &x_tensor)]);
+    // The third derivative of x^3 is constant, so it does not depend on `x`
+    // and `x` must not be declared (`compile_with_input_specs` rejects it).
+    let out_xxx = eval(&y_xxx, &[]);
     let xx = out_xx.as_slice::<f64>().unwrap();
     let xxx = out_xxx.as_slice::<f64>().unwrap();
     assert!((xx[0] - 6.0).abs() < 1e-6);
@@ -221,8 +223,9 @@ fn third_derivative_of_cube() -> TestResult {
     let y_xx = grad(&y_x.reduce_sum(Some(&[0, 1]))?, &x)?;
     let y_xxx = grad(&y_xx.reduce_sum(Some(&[0, 1]))?, &x)?;
 
-    let x_tensor = Tensor::from_vec_col_major(vec![3, 1], vec![1.0_f64, 2.0, 3.0])?;
-    let result = eval(&y_xxx, &[(&x, &x_tensor)]);
+    // The third derivative of x^3 is constant, so it does not depend on `x`
+    // and `x` must not be declared (`compile_with_input_specs` rejects it).
+    let result = eval(&y_xxx, &[]);
     let data = result.as_slice::<f64>().unwrap();
     assert!((data[0] - 6.0).abs() < 1e-6);
     assert!((data[1] - 6.0).abs() < 1e-6);

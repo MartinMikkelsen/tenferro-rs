@@ -176,6 +176,11 @@ cargo run --manifest-path samples/kdv-pinn/Cargo.toml --release -- --gif kdv_pin
 `--loss-png` writes a log-scale training-loss plot. `--gif` writes an animated
 comparison between the analytic solution and the trained model prediction.
 
+The plots contain no text, so the sample needs no font library: in the loss
+plot the red curve is the loss per epoch on a logarithmic y-axis, and in each
+GIF frame the blue curve is the analytic soliton and the red curve the
+prediction, over `x` in `[-5, 5]` and `u` in `[-0.5, 2.5]`.
+
 CI compile-checks the sample, but does not run full training. For the same
 compile-only check locally:
 

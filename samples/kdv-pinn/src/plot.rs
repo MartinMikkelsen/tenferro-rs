@@ -1,4 +1,10 @@
 //! Plotting helpers for the KdV PINN sample, using the `plotters` crate.
+//!
+//! The plots draw no text: `plotters` is built without a font backend, because
+//! its `ttf` backend needs the FreeType and fontconfig system libraries on
+//! Linux, and drawing a caption, axis label or legend without one panics
+//! (#1968). Grid lines mark the axes; the tutorial states the axis ranges and
+//! the line colours.
 
 use plotters::prelude::*;
 use std::error::Error;
@@ -33,7 +39,8 @@ pub(crate) fn loss_axis_bounds(history: &[f64]) -> (f64, f64) {
 /// `history` holds the loss value recorded at each epoch. The y-axis uses a log
 /// scale because the loss spans several orders of magnitude over training; any
 /// non-positive or non-finite value is clamped to the lower bound so it can be
-/// drawn. The image is 800×600 pixels.
+/// drawn. The image is 800×600 pixels; the red curve is the loss, and the
+/// horizontal grid lines sit on the log-scale y-axis.
 pub(crate) fn write_loss_png(path: &str, history: &[f64]) -> Result<(), Box<dyn Error>> {
     const W: u32 = 800;
     const H: u32 = 600;
@@ -45,34 +52,18 @@ pub(crate) fn write_loss_png(path: &str, history: &[f64]) -> Result<(), Box<dyn 
     let x_hi = history.len().max(1) as f64;
 
     let mut chart = ChartBuilder::on(&root)
-        .caption("KdV PINN training loss", ("sans-serif", 28))
         .margin(12)
-        .x_label_area_size(45)
-        .y_label_area_size(70)
         .build_cartesian_2d(0.0..x_hi, (y_lo..y_hi).log_scale())?;
 
-    chart
-        .configure_mesh()
-        .x_desc("epoch")
-        .y_desc("loss (log scale)")
-        .draw()?;
+    chart.configure_mesh().disable_axes().draw()?;
 
-    chart
-        .draw_series(LineSeries::new(
-            history.iter().enumerate().map(|(i, &l)| {
-                let y = if l.is_finite() && l > 0.0 { l } else { y_lo };
-                (i as f64, y)
-            }),
-            RED.stroke_width(2),
-        ))?
-        .label("training loss")
-        .legend(|(x, y)| PathElement::new(vec![(x, y), (x + 20, y)], RED.stroke_width(2)));
-
-    chart
-        .configure_series_labels()
-        .background_style(WHITE.mix(0.8))
-        .border_style(BLACK)
-        .draw()?;
+    chart.draw_series(LineSeries::new(
+        history.iter().enumerate().map(|(i, &l)| {
+            let y = if l.is_finite() && l > 0.0 { l } else { y_lo };
+            (i as f64, y)
+        }),
+        RED.stroke_width(2),
+    ))?;
 
     root.present()?;
     Ok(())
@@ -82,7 +73,8 @@ pub(crate) fn write_loss_png(path: &str, history: &[f64]) -> Result<(), Box<dyn 
 ///
 /// `xs` is the spatial grid. `frames` is a slice of `(t, analytic, predicted)`
 /// values at each animation frame. The GIF uses 640×480 pixels with a delay of
-/// 100 ms per frame.
+/// 100 ms per frame. Each frame spans `x` in `[-5, 5]` and `u` in `[-0.5, 2.5]`;
+/// the blue curve is the analytic solution and the red curve the prediction.
 pub(crate) fn write_comparison_gif(
     path: &str,
     xs: &[f64],
@@ -94,45 +86,29 @@ pub(crate) fn write_comparison_gif(
     let backend = BitMapBackend::gif(path, (W, H), 100)?;
     let root = backend.into_drawing_area();
 
-    for (t, analytic, predicted) in frames {
+    for (_t, analytic, predicted) in frames {
         root.fill(&WHITE)?;
 
         let mut chart = ChartBuilder::on(&root)
-            .caption(format!("KdV soliton at t = {:.2}", t), ("sans-serif", 24))
             .margin(10)
-            .x_label_area_size(40)
-            .y_label_area_size(50)
             .build_cartesian_2d(-5.0..5.0, -0.5..2.5)?;
 
         chart
             .configure_mesh()
             .x_labels(11)
-            .y_labels(6)
-            .x_desc("x")
-            .y_desc("u")
+            .y_labels(7)
+            .disable_axes()
             .draw()?;
 
-        chart
-            .draw_series(LineSeries::new(
-                xs.iter().zip(analytic.iter()).map(|(&x, &u)| (x, u)),
-                BLUE.stroke_width(2),
-            ))?
-            .label("analytic")
-            .legend(|(x, y)| PathElement::new(vec![(x, y), (x + 20, y)], BLUE.stroke_width(2)));
+        chart.draw_series(LineSeries::new(
+            xs.iter().zip(analytic.iter()).map(|(&x, &u)| (x, u)),
+            BLUE.stroke_width(2),
+        ))?;
 
-        chart
-            .draw_series(LineSeries::new(
-                xs.iter().zip(predicted.iter()).map(|(&x, &u)| (x, u)),
-                RED.stroke_width(2),
-            ))?
-            .label("predicted")
-            .legend(|(x, y)| PathElement::new(vec![(x, y), (x + 20, y)], RED.stroke_width(2)));
-
-        chart
-            .configure_series_labels()
-            .background_style(WHITE.mix(0.8))
-            .border_style(BLACK)
-            .draw()?;
+        chart.draw_series(LineSeries::new(
+            xs.iter().zip(predicted.iter()).map(|(&x, &u)| (x, u)),
+            RED.stroke_width(2),
+        ))?;
 
         root.present()?;
     }
