@@ -55,6 +55,9 @@ not when changing tenferro itself.
   term; `EinsumNotation` provides the programmatic form.
 - **Result-returning operators.** Traced operators return `Result`; propagate
   with `?`.
+- **No `Clone` on tensors.** `Tensor` and the dynamic `TypedTensor` do not
+  implement `Clone`; `duplicate()` returns an independent copy and fails for
+  device-only storage. Share with `Arc<Tensor>` or views instead.
 - CPU/GPU transfers are explicit; unsupported GPU operations do not silently
   fall back to CPU.
 - Traced standard extensions need an explicitly installed extension module and

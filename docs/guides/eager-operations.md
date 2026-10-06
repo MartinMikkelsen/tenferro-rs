@@ -154,6 +154,12 @@ where the data lives:
 On a CPU runtime both give the same result. Trainable leaves use
 `variable_from` with the same residency rule as `constant_from`.
 
+`Tensor` and the dynamic `TypedTensor` do not implement `Clone`. When two
+branches need the same constant, call `tensor.duplicate()?`: it returns an
+independent copy, and fails for device-only storage instead of silently
+downloading it. To share one tensor without copying, wrap it in `Arc<Tensor>`
+or pass views.
+
 ## Materializing metadata-only views
 
 View transforms such as transpose and slice only change layout metadata. When

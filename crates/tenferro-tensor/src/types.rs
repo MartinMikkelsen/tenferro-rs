@@ -9348,6 +9348,11 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
 
     /// Make an explicit independent host copy with the same shape and placement.
     ///
+    /// The dynamic `TypedTensor` does not implement [`Clone`] (only the
+    /// host-only representation does): the copy reads host data, rejects
+    /// device-only storage, and creates a new owner, so it is fallible. See
+    /// [`Tensor::duplicate`] for the sharing alternatives.
+    ///
     /// # Examples
     /// ```
     /// use tenferro_tensor::TypedTensor;
@@ -10667,6 +10672,31 @@ impl Tensor {
     }
 
     /// Make an explicit owning copy of this dtype-erased tensor.
+    ///
+    /// `Tensor` deliberately does not implement [`Clone`]: copying can fail
+    /// (device-only storage is rejected) and allocates a new, independent
+    /// owner, so it is an explicit fallible call rather than an infallible
+    /// `clone()`. The copy shares nothing with `self`; mutating one never
+    /// affects the other. To share one tensor between several users without
+    /// copying, wrap it in [`std::sync::Arc`] or borrow views of it.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use tenferro_tensor::Tensor;
+    ///
+    /// let weights = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?;
+    /// // Two independent owners of the same values.
+    /// let copy = weights.duplicate()?;
+    /// assert_eq!(copy.as_slice::<f64>()?, weights.as_slice::<f64>()?);
+    ///
+    /// // A shared, read-only handle instead of a copy.
+    /// let shared = Arc::new(weights);
+    /// let other = Arc::clone(&shared);
+    /// assert_eq!(other.shape(), &[2]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
     ///
     /// # Errors
     ///
