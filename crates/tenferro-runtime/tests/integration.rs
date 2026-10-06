@@ -1,3 +1,5 @@
+#[path = "integration/complex_division.rs"]
+mod complex_division;
 #[path = "integration/engine_registration_debug.rs"]
 mod engine_registration_debug;
 #[path = "integration/execution_engine_identity.rs"]
