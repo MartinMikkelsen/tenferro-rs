@@ -11,6 +11,130 @@ use tenferro_cpu::linalg_interop::{BufferPool, PoolScalar};
 use tenferro_cpu::CpuExecutionContext;
 use tenferro_tensor::{Tensor, TensorScalar, TypedTensor, TypedTensorView, TypedTensorViewMut};
 
+/// faer's SVD parameters with the QR algorithm at every size.
+///
+/// faer's defaults switch to a divide-and-conquer bidiagonal SVD once the smaller dimension
+/// reaches `recursion_threshold` (128). In faer 0.24.4 that path returns a spurious singular value
+/// and inaccurate factors for some rank-deficient matrices with clustered singular values, without
+/// reporting an error (tensor4all/tlinalg-rs#13).
+fn svd_qr_params<E: faer::traits::ComplexField>() -> faer::Spec<faer::linalg::svd::SvdParams, E> {
+    faer::Spec::new(faer::linalg::svd::SvdParams {
+        recursion_threshold: usize::MAX,
+        ..<faer::linalg::svd::SvdParams as faer::Auto<E>>::auto()
+    })
+}
+
+/// Machine epsilon of the real scalar of `E`.
+fn real_epsilon<E: faer::traits::ComplexField>() -> f64 {
+    // The real scalars here are `f32` and `f64`.
+    if core::mem::size_of::<E::Real>() == core::mem::size_of::<f32>() {
+        f64::from(f32::EPSILON)
+    } else {
+        f64::EPSILON
+    }
+}
+
+/// Singular values of `mat` by the QR algorithm. Without vectors there is no reconstruction to
+/// check, so the divide-and-conquer path is never taken.
+fn qr_svd_values<E: faer::traits::ComplexField>(
+    mat: MatRef<'_, E>,
+    s: faer::diag::DiagMut<'_, E>,
+    par: faer::Par,
+) -> Result<(), faer::linalg::svd::SvdError> {
+    let none = faer::linalg::svd::ComputeSvdVectors::No;
+    let mut mem = MemBuffer::new(faer::linalg::svd::svd_scratch::<E>(
+        mat.nrows(),
+        mat.ncols(),
+        none,
+        none,
+        par,
+        svd_qr_params(),
+    ));
+    faer::linalg::svd::svd(
+        mat,
+        s,
+        None,
+        None,
+        par,
+        MemStack::new(&mut mem),
+        svd_qr_params(),
+    )
+}
+
+/// SVD of `mat` with vectors into zeroed `u`, `s`, `v`.
+///
+/// A decomposition whose smaller dimension reaches faer's `recursion_threshold` runs with faer's
+/// default parameters and is checked by the Frobenius norm of `mat - U diag(S) Vᴴ` against
+/// `24 * sqrt(max(m, n)) * epsilon` times that of `mat`. When the check fails or faer reports an
+/// error, the decomposition is repeated with the QR algorithm. Smaller decompositions use the QR
+/// algorithm, which is what faer's defaults select for them.
+fn checked_svd<E: faer::traits::ComplexField>(
+    mat: MatRef<'_, E>,
+    mut s: faer::diag::DiagMut<'_, E>,
+    mut u: faer::MatMut<'_, E>,
+    mut v: faer::MatMut<'_, E>,
+    vectors: faer::linalg::svd::ComputeSvdVectors,
+    par: faer::Par,
+) -> Result<(), faer::linalg::svd::SvdError> {
+    use faer::traits::math_utils::{from_f64, mul, neg, one, zero};
+
+    let (m, n) = (mat.nrows(), mat.ncols());
+    let k = m.min(n);
+    let divides = k >= <faer::linalg::svd::SvdParams as faer::Auto<E>>::auto().recursion_threshold;
+    let mut mem = MemBuffer::new(
+        faer::linalg::svd::svd_scratch::<E>(m, n, vectors, vectors, par, svd_qr_params()).or(
+            faer::linalg::svd::svd_scratch::<E>(m, n, vectors, vectors, par, Default::default()),
+        ),
+    );
+    if divides {
+        let converged = faer::linalg::svd::svd(
+            mat,
+            s.rb_mut(),
+            Some(u.rb_mut()),
+            Some(v.rb_mut()),
+            par,
+            MemStack::new(&mut mem),
+            Default::default(),
+        )
+        .is_ok();
+        if converged {
+            let mut scaled = Mat::<E>::zeros(m, k);
+            for col in 0..k {
+                for row in 0..m {
+                    scaled[(row, col)] = mul(&u[(row, col)], &s[col]);
+                }
+            }
+            let mut residual = Mat::<E>::zeros(m, n);
+            residual.copy_from(mat);
+            faer::linalg::matmul::matmul(
+                residual.as_mut(),
+                faer::Accum::Add,
+                scaled.as_ref(),
+                v.as_ref().get(.., ..k).adjoint(),
+                neg(&one::<E>()),
+                par,
+            );
+            let bound = from_f64::<E::Real>(24.0 * (m.max(n) as f64).sqrt() * real_epsilon::<E>());
+            // A NaN residual fails this comparison and is rejected with the large ones.
+            if residual.norm_l2() <= mul(&bound, &mat.norm_l2()) {
+                return Ok(());
+            }
+        }
+        u.rb_mut().fill(zero::<E>());
+        v.rb_mut().fill(zero::<E>());
+        s.rb_mut().fill(zero::<E>());
+    }
+    faer::linalg::svd::svd(
+        mat,
+        s,
+        Some(u),
+        Some(v),
+        par,
+        MemStack::new(&mut mem),
+        svd_qr_params(),
+    )
+}
+
 pub(crate) trait FaerLinalg:
     Copy + Clone + Default + PartialEq + PoolScalar + std::ops::Mul<Output = Self>
 {
@@ -2146,25 +2270,8 @@ macro_rules! impl_faer_linalg_for_real {
     ) -> tenferro_tensor::Result<TypedTensor<<Self as FaerLinalg>::Real>> {
         let k = m.min(n);
         let mut s = Diag::zeros(k);
-        let mut mem = MemBuffer::new(faer::linalg::svd::svd_scratch::<Self>(
-            m,
-            n,
-            faer::linalg::svd::ComputeSvdVectors::No,
-            faer::linalg::svd::ComputeSvdVectors::No,
-            ctx.faer_parallelism(),
-            Default::default(),
-        ));
-        let stack = MemStack::new(&mut mem);
-        faer::linalg::svd::svd(
-            mat,
-            s.as_mut(),
-            None,
-            None,
-            ctx.faer_parallelism(),
-            stack,
-            Default::default(),
-        )
-        .map_err(|_| decomposition_failed("svd_values"))?;
+        qr_svd_values(mat, s.as_mut(), ctx.faer_parallelism())
+            .map_err(|_| decomposition_failed("svd_values"))?;
 
         tensor_from_vec_with_template(vec![k], vec_from_diag(buffers, s.as_ref()), placement)
     }
@@ -2349,23 +2456,13 @@ macro_rules! impl_faer_linalg_for_real {
         let mut u = Mat::zeros(m, u_cols);
         let mut v = Mat::zeros(n, v_cols);
         let mut s = Diag::zeros(k);
-        let mut mem = MemBuffer::new(faer::linalg::svd::svd_scratch::<Self>(
-            m,
-            n,
-            vectors,
-            vectors,
-            ctx.faer_parallelism(),
-            Default::default(),
-        ));
-        let stack = MemStack::new(&mut mem);
-        faer::linalg::svd::svd(
+        checked_svd(
             mat,
             s.as_mut(),
-            Some(u.as_mut()),
-            Some(v.as_mut()),
+            u.as_mut(),
+            v.as_mut(),
+            vectors,
             ctx.faer_parallelism(),
-            stack,
-            Default::default(),
         )
         .map_err(|_| decomposition_failed("svd"))?;
 
@@ -3231,25 +3328,8 @@ macro_rules! impl_faer_linalg_for_complex {
         };
         let k = m.min(n);
         let mut s = Diag::zeros(k);
-        let mut mem = MemBuffer::new(faer::linalg::svd::svd_scratch::<$faer_complex>(
-            m,
-            n,
-            faer::linalg::svd::ComputeSvdVectors::No,
-            faer::linalg::svd::ComputeSvdVectors::No,
-            ctx.faer_parallelism(),
-            Default::default(),
-        ));
-        let stack = MemStack::new(&mut mem);
-        faer::linalg::svd::svd(
-            mat,
-            s.as_mut(),
-            None,
-            None,
-            ctx.faer_parallelism(),
-            stack,
-            Default::default(),
-        )
-        .map_err(|_| decomposition_failed("svd_values"))?;
+        qr_svd_values(mat, s.as_mut(), ctx.faer_parallelism())
+            .map_err(|_| decomposition_failed("svd_values"))?;
 
         let col = s.as_ref().column_vector();
         let mut data = buffers.acquire_with_capacity::<$real>(col.nrows());
@@ -3492,23 +3572,13 @@ macro_rules! impl_faer_linalg_for_complex {
         let mut u = Mat::zeros(m, u_cols);
         let mut v = Mat::zeros(n, v_cols);
         let mut s = Diag::zeros(k);
-        let mut mem = MemBuffer::new(faer::linalg::svd::svd_scratch::<$faer_complex>(
-            m,
-            n,
-            vectors,
-            vectors,
-            ctx.faer_parallelism(),
-            Default::default(),
-        ));
-        let stack = MemStack::new(&mut mem);
-        faer::linalg::svd::svd(
+        checked_svd(
             mat,
             s.as_mut(),
-            Some(u.as_mut()),
-            Some(v.as_mut()),
+            u.as_mut(),
+            v.as_mut(),
+            vectors,
             ctx.faer_parallelism(),
-            stack,
-            Default::default(),
         )
         .map_err(|_| decomposition_failed("svd"))?;
 
