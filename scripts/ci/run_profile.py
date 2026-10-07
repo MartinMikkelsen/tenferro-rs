@@ -117,8 +117,10 @@ PROFILE_COMMANDS: dict[str, tuple[str, ...]] = {
         "bash scripts/build_docs_site.sh",
     ),
     "coverage": (
-        # Keep instrumented build artifacts, never measurements from earlier runs.
-        "cargo llvm-cov clean --profraw-only",
+        # Remove workspace-crate artifacts and measurements so a restored
+        # target/ from another revision cannot add uncovered regions to the
+        # per-file denominators; dependency builds stay cached.
+        "cargo llvm-cov clean --workspace",
         f"cargo llvm-cov nextest --workspace --exclude tenferro-tutorial-code "
         f"{_NEXTEST_PROFILE} --no-clean --json --output-path coverage.json",
         "python3 scripts/check-coverage.py coverage.json",
